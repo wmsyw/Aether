@@ -42,7 +42,7 @@ class HTTPClientPool:
                 timeout=httpx.Timeout(
                     connect=10.0,  # 连接超时
                     read=300.0,  # 读取超时(5分钟,适合流式响应)
-                    write=10.0,  # 写入超时
+                    write=60.0,  # 写入超时(60秒,支持大请求体)
                     pool=5.0,  # 连接池超时
                 ),
                 limits=httpx.Limits(

@@ -505,7 +505,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         timeout_config = httpx.Timeout(
             connect=10.0,
             read=float(endpoint.timeout),
-            write=10.0,
+            write=60.0,  # 写入超时增加到60秒，支持大请求体（如包含图片的长对话）
             pool=10.0,
         )
 
