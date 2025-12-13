@@ -2,11 +2,12 @@
 数据库方言兼容性辅助函数
 """
 
+from typing import Any
+
 from sqlalchemy import func
-from sqlalchemy.sql.elements import ClauseElement
 
 
-def date_trunc_portable(dialect_name: str, interval: str, column) -> ClauseElement:
+def date_trunc_portable(dialect_name: str, interval: str, column: Any) -> Any:
     """
     跨数据库的日期截断函数
 

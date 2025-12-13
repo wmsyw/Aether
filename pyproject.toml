@@ -97,6 +97,13 @@ disallow_untyped_defs = true
 exclude = "tools/debug"
 # 忽略项目内部模块的 import-untyped 警告
 ignore_missing_imports = true
+# SQLAlchemy mypy 插件
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+
+# SQLAlchemy 相关模块放宽类型检查（模型未使用 Mapped 注解）
+[[tool.mypy.overrides]]
+module = ["src.services.usage.service", "src.models.database"]
+disable_error_code = ["arg-type", "assignment"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
