@@ -26,16 +26,66 @@ branch_labels = None
 depends_on = None
 
 
+def column_exists(bind, table_name: str, column_name: str) -> bool:
+    """检查列是否存在"""
+    result = bind.execute(
+        sa.text(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = :table_name AND column_name = :column_name
+            )
+            """
+        ),
+        {"table_name": table_name, "column_name": column_name},
+    )
+    return result.scalar()
+
+
+def table_exists(bind, table_name: str) -> bool:
+    """检查表是否存在"""
+    result = bind.execute(
+        sa.text(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = :table_name
+            )
+            """
+        ),
+        {"table_name": table_name},
+    )
+    return result.scalar()
+
+
+def index_exists(bind, index_name: str) -> bool:
+    """检查索引是否存在"""
+    result = bind.execute(
+        sa.text(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE indexname = :index_name
+            )
+            """
+        ),
+        {"index_name": index_name},
+    )
+    return result.scalar()
+
+
 def upgrade() -> None:
     """添加 provider_model_aliases 字段，迁移数据，删除 model_mappings 表"""
-    # 1. 添加 provider_model_aliases 字段
-    op.add_column(
-        'models',
-        sa.Column('provider_model_aliases', sa.JSON(), nullable=True)
-    )
-
-    # 2. 迁移 model_mappings 数据
     bind = op.get_bind()
+
+    # 1. 添加 provider_model_aliases 字段（如果不存在）
+    if not column_exists(bind, "models", "provider_model_aliases"):
+        op.add_column(
+            'models',
+            sa.Column('provider_model_aliases', sa.JSON(), nullable=True)
+        )
+
+    # 2. 迁移 model_mappings 数据（如果表存在）
     session = Session(bind=bind)
 
     model_mappings_table = sa.table(
@@ -96,104 +146,118 @@ def upgrade() -> None:
 
     # 查询所有活跃的 provider 级别 alias（只迁移 is_active=True 且 mapping_type='alias' 的）
     # 全局别名/映射不迁移（新架构不再支持 source_model -> GlobalModel.name 的解析）
-    mappings = session.execute(
-        sa.select(
-            model_mappings_table.c.source_model,
-            model_mappings_table.c.target_global_model_id,
-            model_mappings_table.c.provider_id,
-        )
-        .where(
-            model_mappings_table.c.is_active.is_(True),
-            model_mappings_table.c.provider_id.isnot(None),
-            model_mappings_table.c.mapping_type == "alias",
-        )
-        .order_by(model_mappings_table.c.provider_id, model_mappings_table.c.source_model)
-    ).all()
-
-    # 按 (provider_id, target_global_model_id) 分组，收集别名
-    alias_groups: dict = {}
-    for source_model, target_global_model_id, provider_id in mappings:
-        if not isinstance(source_model, str):
-            continue
-        source_model = source_model.strip()
-        if not source_model:
-            continue
-        if not isinstance(provider_id, str) or not provider_id:
-            continue
-        if not isinstance(target_global_model_id, str) or not target_global_model_id:
-            continue
-
-        key = (provider_id, target_global_model_id)
-        if key not in alias_groups:
-            alias_groups[key] = []
-        priority = len(alias_groups[key]) + 1
-        alias_groups[key].append({"name": source_model, "priority": priority})
-
-    # 更新对应的 models 记录
-    for (provider_id, global_model_id), aliases in alias_groups.items():
-        model_row = session.execute(
-            sa.select(models_table.c.id, models_table.c.provider_model_aliases)
+    # 仅当 model_mappings 表存在时执行迁移
+    if table_exists(bind, "model_mappings"):
+        mappings = session.execute(
+            sa.select(
+                model_mappings_table.c.source_model,
+                model_mappings_table.c.target_global_model_id,
+                model_mappings_table.c.provider_id,
+            )
             .where(
-                models_table.c.provider_id == provider_id,
-                models_table.c.global_model_id == global_model_id,
+                model_mappings_table.c.is_active.is_(True),
+                model_mappings_table.c.provider_id.isnot(None),
+                model_mappings_table.c.mapping_type == "alias",
             )
-            .limit(1)
-        ).first()
+            .order_by(model_mappings_table.c.provider_id, model_mappings_table.c.source_model)
+        ).all()
 
-        if model_row:
-            model_id = model_row[0]
-            existing_aliases = normalize_alias_list(model_row[1])
+        # 按 (provider_id, target_global_model_id) 分组，收集别名
+        alias_groups: dict = {}
+        for source_model, target_global_model_id, provider_id in mappings:
+            if not isinstance(source_model, str):
+                continue
+            source_model = source_model.strip()
+            if not source_model:
+                continue
+            if not isinstance(provider_id, str) or not provider_id:
+                continue
+            if not isinstance(target_global_model_id, str) or not target_global_model_id:
+                continue
 
-            existing_names = {a["name"] for a in existing_aliases}
-            merged_aliases = list(existing_aliases)
-            for alias in aliases:
-                name = alias.get("name")
-                if not isinstance(name, str):
-                    continue
-                name = name.strip()
-                if not name or name in existing_names:
-                    continue
+            key = (provider_id, target_global_model_id)
+            if key not in alias_groups:
+                alias_groups[key] = []
+            priority = len(alias_groups[key]) + 1
+            alias_groups[key].append({"name": source_model, "priority": priority})
 
-                merged_aliases.append(
-                    {
-                        "name": name,
-                        "priority": len(merged_aliases) + 1,
-                    }
+        # 更新对应的 models 记录
+        for (provider_id, global_model_id), aliases in alias_groups.items():
+            model_row = session.execute(
+                sa.select(models_table.c.id, models_table.c.provider_model_aliases)
+                .where(
+                    models_table.c.provider_id == provider_id,
+                    models_table.c.global_model_id == global_model_id,
                 )
-                existing_names.add(name)
+                .limit(1)
+            ).first()
 
-            session.execute(
-                models_table.update()
-                .where(models_table.c.id == model_id)
-                .values(
-                    provider_model_aliases=merged_aliases if merged_aliases else None,
-                    updated_at=datetime.now(timezone.utc),
+            if model_row:
+                model_id = model_row[0]
+                existing_aliases = normalize_alias_list(model_row[1])
+
+                existing_names = {a["name"] for a in existing_aliases}
+                merged_aliases = list(existing_aliases)
+                for alias in aliases:
+                    name = alias.get("name")
+                    if not isinstance(name, str):
+                        continue
+                    name = name.strip()
+                    if not name or name in existing_names:
+                        continue
+
+                    merged_aliases.append(
+                        {
+                            "name": name,
+                            "priority": len(merged_aliases) + 1,
+                        }
+                    )
+                    existing_names.add(name)
+
+                session.execute(
+                    models_table.update()
+                    .where(models_table.c.id == model_id)
+                    .values(
+                        provider_model_aliases=merged_aliases if merged_aliases else None,
+                        updated_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
 
-    session.commit()
+        session.commit()
 
-    # 3. 删除 model_mappings 表
-    op.drop_table('model_mappings')
+        # 3. 删除 model_mappings 表
+        op.drop_table('model_mappings')
 
     # 4. 添加索引优化别名解析性能
-    # provider_model_name 索引（支持精确匹配）
-    op.create_index(
-        "idx_model_provider_model_name",
-        "models",
-        ["provider_model_name"],
-        unique=False,
-        postgresql_where=sa.text("is_active = true"),
-    )
+    # provider_model_name 索引（支持精确匹配，如果不存在）
+    if not index_exists(bind, "idx_model_provider_model_name"):
+        op.create_index(
+            "idx_model_provider_model_name",
+            "models",
+            ["provider_model_name"],
+            unique=False,
+            postgresql_where=sa.text("is_active = true"),
+        )
 
     # provider_model_aliases GIN 索引（支持 JSONB 查询，仅 PostgreSQL）
     if bind.dialect.name == "postgresql":
         # 将 json 列转为 jsonb（jsonb 性能更好且支持 GIN 索引）
+        # 使用 IF NOT EXISTS 风格的检查来避免重复转换
         op.execute(
             """
-            ALTER TABLE models
-            ALTER COLUMN provider_model_aliases TYPE jsonb
-            USING provider_model_aliases::jsonb
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'models'
+                    AND column_name = 'provider_model_aliases'
+                    AND data_type = 'json'
+                ) THEN
+                    ALTER TABLE models
+                    ALTER COLUMN provider_model_aliases TYPE jsonb
+                    USING provider_model_aliases::jsonb;
+                END IF;
+            END $$;
             """
         )
         # 创建 GIN 索引
