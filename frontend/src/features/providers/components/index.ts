@@ -10,3 +10,4 @@ export { default as BatchAssignModelsDialog } from './BatchAssignModelsDialog.vu
 export { default as ModelAliasDialog } from './ModelAliasDialog.vue'
 
 export { default as ModelsTab } from './provider-tabs/ModelsTab.vue'
+export { default as ModelAliasesTab } from './provider-tabs/ModelAliasesTab.vue'

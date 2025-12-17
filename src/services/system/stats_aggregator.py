@@ -56,65 +56,44 @@ class StatsAggregatorService:
     """统计数据聚合服务"""
 
     @staticmethod
-    def aggregate_daily_stats(db: Session, date: datetime) -> StatsDaily:
-        """聚合指定日期的统计数据
-
-        Args:
-            db: 数据库会话
-            date: 要聚合的业务日期（使用 APP_TIMEZONE 时区）
-
-        Returns:
-            StatsDaily 记录
-        """
-        # 将业务日期转换为 UTC 时间范围
+    def compute_daily_stats(db: Session, date: datetime) -> dict:
+        """计算指定业务日期的统计数据（不写入数据库）"""
         day_start, day_end = _get_business_day_range(date)
 
-        # stats_daily.date 存储的是业务日期对应的 UTC 开始时间
-        # 检查是否已存在该日期的记录
-        existing = db.query(StatsDaily).filter(StatsDaily.date == day_start).first()
-        if existing:
-            stats = existing
-        else:
-            stats = StatsDaily(id=str(uuid.uuid4()), date=day_start)
-
-        # 基础请求统计
         base_query = db.query(Usage).filter(
             and_(Usage.created_at >= day_start, Usage.created_at < day_end)
         )
 
         total_requests = base_query.count()
 
-        # 如果没有请求，直接返回空记录
         if total_requests == 0:
-            stats.total_requests = 0
-            stats.success_requests = 0
-            stats.error_requests = 0
-            stats.input_tokens = 0
-            stats.output_tokens = 0
-            stats.cache_creation_tokens = 0
-            stats.cache_read_tokens = 0
-            stats.total_cost = 0.0
-            stats.actual_total_cost = 0.0
-            stats.input_cost = 0.0
-            stats.output_cost = 0.0
-            stats.cache_creation_cost = 0.0
-            stats.cache_read_cost = 0.0
-            stats.avg_response_time_ms = 0.0
-            stats.fallback_count = 0
+            return {
+                "day_start": day_start,
+                "total_requests": 0,
+                "success_requests": 0,
+                "error_requests": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "total_cost": 0.0,
+                "actual_total_cost": 0.0,
+                "input_cost": 0.0,
+                "output_cost": 0.0,
+                "cache_creation_cost": 0.0,
+                "cache_read_cost": 0.0,
+                "avg_response_time_ms": 0.0,
+                "fallback_count": 0,
+                "unique_models": 0,
+                "unique_providers": 0,
+            }
 
-            if not existing:
-                db.add(stats)
-            db.commit()
-            return stats
-
-        # 错误请求数
         error_requests = (
             base_query.filter(
                 (Usage.status_code >= 400) | (Usage.error_message.isnot(None))
             ).count()
         )
 
-        # Token 和成本聚合
         aggregated = (
             db.query(
                 func.sum(Usage.input_tokens).label("input_tokens"),
@@ -157,7 +136,6 @@ class StatsAggregatorService:
             or 0
         )
 
-        # 使用维度统计
         unique_models = (
             db.query(func.count(func.distinct(Usage.model)))
             .filter(and_(Usage.created_at >= day_start, Usage.created_at < day_end))
@@ -171,31 +149,74 @@ class StatsAggregatorService:
             or 0
         )
 
+        return {
+            "day_start": day_start,
+            "total_requests": total_requests,
+            "success_requests": total_requests - error_requests,
+            "error_requests": error_requests,
+            "input_tokens": int(aggregated.input_tokens or 0) if aggregated else 0,
+            "output_tokens": int(aggregated.output_tokens or 0) if aggregated else 0,
+            "cache_creation_tokens": int(aggregated.cache_creation_tokens or 0) if aggregated else 0,
+            "cache_read_tokens": int(aggregated.cache_read_tokens or 0) if aggregated else 0,
+            "total_cost": float(aggregated.total_cost or 0) if aggregated else 0.0,
+            "actual_total_cost": float(aggregated.actual_total_cost or 0) if aggregated else 0.0,
+            "input_cost": float(aggregated.input_cost or 0) if aggregated else 0.0,
+            "output_cost": float(aggregated.output_cost or 0) if aggregated else 0.0,
+            "cache_creation_cost": float(aggregated.cache_creation_cost or 0) if aggregated else 0.0,
+            "cache_read_cost": float(aggregated.cache_read_cost or 0) if aggregated else 0.0,
+            "avg_response_time_ms": float(aggregated.avg_response_time or 0) if aggregated else 0.0,
+            "fallback_count": fallback_count,
+            "unique_models": unique_models,
+            "unique_providers": unique_providers,
+        }
+
+    @staticmethod
+    def aggregate_daily_stats(db: Session, date: datetime) -> StatsDaily:
+        """聚合指定日期的统计数据
+
+        Args:
+            db: 数据库会话
+            date: 要聚合的业务日期（使用 APP_TIMEZONE 时区）
+
+        Returns:
+            StatsDaily 记录
+        """
+        computed = StatsAggregatorService.compute_daily_stats(db, date)
+        day_start = computed["day_start"]
+
+        # stats_daily.date 存储的是业务日期对应的 UTC 开始时间
+        # 检查是否已存在该日期的记录
+        existing = db.query(StatsDaily).filter(StatsDaily.date == day_start).first()
+        if existing:
+            stats = existing
+        else:
+            stats = StatsDaily(id=str(uuid.uuid4()), date=day_start)
+
         # 更新统计记录
-        stats.total_requests = total_requests
-        stats.success_requests = total_requests - error_requests
-        stats.error_requests = error_requests
-        stats.input_tokens = int(aggregated.input_tokens or 0)
-        stats.output_tokens = int(aggregated.output_tokens or 0)
-        stats.cache_creation_tokens = int(aggregated.cache_creation_tokens or 0)
-        stats.cache_read_tokens = int(aggregated.cache_read_tokens or 0)
-        stats.total_cost = float(aggregated.total_cost or 0)
-        stats.actual_total_cost = float(aggregated.actual_total_cost or 0)
-        stats.input_cost = float(aggregated.input_cost or 0)
-        stats.output_cost = float(aggregated.output_cost or 0)
-        stats.cache_creation_cost = float(aggregated.cache_creation_cost or 0)
-        stats.cache_read_cost = float(aggregated.cache_read_cost or 0)
-        stats.avg_response_time_ms = float(aggregated.avg_response_time or 0)
-        stats.fallback_count = fallback_count
-        stats.unique_models = unique_models
-        stats.unique_providers = unique_providers
+        stats.total_requests = computed["total_requests"]
+        stats.success_requests = computed["success_requests"]
+        stats.error_requests = computed["error_requests"]
+        stats.input_tokens = computed["input_tokens"]
+        stats.output_tokens = computed["output_tokens"]
+        stats.cache_creation_tokens = computed["cache_creation_tokens"]
+        stats.cache_read_tokens = computed["cache_read_tokens"]
+        stats.total_cost = computed["total_cost"]
+        stats.actual_total_cost = computed["actual_total_cost"]
+        stats.input_cost = computed["input_cost"]
+        stats.output_cost = computed["output_cost"]
+        stats.cache_creation_cost = computed["cache_creation_cost"]
+        stats.cache_read_cost = computed["cache_read_cost"]
+        stats.avg_response_time_ms = computed["avg_response_time_ms"]
+        stats.fallback_count = computed["fallback_count"]
+        stats.unique_models = computed["unique_models"]
+        stats.unique_providers = computed["unique_providers"]
 
         if not existing:
             db.add(stats)
         db.commit()
 
         # 日志使用业务日期（输入参数），而不是 UTC 日期
-        logger.info(f"[StatsAggregator] 聚合日期 {date.date()} 完成: {total_requests} 请求")
+        logger.info(f"[StatsAggregator] 聚合日期 {date.date()} 完成: {computed['total_requests']} 请求")
         return stats
 
     @staticmethod

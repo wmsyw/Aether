@@ -526,7 +526,14 @@
                 @edit-model="handleEditModel"
                 @delete-model="handleDeleteModel"
                 @batch-assign="handleBatchAssign"
-                @manage-alias="handleManageAlias"
+              />
+
+              <!-- 模型名称映射 -->
+              <ModelAliasesTab
+                v-if="provider"
+                :key="`aliases-${provider.id}`"
+                :provider="provider"
+                @refresh="handleRelatedDataRefresh"
               />
             </div>
           </template>
@@ -629,16 +636,6 @@
     @update:open="batchAssignDialogOpen = $event"
     @changed="handleBatchAssignChanged"
   />
-
-  <!-- 模型别名管理对话框 -->
-  <ModelAliasDialog
-    v-if="open && provider"
-    :open="aliasDialogOpen"
-    :provider-id="provider.id"
-    :model="aliasEditingModel"
-    @update:open="aliasDialogOpen = $event"
-    @saved="handleAliasSaved"
-  />
 </template>
 
 <script setup lang="ts">
@@ -667,8 +664,8 @@ import {
   KeyFormDialog,
   KeyAllowedModelsDialog,
   ModelsTab,
-  BatchAssignModelsDialog,
-  ModelAliasDialog
+  ModelAliasesTab,
+  BatchAssignModelsDialog
 } from '@/features/providers/components'
 import EndpointFormDialog from '@/features/providers/components/EndpointFormDialog.vue'
 import ProviderModelFormDialog from '@/features/providers/components/ProviderModelFormDialog.vue'
@@ -737,10 +734,6 @@ const deleteModelConfirmOpen = ref(false)
 const modelToDelete = ref<Model | null>(null)
 const batchAssignDialogOpen = ref(false)
 
-// 别名管理相关状态
-const aliasDialogOpen = ref(false)
-const aliasEditingModel = ref<Model | null>(null)
-
 // 拖动排序相关状态
 const dragState = ref({
   isDragging: false,
@@ -762,8 +755,7 @@ const hasBlockingDialogOpen = computed(() =>
   deleteKeyConfirmOpen.value ||
   modelFormDialogOpen.value ||
   deleteModelConfirmOpen.value ||
-  batchAssignDialogOpen.value ||
-  aliasDialogOpen.value
+  batchAssignDialogOpen.value
 )
 
 // 监听 providerId 变化
@@ -792,7 +784,6 @@ watch(() => props.open, (newOpen) => {
     keyAllowedModelsDialogOpen.value = false
     deleteKeyConfirmOpen.value = false
     batchAssignDialogOpen.value = false
-    aliasDialogOpen.value = false
 
     // 重置临时数据
     endpointToEdit.value = null
@@ -1026,19 +1017,6 @@ function handleBatchAssign() {
 
 // 处理批量关联完成
 async function handleBatchAssignChanged() {
-  await loadProvider()
-  emit('refresh')
-}
-
-// 处理管理映射 - 打开别名对话框
-function handleManageAlias(model: Model) {
-  aliasEditingModel.value = model
-  aliasDialogOpen.value = true
-}
-
-// 处理别名保存完成
-async function handleAliasSaved() {
-  aliasEditingModel.value = null
   await loadProvider()
   emit('refresh')
 }

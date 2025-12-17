@@ -396,15 +396,13 @@ interface ProviderGroup {
 
 const groupedModels = computed(() => {
   let models = allModels.value.filter(m => !m.deprecated)
+  // 搜索（支持空格分隔的多关键词 AND 搜索）
   if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    models = models.filter(model =>
-      model.providerId.toLowerCase().includes(query) ||
-      model.providerName.toLowerCase().includes(query) ||
-      model.modelId.toLowerCase().includes(query) ||
-      model.modelName.toLowerCase().includes(query) ||
-      model.family?.toLowerCase().includes(query)
-    )
+    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
+    models = models.filter(model => {
+      const searchableText = `${model.providerId} ${model.providerName} ${model.modelId} ${model.modelName} ${model.family || ''}`.toLowerCase()
+      return keywords.every(keyword => searchableText.includes(keyword))
+    })
   }
 
   // 按提供商分组
@@ -425,10 +423,12 @@ const groupedModels = computed(() => {
 
   // 如果有搜索词，把提供商名称/ID匹配的排在前面
   if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
+    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
     result.sort((a, b) => {
-      const aProviderMatch = a.providerId.toLowerCase().includes(query) || a.providerName.toLowerCase().includes(query)
-      const bProviderMatch = b.providerId.toLowerCase().includes(query) || b.providerName.toLowerCase().includes(query)
+      const aText = `${a.providerId} ${a.providerName}`.toLowerCase()
+      const bText = `${b.providerId} ${b.providerName}`.toLowerCase()
+      const aProviderMatch = keywords.some(k => aText.includes(k))
+      const bProviderMatch = keywords.some(k => bText.includes(k))
       if (aProviderMatch && !bProviderMatch) return -1
       if (!aProviderMatch && bProviderMatch) return 1
       return a.providerName.localeCompare(b.providerName)

@@ -791,11 +791,13 @@ const filteredUsers = computed(() => {
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 
+  // 搜索（支持空格分隔的多关键词 AND 搜索）
   if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    filtered = filtered.filter(
-      u => u.username.toLowerCase().includes(query) || u.email?.toLowerCase().includes(query)
-    )
+    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
+    filtered = filtered.filter(u => {
+      const searchableText = `${u.username} ${u.email || ''}`.toLowerCase()
+      return keywords.every(keyword => searchableText.includes(keyword))
+    })
   }
 
   if (filterRole.value !== 'all') {

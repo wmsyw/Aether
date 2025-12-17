@@ -751,15 +751,13 @@ const expiringSoonCount = computed(() => apiKeys.value.filter(key => isExpiringS
 const filteredApiKeys = computed(() => {
   let result = apiKeys.value
 
-  // 搜索筛选
+  // 搜索筛选（支持空格分隔的多关键词 AND 搜索）
   if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(key =>
-      (key.name && key.name.toLowerCase().includes(query)) ||
-      (key.key_display && key.key_display.toLowerCase().includes(query)) ||
-      (key.username && key.username.toLowerCase().includes(query)) ||
-      (key.user_email && key.user_email.toLowerCase().includes(query))
-    )
+    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
+    result = result.filter(key => {
+      const searchableText = `${key.name || ''} ${key.key_display || ''} ${key.username || ''} ${key.user_email || ''}`.toLowerCase()
+      return keywords.every(keyword => searchableText.includes(keyword))
+    })
   }
 
   // 状态筛选

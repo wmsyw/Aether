@@ -20,10 +20,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create ENUM types
-    op.execute("CREATE TYPE userrole AS ENUM ('admin', 'user')")
+    # Create ENUM types (with IF NOT EXISTS for idempotency)
+    op.execute("DO $$ BEGIN CREATE TYPE userrole AS ENUM ('admin', 'user'); EXCEPTION WHEN duplicate_object THEN NULL; END $$")
     op.execute(
-        "CREATE TYPE providerbillingtype AS ENUM ('monthly_quota', 'pay_as_you_go', 'free_tier')"
+        "DO $$ BEGIN CREATE TYPE providerbillingtype AS ENUM ('monthly_quota', 'pay_as_you_go', 'free_tier'); EXCEPTION WHEN duplicate_object THEN NULL; END $$"
     )
 
     # ==================== users ====================
@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column("password_hash", sa.String(255), nullable=False),
         sa.Column(
             "role",
-            sa.Enum("admin", "user", name="userrole", create_type=False),
+            postgresql.ENUM("admin", "user", name="userrole", create_type=False),
             nullable=False,
             server_default="user",
         ),
@@ -67,7 +67,7 @@ def upgrade() -> None:
         sa.Column("website", sa.String(500), nullable=True),
         sa.Column(
             "billing_type",
-            sa.Enum(
+            postgresql.ENUM(
                 "monthly_quota", "pay_as_you_go", "free_tier", name="providerbillingtype", create_type=False
             ),
             nullable=False,

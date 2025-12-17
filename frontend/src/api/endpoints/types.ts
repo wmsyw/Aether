@@ -1,3 +1,25 @@
+// API 格式常量
+export const API_FORMATS = {
+  CLAUDE: 'CLAUDE',
+  CLAUDE_CLI: 'CLAUDE_CLI',
+  OPENAI: 'OPENAI',
+  OPENAI_CLI: 'OPENAI_CLI',
+  GEMINI: 'GEMINI',
+  GEMINI_CLI: 'GEMINI_CLI',
+} as const
+
+export type APIFormat = typeof API_FORMATS[keyof typeof API_FORMATS]
+
+// API 格式显示名称映射（按品牌分组：API 在前，CLI 在后）
+export const API_FORMAT_LABELS: Record<string, string> = {
+  [API_FORMATS.CLAUDE]: 'Claude',
+  [API_FORMATS.CLAUDE_CLI]: 'Claude CLI',
+  [API_FORMATS.OPENAI]: 'OpenAI',
+  [API_FORMATS.OPENAI_CLI]: 'OpenAI CLI',
+  [API_FORMATS.GEMINI]: 'Gemini',
+  [API_FORMATS.GEMINI_CLI]: 'Gemini CLI',
+}
+
 export interface ProviderEndpoint {
   id: string
   provider_id: string
@@ -214,6 +236,7 @@ export interface ConcurrencyStatus {
 export interface ProviderModelAlias {
   name: string
   priority: number  // 优先级（数字越小优先级越高）
+  api_formats?: string[]  // 作用域（适用的 API 格式），为空表示对所有格式生效
 }
 
 export interface Model {

@@ -169,15 +169,6 @@
                   variant="ghost"
                   size="icon"
                   class="h-8 w-8"
-                  title="管理映射"
-                  @click="openAliasDialog(model)"
-                >
-                  <Tag class="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-8 w-8"
                   :disabled="togglingModelId === model.id"
                   :title="model.is_active ? '点击停用' : '点击启用'"
                   @click="toggleModelActive(model)"
@@ -218,7 +209,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Box, Edit, Trash2, Layers, Eye, Wrench, Zap, Brain, Power, Copy, Image, Tag } from 'lucide-vue-next'
+import { Box, Edit, Trash2, Layers, Eye, Wrench, Zap, Brain, Power, Copy, Image } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
 import { useToast } from '@/composables/useToast'
@@ -233,7 +224,6 @@ const emit = defineEmits<{
   'editModel': [model: Model]
   'deleteModel': [model: Model]
   'batchAssign': []
-  'manageAlias': [model: Model]
 }>()
 
 const { error: showError, success: showSuccess } = useToast()
@@ -371,11 +361,6 @@ function deleteModel(model: Model) {
 // 打开批量关联对话框
 function openBatchAssignDialog() {
   emit('batchAssign')
-}
-
-// 打开别名管理对话框
-function openAliasDialog(model: Model) {
-  emit('manageAlias', model)
 }
 
 // 切换模型启用状态

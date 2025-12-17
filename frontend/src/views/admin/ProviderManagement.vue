@@ -505,13 +505,13 @@ const priorityModeConfig = computed(() => {
 const filteredProviders = computed(() => {
   let result = [...providers.value]
 
-  // 搜索筛选
+  // 搜索筛选（支持空格分隔的多关键词 AND 搜索）
   if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(p =>
-      p.display_name.toLowerCase().includes(query) ||
-      p.name.toLowerCase().includes(query)
-    )
+    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
+    result = result.filter(p => {
+      const searchableText = `${p.display_name} ${p.name}`.toLowerCase()
+      return keywords.every(keyword => searchableText.includes(keyword))
+    })
   }
 
   // 排序

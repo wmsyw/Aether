@@ -474,13 +474,13 @@ async function toggleCapability(modelName: string, capName: string) {
 const filteredModels = computed(() => {
   let result = models.value
 
-  // 搜索
+  // 搜索（支持空格分隔的多关键词 AND 搜索）
   if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(m =>
-      m.name.toLowerCase().includes(query) ||
-      m.display_name?.toLowerCase().includes(query)
-    )
+    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
+    result = result.filter(m => {
+      const searchableText = `${m.name} ${m.display_name || ''}`.toLowerCase()
+      return keywords.every(keyword => searchableText.includes(keyword))
+    })
   }
 
   // 能力筛选

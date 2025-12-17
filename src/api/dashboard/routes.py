@@ -731,8 +731,15 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
             )
             # stats_daily.date 存储的是业务日期对应的 UTC 开始时间
             # 需要转回业务时区再取日期，才能与日期序列匹配
+            def _to_business_date_str(value: datetime) -> str:
+                if value.tzinfo is None:
+                    value_utc = value.replace(tzinfo=timezone.utc)
+                else:
+                    value_utc = value.astimezone(timezone.utc)
+                return value_utc.astimezone(app_tz).date().isoformat()
+
             stats_map = {
-                stat.date.replace(tzinfo=timezone.utc).astimezone(app_tz).date().isoformat(): {
+                _to_business_date_str(stat.date): {
                     "requests": stat.total_requests,
                     "tokens": stat.input_tokens + stat.output_tokens + stat.cache_creation_tokens + stat.cache_read_tokens,
                     "cost": stat.total_cost,
@@ -790,6 +797,38 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
                     "unique_providers": today_unique_providers,
                     "fallback_count": today_fallback_count,
                 }
+
+            # 历史预聚合缺失时兜底：按业务日范围实时计算（仅补最近少量缺失，避免全表扫描）
+            yesterday_date = today_local.date() - timedelta(days=1)
+            historical_end = min(end_date_local.date(), yesterday_date)
+            missing_dates: list[str] = []
+            cursor = start_date_local.date()
+            while cursor <= historical_end:
+                date_str = cursor.isoformat()
+                if date_str not in stats_map:
+                    missing_dates.append(date_str)
+                cursor += timedelta(days=1)
+
+            if missing_dates:
+                for date_str in missing_dates[-7:]:
+                    target_local = datetime.fromisoformat(date_str).replace(tzinfo=app_tz)
+                    computed = StatsAggregatorService.compute_daily_stats(db, target_local)
+                    stats_map[date_str] = {
+                        "requests": computed["total_requests"],
+                        "tokens": (
+                            computed["input_tokens"]
+                            + computed["output_tokens"]
+                            + computed["cache_creation_tokens"]
+                            + computed["cache_read_tokens"]
+                        ),
+                        "cost": computed["total_cost"],
+                        "avg_response_time": computed["avg_response_time_ms"] / 1000.0
+                        if computed["avg_response_time_ms"]
+                        else 0,
+                        "unique_models": computed["unique_models"],
+                        "unique_providers": computed["unique_providers"],
+                        "fallback_count": computed["fallback_count"],
+                    }
         else:
             # 普通用户：仍需实时查询（用户级预聚合可选）
             query = db.query(Usage).filter(

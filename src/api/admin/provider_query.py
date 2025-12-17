@@ -1,44 +1,26 @@
 """
 Provider Query API 端点
-用于查询提供商的余额、使用记录等信息
+用于查询提供商的模型列表等信息
 """
 
-from datetime import datetime
+import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session, joinedload
 
+from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.database.database import get_db
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, User
-
-# 初始化适配器注册
-from src.plugins.provider_query import init  # noqa
-from src.plugins.provider_query import get_query_registry
-from src.plugins.provider_query.base import QueryCapability
+from src.models.database import Provider, ProviderEndpoint, User
 from src.utils.auth_utils import get_current_user
 
-router = APIRouter(prefix="/provider-query", tags=["Provider Query"])
+router = APIRouter(prefix="/api/admin/provider-query", tags=["Provider Query"])
 
 
 # ============ Request/Response Models ============
-
-
-class BalanceQueryRequest(BaseModel):
-    """余额查询请求"""
-
-    provider_id: str
-    api_key_id: Optional[str] = None  # 如果不指定，使用提供商的第一个可用 API Key
-
-
-class UsageSummaryQueryRequest(BaseModel):
-    """使用汇总查询请求"""
-
-    provider_id: str
-    api_key_id: Optional[str] = None
-    period: str = "month"  # day, week, month, year
 
 
 class ModelsQueryRequest(BaseModel):
@@ -51,360 +33,281 @@ class ModelsQueryRequest(BaseModel):
 # ============ API Endpoints ============
 
 
-@router.get("/adapters")
-async def list_adapters(
-    current_user: User = Depends(get_current_user),
-):
-    """
-    获取所有可用的查询适配器
+async def _fetch_openai_models(
+    client: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    api_format: str,
+    extra_headers: Optional[dict] = None,
+) -> tuple[list, Optional[str]]:
+    """获取 OpenAI 格式的模型列表
 
     Returns:
-        适配器列表
+        tuple[list, Optional[str]]: (模型列表, 错误信息)
     """
-    registry = get_query_registry()
-    adapters = registry.list_adapters()
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if extra_headers:
+        # 防止 extra_headers 覆盖 Authorization
+        safe_headers = {k: v for k, v in extra_headers.items() if k.lower() != "authorization"}
+        headers.update(safe_headers)
 
-    return {"success": True, "data": adapters}
+    # 构建 /v1/models URL
+    if base_url.endswith("/v1"):
+        models_url = f"{base_url}/models"
+    else:
+        models_url = f"{base_url}/v1/models"
+
+    try:
+        response = await client.get(models_url, headers=headers)
+        logger.debug(f"OpenAI models request to {models_url}: status={response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            models = []
+            if "data" in data:
+                models = data["data"]
+            elif isinstance(data, list):
+                models = data
+            # 为每个模型添加 api_format 字段
+            for m in models:
+                m["api_format"] = api_format
+            return models, None
+        else:
+            # 记录详细的错误信息
+            error_body = response.text[:500] if response.text else "(empty)"
+            error_msg = f"HTTP {response.status_code}: {error_body}"
+            logger.warning(f"OpenAI models request to {models_url} failed: {error_msg}")
+            return [], error_msg
+    except Exception as e:
+        error_msg = f"Request error: {str(e)}"
+        logger.warning(f"Failed to fetch models from {models_url}: {e}")
+        return [], error_msg
 
 
-@router.get("/capabilities/{provider_id}")
-async def get_provider_capabilities(
-    provider_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    获取提供商支持的查询能力
-
-    Args:
-        provider_id: 提供商 ID
+async def _fetch_claude_models(
+    client: httpx.AsyncClient, base_url: str, api_key: str, api_format: str
+) -> tuple[list, Optional[str]]:
+    """获取 Claude 格式的模型列表
 
     Returns:
-        支持的查询能力列表
+        tuple[list, Optional[str]]: (模型列表, 错误信息)
     """
-    # 获取提供商
-    from sqlalchemy import select
-
-    result = await db.execute(select(Provider).where(Provider.id == provider_id))
-    provider = result.scalar_one_or_none()
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-
-    registry = get_query_registry()
-    capabilities = registry.get_capabilities_for_provider(provider.name)
-
-    if capabilities is None:
-        return {
-            "success": True,
-            "data": {
-                "provider_id": provider_id,
-                "provider_name": provider.name,
-                "capabilities": [],
-                "has_adapter": False,
-                "message": "No query adapter available for this provider",
-            },
-        }
-
-    return {
-        "success": True,
-        "data": {
-            "provider_id": provider_id,
-            "provider_name": provider.name,
-            "capabilities": [c.name for c in capabilities],
-            "has_adapter": True,
-        },
+    headers = {
+        "x-api-key": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "anthropic-version": "2023-06-01",
     }
 
+    # 构建 /v1/models URL
+    if base_url.endswith("/v1"):
+        models_url = f"{base_url}/models"
+    else:
+        models_url = f"{base_url}/v1/models"
 
-@router.post("/balance")
-async def query_balance(
-    request: BalanceQueryRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    查询提供商余额
+    try:
+        response = await client.get(models_url, headers=headers)
+        logger.debug(f"Claude models request to {models_url}: status={response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            models = []
+            if "data" in data:
+                models = data["data"]
+            elif isinstance(data, list):
+                models = data
+            # 为每个模型添加 api_format 字段
+            for m in models:
+                m["api_format"] = api_format
+            return models, None
+        else:
+            error_body = response.text[:500] if response.text else "(empty)"
+            error_msg = f"HTTP {response.status_code}: {error_body}"
+            logger.warning(f"Claude models request to {models_url} failed: {error_msg}")
+            return [], error_msg
+    except Exception as e:
+        error_msg = f"Request error: {str(e)}"
+        logger.warning(f"Failed to fetch Claude models from {models_url}: {e}")
+        return [], error_msg
 
-    Args:
-        request: 查询请求
+
+async def _fetch_gemini_models(
+    client: httpx.AsyncClient, base_url: str, api_key: str, api_format: str
+) -> tuple[list, Optional[str]]:
+    """获取 Gemini 格式的模型列表
 
     Returns:
-        余额信息
+        tuple[list, Optional[str]]: (模型列表, 错误信息)
     """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
+    # 兼容 base_url 已包含 /v1beta 的情况
+    base_url_clean = base_url.rstrip("/")
+    if base_url_clean.endswith("/v1beta"):
+        models_url = f"{base_url_clean}/models?key={api_key}"
+    else:
+        models_url = f"{base_url_clean}/v1beta/models?key={api_key}"
 
-    # 获取提供商及其端点
-    result = await db.execute(
-        select(Provider)
-        .options(selectinload(Provider.endpoints).selectinload(ProviderEndpoint.api_keys))
-        .where(Provider.id == request.provider_id)
-    )
-    provider = result.scalar_one_or_none()
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-
-    # 获取 API Key
-    api_key_value = None
-    endpoint_config = None
-
-    if request.api_key_id:
-        # 查找指定的 API Key
-        for endpoint in provider.endpoints:
-            for api_key in endpoint.api_keys:
-                if api_key.id == request.api_key_id:
-                    api_key_value = api_key.api_key
-                    endpoint_config = {
-                        "base_url": endpoint.base_url,
-                        "api_format": endpoint.api_format if endpoint.api_format else None,
+    try:
+        response = await client.get(models_url)
+        logger.debug(f"Gemini models request to {models_url}: status={response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            if "models" in data:
+                # 转换为统一格式
+                return [
+                    {
+                        "id": m.get("name", "").replace("models/", ""),
+                        "owned_by": "google",
+                        "display_name": m.get("displayName", ""),
+                        "api_format": api_format,
                     }
-                    break
-            if api_key_value:
-                break
-
-        if not api_key_value:
-            raise HTTPException(status_code=404, detail="API Key not found")
-    else:
-        # 使用第一个可用的 API Key
-        for endpoint in provider.endpoints:
-            if endpoint.is_active and endpoint.api_keys:
-                for api_key in endpoint.api_keys:
-                    if api_key.is_active:
-                        api_key_value = api_key.api_key
-                        endpoint_config = {
-                            "base_url": endpoint.base_url,
-                            "api_format": endpoint.api_format if endpoint.api_format else None,
-                        }
-                        break
-                if api_key_value:
-                    break
-
-        if not api_key_value:
-            raise HTTPException(status_code=400, detail="No active API Key found for this provider")
-
-    # 查询余额
-    registry = get_query_registry()
-    query_result = await registry.query_provider_balance(
-        provider_type=provider.name, api_key=api_key_value, endpoint_config=endpoint_config
-    )
-
-    if not query_result.success:
-        logger.warning(f"Balance query failed for provider {provider.name}: {query_result.error}")
-
-    return {
-        "success": query_result.success,
-        "data": query_result.to_dict(),
-        "provider": {
-            "id": provider.id,
-            "name": provider.name,
-            "display_name": provider.display_name,
-        },
-    }
-
-
-@router.post("/usage-summary")
-async def query_usage_summary(
-    request: UsageSummaryQueryRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    查询提供商使用汇总
-
-    Args:
-        request: 查询请求
-
-    Returns:
-        使用汇总信息
-    """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
-    # 获取提供商及其端点
-    result = await db.execute(
-        select(Provider)
-        .options(selectinload(Provider.endpoints).selectinload(ProviderEndpoint.api_keys))
-        .where(Provider.id == request.provider_id)
-    )
-    provider = result.scalar_one_or_none()
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-
-    # 获取 API Key（逻辑同上）
-    api_key_value = None
-    endpoint_config = None
-
-    if request.api_key_id:
-        for endpoint in provider.endpoints:
-            for api_key in endpoint.api_keys:
-                if api_key.id == request.api_key_id:
-                    api_key_value = api_key.api_key
-                    endpoint_config = {"base_url": endpoint.base_url}
-                    break
-            if api_key_value:
-                break
-
-        if not api_key_value:
-            raise HTTPException(status_code=404, detail="API Key not found")
-    else:
-        for endpoint in provider.endpoints:
-            if endpoint.is_active and endpoint.api_keys:
-                for api_key in endpoint.api_keys:
-                    if api_key.is_active:
-                        api_key_value = api_key.api_key
-                        endpoint_config = {"base_url": endpoint.base_url}
-                        break
-                if api_key_value:
-                    break
-
-        if not api_key_value:
-            raise HTTPException(status_code=400, detail="No active API Key found for this provider")
-
-    # 查询使用汇总
-    registry = get_query_registry()
-    query_result = await registry.query_provider_usage(
-        provider_type=provider.name,
-        api_key=api_key_value,
-        period=request.period,
-        endpoint_config=endpoint_config,
-    )
-
-    return {
-        "success": query_result.success,
-        "data": query_result.to_dict(),
-        "provider": {
-            "id": provider.id,
-            "name": provider.name,
-            "display_name": provider.display_name,
-        },
-    }
+                    for m in data["models"]
+                ], None
+            return [], None
+        else:
+            error_body = response.text[:500] if response.text else "(empty)"
+            error_msg = f"HTTP {response.status_code}: {error_body}"
+            logger.warning(f"Gemini models request to {models_url} failed: {error_msg}")
+            return [], error_msg
+    except Exception as e:
+        error_msg = f"Request error: {str(e)}"
+        logger.warning(f"Failed to fetch Gemini models from {models_url}: {e}")
+        return [], error_msg
 
 
 @router.post("/models")
 async def query_available_models(
     request: ModelsQueryRequest,
-    db: AsyncSession = Depends(get_db),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     查询提供商可用模型
 
+    遍历所有活跃端点，根据端点的 API 格式选择正确的请求方式：
+    - OPENAI/OPENAI_CLI: /v1/models (Bearer token)
+    - CLAUDE/CLAUDE_CLI: /v1/models (x-api-key)
+    - GEMINI/GEMINI_CLI: /v1beta/models (URL key parameter)
+
     Args:
         request: 查询请求
 
     Returns:
-        模型列表
+        所有端点的模型列表（合并）
     """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
     # 获取提供商及其端点
-    result = await db.execute(
-        select(Provider)
-        .options(selectinload(Provider.endpoints).selectinload(ProviderEndpoint.api_keys))
-        .where(Provider.id == request.provider_id)
+    provider = (
+        db.query(Provider)
+        .options(joinedload(Provider.endpoints).joinedload(ProviderEndpoint.api_keys))
+        .filter(Provider.id == request.provider_id)
+        .first()
     )
-    provider = result.scalar_one_or_none()
 
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    # 获取 API Key
-    api_key_value = None
-    endpoint_config = None
+    # 收集所有活跃端点的配置
+    endpoint_configs: list[dict] = []
 
     if request.api_key_id:
+        # 指定了特定的 API Key，只使用该 Key 对应的端点
         for endpoint in provider.endpoints:
             for api_key in endpoint.api_keys:
                 if api_key.id == request.api_key_id:
-                    api_key_value = api_key.api_key
-                    endpoint_config = {"base_url": endpoint.base_url}
+                    try:
+                        api_key_value = crypto_service.decrypt(api_key.api_key)
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt API key: {e}")
+                        raise HTTPException(status_code=500, detail="Failed to decrypt API key")
+                    endpoint_configs.append({
+                        "api_key": api_key_value,
+                        "base_url": endpoint.base_url,
+                        "api_format": endpoint.api_format,
+                        "extra_headers": endpoint.headers,
+                    })
                     break
-            if api_key_value:
+            if endpoint_configs:
                 break
 
-        if not api_key_value:
+        if not endpoint_configs:
             raise HTTPException(status_code=404, detail="API Key not found")
     else:
+        # 遍历所有活跃端点，每个端点取第一个可用的 Key
         for endpoint in provider.endpoints:
-            if endpoint.is_active and endpoint.api_keys:
-                for api_key in endpoint.api_keys:
-                    if api_key.is_active:
-                        api_key_value = api_key.api_key
-                        endpoint_config = {"base_url": endpoint.base_url}
-                        break
-                if api_key_value:
-                    break
+            if not endpoint.is_active or not endpoint.api_keys:
+                continue
 
-        if not api_key_value:
+            # 找第一个可用的 Key
+            for api_key in endpoint.api_keys:
+                if api_key.is_active:
+                    try:
+                        api_key_value = crypto_service.decrypt(api_key.api_key)
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt API key: {e}")
+                        continue  # 尝试下一个 Key
+                    endpoint_configs.append({
+                        "api_key": api_key_value,
+                        "base_url": endpoint.base_url,
+                        "api_format": endpoint.api_format,
+                        "extra_headers": endpoint.headers,
+                    })
+                    break  # 只取第一个可用的 Key
+
+        if not endpoint_configs:
             raise HTTPException(status_code=400, detail="No active API Key found for this provider")
 
-    # 查询模型
-    registry = get_query_registry()
-    adapter = registry.get_adapter_for_provider(provider.name)
+    # 并发请求所有端点的模型列表
+    all_models: list = []
+    errors: list[str] = []
 
-    if not adapter:
-        raise HTTPException(
-            status_code=400, detail=f"No query adapter available for provider: {provider.name}"
+    async def fetch_endpoint_models(
+        client: httpx.AsyncClient, config: dict
+    ) -> tuple[list, Optional[str]]:
+        base_url = config["base_url"]
+        if not base_url:
+            return [], None
+        base_url = base_url.rstrip("/")
+        api_format = config["api_format"]
+        api_key_value = config["api_key"]
+        extra_headers = config["extra_headers"]
+
+        try:
+            if api_format in ["CLAUDE", "CLAUDE_CLI"]:
+                return await _fetch_claude_models(client, base_url, api_key_value, api_format)
+            elif api_format in ["GEMINI", "GEMINI_CLI"]:
+                return await _fetch_gemini_models(client, base_url, api_key_value, api_format)
+            else:
+                return await _fetch_openai_models(
+                    client, base_url, api_key_value, api_format, extra_headers
+                )
+        except Exception as e:
+            logger.error(f"Error fetching models from {api_format} endpoint: {e}")
+            return [], f"{api_format}: {str(e)}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        results = await asyncio.gather(
+            *[fetch_endpoint_models(client, c) for c in endpoint_configs]
         )
+        for models, error in results:
+            all_models.extend(models)
+            if error:
+                errors.append(error)
 
-    query_result = await adapter.query_available_models(
-        api_key=api_key_value, endpoint_config=endpoint_config
-    )
+    # 按 model id 去重（保留第一个）
+    seen_ids: set[str] = set()
+    unique_models: list = []
+    for model in all_models:
+        model_id = model.get("id")
+        if model_id and model_id not in seen_ids:
+            seen_ids.add(model_id)
+            unique_models.append(model)
+
+    error = "; ".join(errors) if errors else None
+    if not unique_models and not error:
+        error = "No models returned from any endpoint"
 
     return {
-        "success": query_result.success,
-        "data": query_result.to_dict(),
+        "success": len(unique_models) > 0,
+        "data": {"models": unique_models, "error": error},
         "provider": {
             "id": provider.id,
             "name": provider.name,
             "display_name": provider.display_name,
         },
     }
-
-
-@router.delete("/cache/{provider_id}")
-async def clear_query_cache(
-    provider_id: str,
-    api_key_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    清除查询缓存
-
-    Args:
-        provider_id: 提供商 ID
-        api_key_id: 可选，指定清除某个 API Key 的缓存
-
-    Returns:
-        清除结果
-    """
-    from sqlalchemy import select
-
-    # 获取提供商
-    result = await db.execute(select(Provider).where(Provider.id == provider_id))
-    provider = result.scalar_one_or_none()
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-
-    registry = get_query_registry()
-    adapter = registry.get_adapter_for_provider(provider.name)
-
-    if adapter:
-        if api_key_id:
-            # 获取 API Key 值来清除缓存
-            from sqlalchemy.orm import selectinload
-
-            result = await db.execute(select(ProviderAPIKey).where(ProviderAPIKey.id == api_key_id))
-            api_key = result.scalar_one_or_none()
-            if api_key:
-                adapter.clear_cache(api_key.api_key)
-        else:
-            adapter.clear_cache()
-
-    return {"success": True, "message": "Cache cleared successfully"}

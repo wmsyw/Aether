@@ -124,6 +124,27 @@ export interface ModelExport {
   config?: any
 }
 
+// Provider 模型查询响应
+export interface ProviderModelsQueryResponse {
+  success: boolean
+  data: {
+    models: Array<{
+      id: string
+      object?: string
+      created?: number
+      owned_by?: string
+      display_name?: string
+      api_format?: string
+    }>
+    error?: string
+  }
+  provider: {
+    id: string
+    name: string
+    display_name: string
+  }
+}
+
 export interface ConfigImportRequest extends ConfigExportData {
   merge_mode: 'skip' | 'overwrite' | 'error'
 }
@@ -354,6 +375,15 @@ export const adminApi = {
     const response = await apiClient.post<UsersImportResponse>(
       '/api/admin/system/users/import',
       data
+    )
+    return response.data
+  },
+
+  // 查询 Provider 可用模型（从上游 API 获取）
+  async queryProviderModels(providerId: string, apiKeyId?: string): Promise<ProviderModelsQueryResponse> {
+    const response = await apiClient.post<ProviderModelsQueryResponse>(
+      '/api/admin/provider-query/models',
+      { provider_id: providerId, api_key_id: apiKeyId }
     )
     return response.data
   }

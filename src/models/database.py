@@ -813,7 +813,9 @@ class Model(Base):
     def get_effective_supports_image_generation(self) -> bool:
         return self._get_effective_capability("supports_image_generation", False)
 
-    def select_provider_model_name(self, affinity_key: Optional[str] = None) -> str:
+    def select_provider_model_name(
+        self, affinity_key: Optional[str] = None, api_format: Optional[str] = None
+    ) -> str:
         """按优先级选择要使用的 Provider 模型名称
 
         如果配置了 provider_model_aliases，按优先级选择（数字越小越优先）；
@@ -822,6 +824,7 @@ class Model(Base):
 
         Args:
             affinity_key: 用于哈希分散的亲和键（如用户 API Key 哈希），确保同一用户稳定选择同一别名
+            api_format: 当前请求的 API 格式（如 CLAUDE、OPENAI 等），用于过滤适用的别名
         """
         import hashlib
 
@@ -839,6 +842,13 @@ class Model(Base):
             name = raw.get("name")
             if not isinstance(name, str) or not name.strip():
                 continue
+
+            # 检查 api_formats 作用域（如果配置了且当前有 api_format）
+            alias_api_formats = raw.get("api_formats")
+            if api_format and alias_api_formats:
+                # 如果配置了作用域，只有匹配时才生效
+                if isinstance(alias_api_formats, list) and api_format not in alias_api_formats:
+                    continue
 
             raw_priority = raw.get("priority", 1)
             try:
