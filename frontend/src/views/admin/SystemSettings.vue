@@ -464,6 +464,78 @@
           </div>
         </div>
       </CardSection>
+
+      <!-- 流式输出配置 -->
+      <CardSection
+        title="流式输出"
+        description="配置流式响应的输出效果"
+      >
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="md:col-span-2">
+            <div class="flex items-center space-x-2">
+              <Checkbox
+                id="stream-smoothing-enabled"
+                v-model:checked="systemConfig.stream_smoothing_enabled"
+              />
+              <div>
+                <Label
+                  for="stream-smoothing-enabled"
+                  class="cursor-pointer"
+                >
+                  启用平滑输出
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  将上游返回的大块内容拆分成小块，模拟打字效果
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <Label
+              for="stream-smoothing-chunk-size"
+              class="block text-sm font-medium"
+            >
+              每块字符数
+            </Label>
+            <Input
+              id="stream-smoothing-chunk-size"
+              v-model.number="systemConfig.stream_smoothing_chunk_size"
+              type="number"
+              min="1"
+              max="100"
+              placeholder="5"
+              class="mt-1"
+              :disabled="!systemConfig.stream_smoothing_enabled"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              每次输出的字符数量（1-100）
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="stream-smoothing-delay-ms"
+              class="block text-sm font-medium"
+            >
+              输出间隔 (毫秒)
+            </Label>
+            <Input
+              id="stream-smoothing-delay-ms"
+              v-model.number="systemConfig.stream_smoothing_delay_ms"
+              type="number"
+              min="1"
+              max="500"
+              placeholder="15"
+              class="mt-1"
+              :disabled="!systemConfig.stream_smoothing_enabled"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              每块之间的延迟毫秒数（1-500）
+            </p>
+          </div>
+        </div>
+      </CardSection>
     </div>
 
     <!-- 导入配置对话框 -->
@@ -812,6 +884,10 @@ interface SystemConfig {
   log_retention_days: number
   cleanup_batch_size: number
   audit_log_retention_days: number
+  // 流式输出
+  stream_smoothing_enabled: boolean
+  stream_smoothing_chunk_size: number
+  stream_smoothing_delay_ms: number
 }
 
 const loading = ref(false)
@@ -861,6 +937,10 @@ const systemConfig = ref<SystemConfig>({
   log_retention_days: 365,
   cleanup_batch_size: 1000,
   audit_log_retention_days: 30,
+  // 流式输出
+  stream_smoothing_enabled: false,
+  stream_smoothing_chunk_size: 5,
+  stream_smoothing_delay_ms: 15,
 })
 
 // 计算属性：KB 和 字节 之间的转换
@@ -917,6 +997,10 @@ async function loadSystemConfig() {
       'log_retention_days',
       'cleanup_batch_size',
       'audit_log_retention_days',
+      // 流式输出
+      'stream_smoothing_enabled',
+      'stream_smoothing_chunk_size',
+      'stream_smoothing_delay_ms',
     ]
 
     for (const key of configs) {
@@ -1023,6 +1107,22 @@ async function saveSystemConfig() {
         key: 'audit_log_retention_days',
         value: systemConfig.value.audit_log_retention_days,
         description: '审计日志保留天数'
+      },
+      // 流式输出
+      {
+        key: 'stream_smoothing_enabled',
+        value: systemConfig.value.stream_smoothing_enabled,
+        description: '是否启用流式平滑输出'
+      },
+      {
+        key: 'stream_smoothing_chunk_size',
+        value: systemConfig.value.stream_smoothing_chunk_size,
+        description: '流式平滑输出每个小块的字符数'
+      },
+      {
+        key: 'stream_smoothing_delay_ms',
+        value: systemConfig.value.stream_smoothing_delay_ms,
+        description: '流式平滑输出每个小块之间的延迟毫秒数'
       },
     ]
 

@@ -143,6 +143,7 @@ class Config:
         # STREAM_STATS_DELAY: 统计记录延迟（秒），等待流完全关闭
         self.stream_prefetch_lines = int(os.getenv("STREAM_PREFETCH_LINES", "5"))
         self.stream_stats_delay = float(os.getenv("STREAM_STATS_DELAY", "0.1"))
+        # 注：流式平滑输出配置已移至数据库系统设置（stream_smoothing_*）
 
         # 验证连接池配置
         self._validate_pool_config()

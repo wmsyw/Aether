@@ -12,7 +12,6 @@ from src.core.logger import logger
 from src.models.database import Provider, SystemConfig
 
 
-
 class LogLevel(str, Enum):
     """日志记录级别"""
 
@@ -79,6 +78,19 @@ class SystemConfigService:
             "value": False,
             "description": "是否自动删除过期的API Key（True=物理删除，False=仅禁用），仅管理员可配置",
         },
+        # 流式平滑输出配置
+        "stream_smoothing_enabled": {
+            "value": False,
+            "description": "是否启用流式平滑输出，将大 chunk 拆分成小块模拟打字效果",
+        },
+        "stream_smoothing_chunk_size": {
+            "value": 5,
+            "description": "流式平滑输出每个小块的字符数",
+        },
+        "stream_smoothing_delay_ms": {
+            "value": 15,
+            "description": "流式平滑输出每个小块之间的延迟毫秒数",
+        },
     }
 
     @classmethod
@@ -93,6 +105,35 @@ class SystemConfigService:
             return cls.DEFAULT_CONFIGS[key]["value"]
 
         return default
+
+    @classmethod
+    def get_configs(cls, db: Session, keys: List[str]) -> Dict[str, Any]:
+        """
+        批量获取系统配置值
+
+        Args:
+            db: 数据库会话
+            keys: 配置键列表
+
+        Returns:
+            配置键值字典
+        """
+        result = {}
+
+        # 一次查询获取所有配置
+        configs = db.query(SystemConfig).filter(SystemConfig.key.in_(keys)).all()
+        config_map = {c.key: c.value for c in configs}
+
+        # 填充结果，不存在的使用默认值
+        for key in keys:
+            if key in config_map:
+                result[key] = config_map[key]
+            elif key in cls.DEFAULT_CONFIGS:
+                result[key] = cls.DEFAULT_CONFIGS[key]["value"]
+            else:
+                result[key] = None
+
+        return result
 
     @staticmethod
     def set_config(db: Session, key: str, value: Any, description: str = None) -> SystemConfig:
@@ -111,6 +152,7 @@ class SystemConfigService:
 
         db.commit()
         db.refresh(config)
+
         return config
 
     @staticmethod
@@ -153,8 +195,8 @@ class SystemConfigService:
             for config in configs
         ]
 
-    @staticmethod
-    def delete_config(db: Session, key: str) -> bool:
+    @classmethod
+    def delete_config(cls, db: Session, key: str) -> bool:
         """删除系统配置"""
         config = db.query(SystemConfig).filter(SystemConfig.key == key).first()
         if config:

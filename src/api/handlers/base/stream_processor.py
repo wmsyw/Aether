@@ -11,6 +11,7 @@
 import asyncio
 import codecs
 import json
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Optional
 
 import httpx
@@ -18,10 +19,20 @@ import httpx
 from src.api.handlers.base.parsers import get_parser_for_format
 from src.api.handlers.base.response_parser import ResponseParser
 from src.api.handlers.base.stream_context import StreamContext
+from src.api.handlers.base.stream_smoother import StreamSmoother
 from src.core.exceptions import EmbeddedErrorException
 from src.core.logger import logger
 from src.models.database import Provider, ProviderEndpoint
 from src.utils.sse_parser import SSEEventParser
+
+
+@dataclass
+class StreamSmoothingConfig:
+    """流式平滑输出配置"""
+
+    enabled: bool = False
+    chunk_size: int = 5
+    delay_ms: int = 15
 
 
 class StreamProcessor:
@@ -39,6 +50,7 @@ class StreamProcessor:
         on_streaming_start: Optional[Callable[[], None]] = None,
         *,
         collect_text: bool = False,
+        smoothing_config: Optional[StreamSmoothingConfig] = None,
     ):
         """
         初始化流处理器
@@ -47,11 +59,14 @@ class StreamProcessor:
             request_id: 请求 ID（用于日志）
             default_parser: 默认响应解析器
             on_streaming_start: 流开始时的回调（用于更新状态）
+            collect_text: 是否收集文本内容
+            smoothing_config: 流式平滑输出配置
         """
         self.request_id = request_id
         self.default_parser = default_parser
         self.on_streaming_start = on_streaming_start
         self.collect_text = collect_text
+        self.smoothing_config = smoothing_config or StreamSmoothingConfig()
 
     def get_parser_for_provider(self, ctx: StreamContext) -> ResponseParser:
         """
@@ -450,6 +465,36 @@ class StreamProcessor:
             ctx.status_code = 500
             ctx.error_message = str(e)
             raise
+
+    async def create_smoothed_stream(
+        self,
+        stream_generator: AsyncGenerator[bytes, None],
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        创建平滑输出的流生成器
+
+        如果启用了平滑输出，将大 chunk 拆分成小块并添加微小延迟。
+        否则直接透传原始流。
+
+        Args:
+            stream_generator: 原始流生成器
+
+        Yields:
+            平滑处理后的响应数据块
+        """
+        if not self.smoothing_config.enabled:
+            # 未启用平滑输出，直接透传
+            async for chunk in stream_generator:
+                yield chunk
+            return
+
+        # 启用平滑输出
+        smoother = StreamSmoother(
+            chunk_size=self.smoothing_config.chunk_size,
+            delay_ms=self.smoothing_config.delay_ms,
+        )
+        async for chunk in smoother.smooth_stream(stream_generator):
+            yield chunk
 
     async def _cleanup(
         self,
