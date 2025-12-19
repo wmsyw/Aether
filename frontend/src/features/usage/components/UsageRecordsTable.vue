@@ -138,9 +138,21 @@
 
       <!-- 刷新按钮 -->
       <RefreshButton
+        v-if="!autoRefresh"
         :loading="loading"
         @click="$emit('refresh')"
       />
+
+      <!-- 自动刷新开关 -->
+      <div class="flex items-center gap-2">
+        <Switch
+          :model-value="autoRefresh"
+          @update:model-value="$emit('update:autoRefresh', $event)"
+        />
+        <label class="text-xs text-muted-foreground cursor-pointer select-none" @click="$emit('update:autoRefresh', !autoRefresh)">
+          自动刷新
+        </label>
+      </div>
     </template>
 
     <Table>
@@ -421,6 +433,7 @@ import {
   TableCell,
   Pagination,
   RefreshButton,
+  Switch,
 } from '@/components/ui'
 import { formatTokens, formatCurrency } from '@/utils/format'
 import { formatDateTime } from '../composables'
@@ -453,6 +466,8 @@ const props = defineProps<{
   pageSize: number
   totalRecords: number
   pageSizeOptions: number[]
+  // 自动刷新
+  autoRefresh: boolean
 }>()
 
 const emit = defineEmits<{
@@ -463,6 +478,7 @@ const emit = defineEmits<{
   'update:filterStatus': [value: string]
   'update:currentPage': [value: number]
   'update:pageSize': [value: number]
+  'update:autoRefresh': [value: boolean]
   'refresh': []
   'showDetail': [id: string]
 }>()

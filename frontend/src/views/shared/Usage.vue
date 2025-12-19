@@ -65,6 +65,7 @@
       :page-size="pageSize"
       :total-records="totalRecords"
       :page-size-options="pageSizeOptions"
+      :auto-refresh="globalAutoRefresh"
       @update:selected-period="handlePeriodChange"
       @update:filter-user="handleFilterUserChange"
       @update:filter-model="handleFilterModelChange"
@@ -72,6 +73,7 @@
       @update:filter-status="handleFilterStatusChange"
       @update:current-page="handlePageChange"
       @update:page-size="handlePageSizeChange"
+      @update:auto-refresh="handleAutoRefreshChange"
       @refresh="refreshData"
       @export="exportData"
       @show-detail="showRequestDetail"
@@ -214,7 +216,10 @@ const hasActiveRequests = computed(() => activeRequestIds.value.length > 0)
 
 // 自动刷新定时器
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
-const AUTO_REFRESH_INTERVAL = 1000 // 1秒刷新一次
+let globalAutoRefreshTimer: ReturnType<typeof setInterval> | null = null
+const AUTO_REFRESH_INTERVAL = 1000 // 1秒刷新一次（用于活跃请求）
+const GLOBAL_AUTO_REFRESH_INTERVAL = 30000 // 30秒刷新一次（全局自动刷新）
+const globalAutoRefresh = ref(false) // 全局自动刷新开关
 
 // 轮询活跃请求状态（轻量级，只更新状态变化的记录）
 async function pollActiveRequests() {
@@ -278,9 +283,34 @@ watch(hasActiveRequests, (hasActive) => {
   }
 }, { immediate: true })
 
+// 启动全局自动刷新
+function startGlobalAutoRefresh() {
+  if (globalAutoRefreshTimer) return
+  globalAutoRefreshTimer = setInterval(refreshData, GLOBAL_AUTO_REFRESH_INTERVAL)
+}
+
+// 停止全局自动刷新
+function stopGlobalAutoRefresh() {
+  if (globalAutoRefreshTimer) {
+    clearInterval(globalAutoRefreshTimer)
+    globalAutoRefreshTimer = null
+  }
+}
+
+// 处理自动刷新开关变化
+function handleAutoRefreshChange(value: boolean) {
+  globalAutoRefresh.value = value
+  if (value) {
+    startGlobalAutoRefresh()
+  } else {
+    stopGlobalAutoRefresh()
+  }
+}
+
 // 组件卸载时清理定时器
 onUnmounted(() => {
   stopAutoRefresh()
+  stopGlobalAutoRefresh()
 })
 
 // 用户页面的前端分页

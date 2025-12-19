@@ -350,6 +350,7 @@ import {
   Layers,
   Image as ImageIcon
 } from 'lucide-vue-next'
+import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useToast } from '@/composables/useToast'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
@@ -453,6 +454,16 @@ function getFirst1hCachePrice(tieredPricing: TieredPricingConfig | undefined | n
   if (!tieredPricing?.tiers?.length) return '-'
   return get1hCachePrice(tieredPricing.tiers[0])
 }
+
+// 添加 ESC 键监听
+useEscapeKey(() => {
+  if (props.open) {
+    handleClose()
+  }
+}, {
+  disableOnInput: true,
+  once: false
+})
 </script>
 
 <style scoped>

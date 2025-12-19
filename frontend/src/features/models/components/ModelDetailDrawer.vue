@@ -698,6 +698,7 @@ import {
   Layers,
   BarChart3
 } from 'lucide-vue-next'
+import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useToast } from '@/composables/useToast'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
@@ -832,6 +833,16 @@ watch(() => props.open, (newOpen) => {
     // 直接设置为 basic，不需要先重置为空
     detailTab.value = 'basic'
   }
+})
+
+// 添加 ESC 键监听
+useEscapeKey(() => {
+  if (props.open) {
+    handleClose()
+  }
+}, {
+  disableOnInput: true,
+  once: false
 })
 </script>
 

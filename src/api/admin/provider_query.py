@@ -4,6 +4,7 @@ Provider Query API 端点
 """
 
 import asyncio
+import os
 from typing import Optional
 
 import httpx
@@ -45,7 +46,11 @@ async def _fetch_openai_models(
     Returns:
         tuple[list, Optional[str]]: (模型列表, 错误信息)
     """
-    headers = {"Authorization": f"Bearer {api_key}"}
+    useragent = os.getenv("OPENAI_USER_AGENT") or "codex_cli_rs/0.73.0 (Mac OS 14.8.4; x86_64) Apple_Terminal/453"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": useragent,
+    }
     if extra_headers:
         # 防止 extra_headers 覆盖 Authorization
         safe_headers = {k: v for k, v in extra_headers.items() if k.lower() != "authorization"}
@@ -91,10 +96,12 @@ async def _fetch_claude_models(
     Returns:
         tuple[list, Optional[str]]: (模型列表, 错误信息)
     """
+    useragent = os.getenv("CLAUDE_USER_AGENT") or "claude-cli/2.0.62 (external, cli)"
     headers = {
         "x-api-key": api_key,
         "Authorization": f"Bearer {api_key}",
         "anthropic-version": "2023-06-01",
+        "User-Agent": useragent,
     }
 
     # 构建 /v1/models URL
@@ -142,9 +149,12 @@ async def _fetch_gemini_models(
         models_url = f"{base_url_clean}/models?key={api_key}"
     else:
         models_url = f"{base_url_clean}/v1beta/models?key={api_key}"
-
+    useragent = os.getenv("GEMINI_USER_AGENT") or "gemini-cli/0.1.0 (external, cli)"
+    headers = {
+        "User-Agent": useragent,
+    }
     try:
-        response = await client.get(models_url)
+        response = await client.get(models_url, headers=headers)
         logger.debug(f"Gemini models request to {models_url}: status={response.status_code}")
         if response.status_code == 200:
             data = response.json()

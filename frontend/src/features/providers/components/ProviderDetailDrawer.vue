@@ -655,6 +655,7 @@ import {
   GripVertical,
   Copy
 } from 'lucide-vue-next'
+import { useEscapeKey } from '@/composables/useEscapeKey'
 import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
 import Card from '@/components/ui/card.vue'
@@ -1296,6 +1297,16 @@ async function loadEndpoints() {
     showError(err.response?.data?.detail || '加载端点失败', '错误')
   }
 }
+
+// 添加 ESC 键监听
+useEscapeKey(() => {
+  if (props.open) {
+    handleClose()
+  }
+}, {
+  disableOnInput: true,
+  once: false
+})
 </script>
 
 <style scoped>

@@ -8,7 +8,8 @@ source .env
 set +a
 
 # 构建 DATABASE_URL
-export DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@localhost:5432/aether"
+export DATABASE_URL="postgresql://${DB_USER:-postgres}:${DB_PASSWORD}@${DB_HOST:-localhost}:${DB_PORT:-5432}/${DB_NAME:-aether}"
+export REDIS_URL=redis://:${REDIS_PASSWORD}@${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0
 
 # 启动 uvicorn（热重载模式）
 echo "🚀 启动本地开发服务器..."

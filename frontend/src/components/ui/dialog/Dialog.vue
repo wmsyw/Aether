@@ -92,6 +92,7 @@
 
 <script setup lang="ts">
 import { computed, useSlots, type Component } from 'vue'
+import { useEscapeKey } from '@/composables/useEscapeKey'
 
 // Props 定义
 const props = defineProps<{
@@ -157,4 +158,14 @@ const maxWidthClass = computed(() => {
 const containerZIndex = computed(() => props.zIndex || 60)
 const backdropZIndex = computed(() => props.zIndex || 60)
 const contentZIndex = computed(() => (props.zIndex || 60) + 10)
+
+// 添加 ESC 键监听
+useEscapeKey(() => {
+  if (isOpen.value) {
+    handleClose()
+  }
+}, {
+  disableOnInput: true,
+  once: false
+})
 </script>

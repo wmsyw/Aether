@@ -472,6 +472,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import Button from '@/components/ui/button.vue'
+import { useEscapeKey } from '@/composables/useEscapeKey'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
 import Separator from '@/components/ui/separator.vue'
@@ -896,6 +897,16 @@ const providerHeadersWithDiff = computed(() => {
   }
 
   return result
+})
+
+// 添加 ESC 键监听
+useEscapeKey(() => {
+  if (props.isOpen) {
+    handleClose()
+  }
+}, {
+  disableOnInput: true,
+  once: false
 })
 </script>
 
