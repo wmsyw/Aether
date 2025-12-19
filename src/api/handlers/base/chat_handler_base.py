@@ -298,16 +298,11 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         def update_streaming_status() -> None:
             self._update_usage_to_streaming_with_ctx(ctx)
 
-        # 从数据库批量读取流式平滑输出配置（单次查询）
-        smoothing_cfg = SystemConfigService.get_configs(
-            self.db,
-            ["stream_smoothing_enabled", "stream_smoothing_chunk_size", "stream_smoothing_delay_ms"],
+        # 读取流式平滑输出开关
+        smoothing_enabled = bool(
+            SystemConfigService.get_config(self.db, "stream_smoothing_enabled", False)
         )
-        smoothing_config = StreamSmoothingConfig(
-            enabled=bool(smoothing_cfg.get("stream_smoothing_enabled", False)),
-            chunk_size=int(smoothing_cfg.get("stream_smoothing_chunk_size") or 5),
-            delay_ms=int(smoothing_cfg.get("stream_smoothing_delay_ms") or 15),
-        )
+        smoothing_config = StreamSmoothingConfig(enabled=smoothing_enabled)
 
         # 创建流处理器
         stream_processor = StreamProcessor(

@@ -81,15 +81,7 @@ class SystemConfigService:
         # 流式平滑输出配置
         "stream_smoothing_enabled": {
             "value": False,
-            "description": "是否启用流式平滑输出，将大 chunk 拆分成小块模拟打字效果",
-        },
-        "stream_smoothing_chunk_size": {
-            "value": 5,
-            "description": "流式平滑输出每个小块的字符数",
-        },
-        "stream_smoothing_delay_ms": {
-            "value": 15,
-            "description": "流式平滑输出每个小块之间的延迟毫秒数",
+            "description": "是否启用流式平滑输出，自动根据文本长度调整输出速度",
         },
     }
 
