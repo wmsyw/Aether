@@ -57,7 +57,7 @@ class OpenAICliAdapter(CliAdapterBase):
     ) -> Tuple[list, Optional[str]]:
         """查询 OpenAI 兼容 API 支持的模型列表（带 CLI User-Agent）"""
         # 复用 OpenAIChatAdapter 的实现，添加 CLI User-Agent
-        cli_headers = {"User-Agent": config.internal_user_agent_openai}
+        cli_headers = {"User-Agent": config.internal_user_agent_openai_cli}
         if extra_headers:
             cli_headers.update(extra_headers)
         models, error = await OpenAIChatAdapter.fetch_models(

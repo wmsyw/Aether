@@ -112,7 +112,7 @@ class GeminiCliAdapter(CliAdapterBase):
     ) -> Tuple[list, Optional[str]]:
         """查询 Gemini API 支持的模型列表（带 CLI User-Agent）"""
         # 复用 GeminiChatAdapter 的实现，添加 CLI User-Agent
-        cli_headers = {"User-Agent": config.internal_user_agent_gemini}
+        cli_headers = {"User-Agent": config.internal_user_agent_gemini_cli}
         if extra_headers:
             cli_headers.update(extra_headers)
         models, error = await GeminiChatAdapter.fetch_models(

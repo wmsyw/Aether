@@ -139,3 +139,83 @@ async def with_timeout_context(timeout: float, operation_name: str = "operation"
         # Python 3.10 及以下版本的兼容实现
         # 注意：这个简单实现不支持嵌套取消
         pass
+
+
+async def read_first_chunk_with_ttfb_timeout(
+    byte_iterator: Any,
+    timeout: float,
+    request_id: str,
+    provider_name: str,
+) -> tuple[bytes, Any]:
+    """
+    读取流的首字节并应用 TTFB 超时检测
+
+    首字节超时（Time To First Byte）用于检测慢响应的 Provider，
+    超时时触发故障转移到其他可用的 Provider。
+
+    Args:
+        byte_iterator: 异步字节流迭代器
+        timeout: TTFB 超时时间（秒）
+        request_id: 请求 ID（用于日志）
+        provider_name: Provider 名称（用于日志和异常）
+
+    Returns:
+        (first_chunk, aiter): 首个字节块和异步迭代器
+
+    Raises:
+        ProviderTimeoutException: 如果首字节超时
+    """
+    from src.core.exceptions import ProviderTimeoutException
+
+    aiter = byte_iterator.__aiter__()
+
+    try:
+        first_chunk = await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
+        return first_chunk, aiter
+    except asyncio.TimeoutError:
+        # 完整的资源清理：先关闭迭代器，再关闭底层响应
+        await _cleanup_iterator_resources(aiter, request_id)
+        logger.warning(
+            f"  [{request_id}] 流首字节超时 (TTFB): "
+            f"Provider={provider_name}, timeout={timeout}s"
+        )
+        raise ProviderTimeoutException(
+            provider_name=provider_name,
+            timeout=int(timeout),
+        )
+
+
+async def _cleanup_iterator_resources(aiter: Any, request_id: str) -> None:
+    """
+    清理异步迭代器及其底层资源
+
+    确保在 TTFB 超时后正确释放 HTTP 连接，避免连接泄漏。
+
+    Args:
+        aiter: 异步迭代器
+        request_id: 请求 ID（用于日志）
+    """
+    # 1. 关闭迭代器本身
+    if hasattr(aiter, "aclose"):
+        try:
+            await aiter.aclose()
+        except Exception as e:
+            logger.debug(f"  [{request_id}] 关闭迭代器失败: {e}")
+
+    # 2. 关闭底层响应对象（httpx.Response）
+    # 迭代器可能持有 _response 属性指向底层响应
+    response = getattr(aiter, "_response", None)
+    if response is not None and hasattr(response, "aclose"):
+        try:
+            await response.aclose()
+        except Exception as e:
+            logger.debug(f"  [{request_id}] 关闭底层响应失败: {e}")
+
+    # 3. 尝试关闭 httpx 流（如果迭代器是 httpx 的 aiter_bytes）
+    # httpx 的 Response.aiter_bytes() 返回的生成器可能有 _stream 属性
+    stream = getattr(aiter, "_stream", None)
+    if stream is not None and hasattr(stream, "aclose"):
+        try:
+            await stream.aclose()
+        except Exception as e:
+            logger.debug(f"  [{request_id}] 关闭流对象失败: {e}")

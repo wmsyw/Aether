@@ -27,7 +27,7 @@ if not config.jwt_secret_key:
     if config.environment == "production":
         raise ValueError("JWT_SECRET_KEY must be set in production environment!")
     config.jwt_secret_key = secrets.token_urlsafe(32)
-    logger.warning(f"JWT_SECRET_KEY未在环境变量中找到，已生成随机密钥用于开发: {config.jwt_secret_key[:10]}...")
+    logger.warning("JWT_SECRET_KEY未在环境变量中找到，已生成随机密钥用于开发")
     logger.warning("生产环境请设置JWT_SECRET_KEY环境变量!")
 
 JWT_SECRET_KEY = config.jwt_secret_key

@@ -115,7 +115,7 @@ class ClaudeCliAdapter(CliAdapterBase):
     ) -> Tuple[list, Optional[str]]:
         """查询 Claude API 支持的模型列表（带 CLI User-Agent）"""
         # 复用 ClaudeChatAdapter 的实现，添加 CLI User-Agent
-        cli_headers = {"User-Agent": config.internal_user_agent_claude}
+        cli_headers = {"User-Agent": config.internal_user_agent_claude_cli}
         if extra_headers:
             cli_headers.update(extra_headers)
         models, error = await ClaudeChatAdapter.fetch_models(

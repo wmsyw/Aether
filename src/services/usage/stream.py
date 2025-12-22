@@ -5,6 +5,7 @@
 
 import json
 import re
+import time
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -457,25 +458,31 @@ class StreamUsageTracker:
 
         logger.debug(f"ID:{self.request_id} | 开始跟踪流式响应 | 估算输入tokens:{self.input_tokens}")
 
-        # 更新状态为 streaming，同时更新 provider
-        if self.request_id:
-            try:
-                from src.services.usage.service import UsageService
-                UsageService.update_usage_status(
-                    db=self.db,
-                    request_id=self.request_id,
-                    status="streaming",
-                    provider=self.provider,
-                )
-            except Exception as e:
-                logger.warning(f"更新使用记录状态为 streaming 失败: {e}")
-
         chunk_count = 0
+        first_chunk_received = False
         try:
             async for chunk in stream:
                 chunk_count += 1
                 # 保存原始字节流（用于错误诊断）
                 self.raw_chunks.append(chunk)
+
+                # 第一个 chunk 收到时，更新状态为 streaming 并记录 TTFB
+                if not first_chunk_received:
+                    first_chunk_received = True
+                    if self.request_id:
+                        try:
+                            # 计算 TTFB（使用请求原始开始时间或 track_stream 开始时间）
+                            base_time = self.request_start_time or self.start_time
+                            first_byte_time_ms = int((time.time() - base_time) * 1000) if base_time else None
+                            UsageService.update_usage_status(
+                                db=self.db,
+                                request_id=self.request_id,
+                                status="streaming",
+                                provider=self.provider,
+                                first_byte_time_ms=first_byte_time_ms,
+                            )
+                        except Exception as e:
+                            logger.warning(f"更新使用记录状态为 streaming 失败: {e}")
 
                 # 返回原始块给客户端
                 yield chunk

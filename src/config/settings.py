@@ -56,10 +56,11 @@ class Config:
 
         # Redis 依赖策略（生产默认必需，开发默认可选，可通过 REDIS_REQUIRED 覆盖）
         redis_required_env = os.getenv("REDIS_REQUIRED")
-        if redis_required_env is None:
-            self.require_redis = self.environment not in {"development", "test", "testing"}
-        else:
+        if redis_required_env is not None:
             self.require_redis = redis_required_env.lower() == "true"
+        else:
+            # 保持向后兼容：开发环境可选，生产环境必需
+            self.require_redis = self.environment not in {"development", "test", "testing"}
 
         # CORS配置 - 使用环境变量配置允许的源
         # 格式: 逗号分隔的域名列表,如 "http://localhost:3000,https://example.com"
@@ -133,6 +134,18 @@ class Config:
         self.concurrency_slot_ttl = int(os.getenv("CONCURRENCY_SLOT_TTL", "600"))
         self.cache_reservation_ratio = float(os.getenv("CACHE_RESERVATION_RATIO", "0.1"))
 
+        # 限流降级策略配置
+        # RATE_LIMIT_FAIL_OPEN: 当限流服务（Redis）异常时的行为
+        #
+        # True (默认): fail-open - 放行请求（优先可用性）
+        #   风险：Redis 故障期间无法限流，可能被滥用
+        #   适用：API 网关作为关键基础设施，必须保持高可用
+        #
+        # False: fail-close - 拒绝所有请求（优先安全性）
+        #   风险：Redis 故障会导致 API 网关不可用
+        #   适用：有严格速率限制要求的安全敏感场景
+        self.rate_limit_fail_open = os.getenv("RATE_LIMIT_FAIL_OPEN", "true").lower() == "true"
+
         # HTTP 请求超时配置（秒）
         self.http_connect_timeout = float(os.getenv("HTTP_CONNECT_TIMEOUT", "10.0"))
         self.http_write_timeout = float(os.getenv("HTTP_WRITE_TIMEOUT", "60.0"))
@@ -141,19 +154,22 @@ class Config:
         # 流式处理配置
         # STREAM_PREFETCH_LINES: 预读行数，用于检测嵌套错误
         # STREAM_STATS_DELAY: 统计记录延迟（秒），等待流完全关闭
+        # STREAM_FIRST_BYTE_TIMEOUT: 首字节超时（秒），等待首字节超过此时间触发故障转移
+        #   范围: 10-120 秒，默认 30 秒（必须小于 http_write_timeout 避免竞态）
         self.stream_prefetch_lines = int(os.getenv("STREAM_PREFETCH_LINES", "5"))
         self.stream_stats_delay = float(os.getenv("STREAM_STATS_DELAY", "0.1"))
+        self.stream_first_byte_timeout = self._parse_ttfb_timeout()
 
         # 内部请求 User-Agent 配置（用于查询上游模型列表等）
-        # 可通过环境变量覆盖默认值
-        self.internal_user_agent_claude = os.getenv(
-            "CLAUDE_USER_AGENT", "claude-cli/1.0"
+        # 可通过环境变量覆盖默认值，模拟对应 CLI 客户端
+        self.internal_user_agent_claude_cli = os.getenv(
+            "CLAUDE_CLI_USER_AGENT", "claude-code/1.0.1"
         )
-        self.internal_user_agent_openai = os.getenv(
-            "OPENAI_USER_AGENT", "openai-cli/1.0"
+        self.internal_user_agent_openai_cli = os.getenv(
+            "OPENAI_CLI_USER_AGENT", "openai-codex/1.0"
         )
-        self.internal_user_agent_gemini = os.getenv(
-            "GEMINI_USER_AGENT", "gemini-cli/1.0"
+        self.internal_user_agent_gemini_cli = os.getenv(
+            "GEMINI_CLI_USER_AGENT", "gemini-cli/0.1.0"
         )
 
         # 验证连接池配置
@@ -176,6 +192,39 @@ class Config:
     def _auto_max_overflow(self) -> int:
         """智能计算最大溢出连接数 - 与 pool_size 相同"""
         return self.db_pool_size
+
+    def _parse_ttfb_timeout(self) -> float:
+        """
+        解析 TTFB 超时配置，带错误处理和范围限制
+
+        TTFB (Time To First Byte) 用于检测慢响应的 Provider，超时触发故障转移。
+        此值必须小于 http_write_timeout，避免竞态条件。
+
+        Returns:
+            超时时间（秒），范围 10-120，默认 30
+        """
+        default_timeout = 30.0
+        min_timeout = 10.0
+        max_timeout = 120.0  # 必须小于 http_write_timeout (默认 60s) 的 2 倍
+
+        raw_value = os.getenv("STREAM_FIRST_BYTE_TIMEOUT", str(default_timeout))
+        try:
+            timeout = float(raw_value)
+        except ValueError:
+            # 延迟导入，避免循环依赖（Config 初始化时 logger 可能未就绪）
+            self._ttfb_config_warning = (
+                f"无效的 STREAM_FIRST_BYTE_TIMEOUT 配置 '{raw_value}'，使用默认值 {default_timeout}秒"
+            )
+            return default_timeout
+
+        # 范围限制
+        clamped = max(min_timeout, min(max_timeout, timeout))
+        if clamped != timeout:
+            self._ttfb_config_warning = (
+                f"STREAM_FIRST_BYTE_TIMEOUT={timeout}秒超出范围 [{min_timeout}-{max_timeout}]，"
+                f"已调整为 {clamped}秒"
+            )
+        return clamped
 
     def _validate_pool_config(self) -> None:
         """验证连接池配置是否安全"""
@@ -223,6 +272,10 @@ class Config:
         # 连接池配置警告
         if hasattr(self, "_pool_config_warning") and self._pool_config_warning:
             logger.warning(self._pool_config_warning)
+
+        # TTFB 超时配置警告
+        if hasattr(self, "_ttfb_config_warning") and self._ttfb_config_warning:
+            logger.warning(self._ttfb_config_warning)
 
         # 管理员密码检查（必须在环境变量中设置）
         if hasattr(self, "_missing_admin_password") and self._missing_admin_password:

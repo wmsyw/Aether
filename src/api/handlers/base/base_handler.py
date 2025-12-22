@@ -376,6 +376,9 @@ class BaseMessageHandler:
 
         使用 asyncio 后台任务执行数据库更新，避免阻塞流式传输
 
+        注意：TTFB（首字节时间）由 StreamContext.record_first_byte_time() 记录，
+        并在最终 record_success 时传递到数据库，避免重复记录导致数据不一致。
+
         Args:
             request_id: 请求 ID，如果不传则使用 self.request_id
         """
@@ -406,6 +409,9 @@ class BaseMessageHandler:
         """更新 Usage 状态为 streaming，同时更新 provider 和 target_model
 
         使用 asyncio 后台任务执行数据库更新，避免阻塞流式传输
+
+        注意：TTFB（首字节时间）由 StreamContext.record_first_byte_time() 记录，
+        并在最终 record_success 时传递到数据库，避免重复记录导致数据不一致。
 
         Args:
             ctx: 流式上下文，包含 provider_name 和 mapped_model

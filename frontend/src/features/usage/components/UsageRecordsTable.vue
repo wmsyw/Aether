@@ -366,14 +366,34 @@
             </div>
           </TableCell>
           <TableCell class="text-right py-4 w-[70px]">
+            <!-- pending 状态：只显示增长的总时间 -->
             <div
-              v-if="record.status === 'pending' || record.status === 'streaming'"
+              v-if="record.status === 'pending'"
               class="flex flex-col items-end text-xs gap-0.5"
             >
+              <span class="text-muted-foreground">-</span>
               <span class="text-primary tabular-nums">
                 {{ getElapsedTime(record) }}
               </span>
             </div>
+            <!-- streaming 状态：首字固定 + 总时间增长 -->
+            <div
+              v-else-if="record.status === 'streaming'"
+              class="flex flex-col items-end text-xs gap-0.5"
+            >
+              <span
+                v-if="record.first_byte_time_ms != null"
+                class="tabular-nums"
+              >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span>
+              <span
+                v-else
+                class="text-muted-foreground"
+              >-</span>
+              <span class="text-primary tabular-nums">
+                {{ getElapsedTime(record) }}
+              </span>
+            </div>
+            <!-- 已完成状态：首字 + 总耗时 -->
             <div
               v-else-if="record.response_time_ms != null"
               class="flex flex-col items-end text-xs gap-0.5"

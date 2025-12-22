@@ -336,10 +336,44 @@ class PluginMiddleware:
                     )
                 return result
             return None
+        except ConnectionError as e:
+            # Redis 连接错误：根据配置决定
+            logger.warning(f"Rate limit connection error: {e}")
+            if config.rate_limit_fail_open:
+                return None
+            else:
+                return RateLimitResult(
+                    allowed=False,
+                    remaining=0,
+                    retry_after=30,
+                    message="Rate limit service unavailable"
+                )
+        except TimeoutError as e:
+            # 超时错误：可能是负载过高，根据配置决定
+            logger.warning(f"Rate limit timeout: {e}")
+            if config.rate_limit_fail_open:
+                return None
+            else:
+                return RateLimitResult(
+                    allowed=False,
+                    remaining=0,
+                    retry_after=30,
+                    message="Rate limit service timeout"
+                )
         except Exception as e:
-            logger.error(f"Rate limit error: {e}")
-            # 发生错误时允许请求通过
-            return None
+            logger.error(f"Rate limit error: {type(e).__name__}: {e}")
+            # 其他异常：根据配置决定
+            if config.rate_limit_fail_open:
+                # fail-open: 异常时放行请求（优先可用性）
+                return None
+            else:
+                # fail-close: 异常时拒绝请求（优先安全性）
+                return RateLimitResult(
+                    allowed=False,
+                    remaining=0,
+                    retry_after=60,
+                    message="Rate limit service error"
+                )
 
     async def _call_pre_request_plugins(self, request: Request) -> None:
         """调用请求前的插件（当前保留扩展点）"""

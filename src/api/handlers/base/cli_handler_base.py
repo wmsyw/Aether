@@ -57,8 +57,10 @@ from src.models.database import (
     ProviderEndpoint,
     User,
 )
+from src.config.settings import config
 from src.services.provider.transport import build_provider_url
 from src.utils.sse_parser import SSEEventParser
+from src.utils.timeout import read_first_chunk_with_ttfb_timeout
 
 
 class CliMessageHandlerBase(BaseMessageHandler):
@@ -672,6 +674,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
         同时检测 HTML 响应（通常是 base_url 配置错误导致返回网页）。
 
+        首次读取时会应用 TTFB（首字节超时）检测，超时则触发故障转移。
+
         Args:
             byte_iterator: 字节流迭代器
             provider: Provider 对象
@@ -684,6 +688,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         Raises:
             EmbeddedErrorException: 如果检测到嵌套错误
             ProviderNotAvailableException: 如果检测到 HTML 响应（配置错误）
+            ProviderTimeoutException: 如果首字节超时（TTFB timeout）
         """
         prefetched_chunks: list = []
         max_prefetch_lines = 5  # 最多预读5行来检测错误
@@ -704,7 +709,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
             else:
                 provider_parser = self.parser
 
-            async for chunk in byte_iterator:
+            # 使用共享的 TTFB 超时函数读取首字节
+            ttfb_timeout = config.stream_first_byte_timeout
+            first_chunk, aiter = await read_first_chunk_with_ttfb_timeout(
+                byte_iterator,
+                timeout=ttfb_timeout,
+                request_id=self.request_id,
+                provider_name=str(provider.name),
+            )
+            prefetched_chunks.append(first_chunk)
+            buffer += first_chunk
+
+            # 继续读取剩余的预读数据
+            async for chunk in aiter:
                 prefetched_chunks.append(chunk)
                 buffer += chunk
 
@@ -785,12 +802,21 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 if should_stop or line_count >= max_prefetch_lines:
                     break
 
-        except EmbeddedErrorException:
-            # 重新抛出嵌套错误
+        except (EmbeddedErrorException, ProviderTimeoutException, ProviderNotAvailableException):
+            # 重新抛出可重试的 Provider 异常，触发故障转移
             raise
+        except (OSError, IOError) as e:
+            # 网络 I/O 异常：记录警告，可能需要重试
+            logger.warning(
+                f"  [{self.request_id}] 预读流时发生网络异常: {type(e).__name__}: {e}"
+            )
         except Exception as e:
-            # 其他异常（如网络错误）在预读阶段发生，记录日志但不中断
-            logger.debug(f"  [{self.request_id}] 预读流时发生异常: {e}")
+            # 未预期的严重异常：记录错误并重新抛出，避免掩盖问题
+            logger.error(
+                f"  [{self.request_id}] 预读流时发生严重异常: {type(e).__name__}: {e}",
+                exc_info=True
+            )
+            raise
 
         return prefetched_chunks
 
