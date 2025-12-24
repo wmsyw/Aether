@@ -26,10 +26,13 @@ calc_deps_hash() {
     cat pyproject.toml frontend/package.json frontend/package-lock.json Dockerfile.base.local 2>/dev/null | md5sum | cut -d' ' -f1
 }
 
-# 计算代码文件的哈希值
+# 计算代码文件的哈希值（包含 Dockerfile.app.local）
 calc_code_hash() {
-    find src -type f -name "*.py" 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum | cut -d' ' -f1
-    find frontend/src -type f \( -name "*.vue" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" \) 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum | cut -d' ' -f1
+    {
+        cat Dockerfile.app.local 2>/dev/null
+        find src -type f -name "*.py" 2>/dev/null | sort | xargs cat 2>/dev/null
+        find frontend/src -type f \( -name "*.vue" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" \) 2>/dev/null | sort | xargs cat 2>/dev/null
+    } | md5sum | cut -d' ' -f1
 }
 
 # 计算迁移文件的哈希值
