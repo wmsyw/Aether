@@ -541,13 +541,14 @@ class UserDashboardStatsAdapter(DashboardAdapter):
         )
         cache_creation_tokens = int(cache_stats.cache_creation_tokens or 0) if cache_stats else 0
         cache_read_tokens = int(cache_stats.cache_read_tokens or 0) if cache_stats else 0
+        monthly_input_tokens = int(cache_stats.total_input_tokens or 0) if cache_stats else 0
 
-        # 计算缓存命中率：cache_read / (input_tokens + cache_read)
+        # 计算本月缓存命中率：cache_read / (input_tokens + cache_read)
         # input_tokens 是实际发送给模型的输入（不含缓存读取），cache_read 是从缓存读取的
         # 总输入 = input_tokens + cache_read，缓存命中率 = cache_read / 总输入
-        total_input_with_cache = all_time_input_tokens + all_time_cache_read
+        total_input_with_cache = monthly_input_tokens + cache_read_tokens
         cache_hit_rate = (
-            round((all_time_cache_read / total_input_with_cache) * 100, 1)
+            round((cache_read_tokens / total_input_with_cache) * 100, 1)
             if total_input_with_cache > 0
             else 0
         )
@@ -573,15 +574,15 @@ class UserDashboardStatsAdapter(DashboardAdapter):
             quota_value = "无限制"
             quota_change = f"已用 ${user.used_usd:.2f}"
             quota_high = False
-        elif user.quota_usd and user.quota_usd > 0:
+        elif user.quota_usd > 0:
             percent = min(100, int((user.used_usd / user.quota_usd) * 100))
-            quota_value = "无限制"
+            quota_value = f"${user.quota_usd:.0f}"
             quota_change = f"已用 ${user.used_usd:.2f}"
             quota_high = percent > 80
         else:
-            quota_value = "0%"
+            quota_value = "$0"
             quota_change = f"已用 ${user.used_usd:.2f}"
-            quota_high = False
+            quota_high = True
 
         return {
             "stats": [
