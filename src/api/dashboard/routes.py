@@ -610,9 +610,15 @@ class UserDashboardStatsAdapter(DashboardAdapter):
                     "icon": "TrendingUp",
                 },
                 {
-                    "name": "本月费用",
-                    "value": f"${user_cost:.2f}",
-                    "icon": "DollarSign",
+                    "name": "总Token",
+                    "value": format_tokens(
+                        all_time_input_tokens
+                        + all_time_output_tokens
+                        + all_time_cache_creation
+                        + all_time_cache_read
+                    ),
+                    "subValue": f"输入 {format_tokens(all_time_input_tokens)} / 输出 {format_tokens(all_time_output_tokens)}",
+                    "icon": "Hash",
                 },
             ],
             "today": {
@@ -636,6 +642,8 @@ class UserDashboardStatsAdapter(DashboardAdapter):
                 "cache_hit_rate": cache_hit_rate,
                 "total_cache_tokens": cache_creation_tokens + cache_read_tokens,
             },
+            # 本月费用（用于下方缓存区域显示）
+            "monthly_cost": float(user_cost),
         }
 
 
