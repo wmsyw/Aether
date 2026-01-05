@@ -98,6 +98,17 @@ class OpenAIResponseParser(ResponseParser):
             chunk.is_done = True
             stats.has_completion = True
 
+        # 提取 usage 信息（某些 OpenAI 兼容 API 如豆包会在最后一个 chunk 中发送 usage）
+        # 这个 chunk 通常 choices 为空数组，但包含完整的 usage 信息
+        usage = parsed.get("usage")
+        if usage and isinstance(usage, dict):
+            chunk.input_tokens = usage.get("prompt_tokens", 0)
+            chunk.output_tokens = usage.get("completion_tokens", 0)
+
+            # 更新 stats
+            stats.input_tokens = chunk.input_tokens
+            stats.output_tokens = chunk.output_tokens
+
         stats.chunk_count += 1
         stats.data_count += 1
 
