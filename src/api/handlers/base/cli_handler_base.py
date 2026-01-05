@@ -1497,8 +1497,12 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         retry_after=int(resp.headers.get("retry-after", 0)) or None,
                     )
                 elif resp.status_code >= 500:
+                    error_text = resp.text
                     raise ProviderNotAvailableException(
-                        f"提供商服务不可用: {provider.name}, 状态: {resp.status_code}"
+                        f"提供商服务不可用: {provider.name}, 状态: {resp.status_code}",
+                        provider_name=str(provider.name),
+                        upstream_status=resp.status_code,
+                        upstream_response=error_text,
                     )
                 elif 300 <= resp.status_code < 400:
                     redirect_url = resp.headers.get("location", "unknown")
@@ -1508,7 +1512,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 elif resp.status_code != 200:
                     error_text = resp.text
                     raise ProviderNotAvailableException(
-                        f"提供商返回错误: {provider.name}, 状态: {resp.status_code}, 错误: {error_text[:200]}"
+                        f"提供商返回错误: {provider.name}, 状态: {resp.status_code}",
+                        provider_name=str(provider.name),
+                        upstream_status=resp.status_code,
+                        upstream_response=error_text,
                     )
 
                 # 安全解析 JSON 响应，处理可能的编码错误
