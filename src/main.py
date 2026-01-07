@@ -355,15 +355,17 @@ app.add_middleware(PluginMiddleware)
 # 生产环境必须通过 CORS_ORIGINS 环境变量显式指定允许的域名
 # 开发环境默认允许本地前端访问
 if config.cors_origins:
+    # CORS_ORIGINS=* 时自动禁用 credentials（浏览器规范要求）
+    allow_credentials = config.cors_allow_credentials and "*" not in config.cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.cors_origins,  # 使用配置的白名单
-        allow_credentials=config.cors_allow_credentials,
+        allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["*"],
     )
-    logger.info(f"CORS已启用,允许的源: {config.cors_origins}")
+    logger.info(f"CORS已启用,允许的源: {config.cors_origins}, credentials: {allow_credentials}")
 else:
     # 没有配置CORS源,不允许跨域
     logger.warning(

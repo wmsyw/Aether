@@ -82,6 +82,15 @@ RUN printf '%s\n' \
 '        try_files $uri $uri/ /index.html;' \
 '    }' \
 '' \
+'    location ~ ^/(docs|redoc|openapi\\.json)$ {' \
+'        proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;' \
+'        proxy_http_version 1.1;' \
+'        proxy_set_header Host $host;' \
+'        proxy_set_header X-Real-IP $real_ip;' \
+'        proxy_set_header X-Forwarded-For $forwarded_for;' \
+'        proxy_set_header X-Forwarded-Proto $scheme;' \
+'    }' \
+'' \
 '    location / {' \
 '        try_files $uri $uri/ @backend;' \
 '    }' \
