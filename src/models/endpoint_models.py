@@ -24,7 +24,7 @@ class ProviderEndpointCreate(BaseModel):
     # 请求配置
     headers: Optional[Dict[str, str]] = Field(default=None, description="自定义请求头")
     timeout: int = Field(default=300, ge=10, le=600, description="超时时间（秒）")
-    max_retries: int = Field(default=3, ge=0, le=10, description="最大重试次数")
+    max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
 
     # 限制
     max_concurrent: Optional[int] = Field(default=None, ge=1, description="最大并发数")

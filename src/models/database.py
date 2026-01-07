@@ -597,7 +597,7 @@ class ProviderEndpoint(Base):
     # 请求配置
     headers = Column(JSON, nullable=True)  # 额外请求头
     timeout = Column(Integer, default=300)  # 超时（秒）
-    max_retries = Column(Integer, default=3)  # 最大重试次数
+    max_retries = Column(Integer, default=2)  # 最大重试次数
 
     # 限制
     max_concurrent = Column(
