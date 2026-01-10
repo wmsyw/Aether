@@ -325,10 +325,31 @@
                           class="text-muted-foreground/40"
                         >/</span>
                         <span :class="{ 'text-destructive': isFormatCircuitOpen(key, format) }">
-                          {{ API_FORMAT_SHORT[format] || format }} {{ getKeyRateMultiplier(key, format) }}x{{ getFormatProbeCountdown(key, format) }}
+                          {{ API_FORMAT_SHORT[format] || format }}
                         </span>
+                        <span
+                          v-if="editingMultiplierKey !== key.id || editingMultiplierFormat !== format"
+                          title="点击编辑倍率"
+                          class="cursor-pointer hover:text-primary hover:underline"
+                          :class="{ 'text-destructive': isFormatCircuitOpen(key, format) }"
+                          @click="startEditMultiplier(key, format)"
+                        >{{ getKeyRateMultiplier(key, format) }}x</span>
+                        <input
+                          v-else
+                          ref="multiplierInputRef"
+                          v-model="editingMultiplierValue"
+                          type="text"
+                          inputmode="decimal"
+                          pattern="[0-9]*\.?[0-9]*"
+                          class="w-10 h-5 px-1 text-[11px] text-center border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary font-medium text-foreground/80"
+                          @keydown="(e) => handleMultiplierKeydown(e, key, format)"
+                          @blur="handleMultiplierBlur(key, format)"
+                        >
+                        <span
+                          v-if="getFormatProbeCountdown(key, format)"
+                          :class="{ 'text-destructive': isFormatCircuitOpen(key, format) }"
+                        >{{ getFormatProbeCountdown(key, format) }}</span>
                       </template>
-                      <span v-if="key.rate_limit">| {{ key.rate_limit }}rpm</span>
                     </div>
                   </div>
                 </div>
@@ -764,6 +785,13 @@ const editingPriorityKey = ref<string | null>(null)
 const editingPriorityValue = ref<number>(0)
 const priorityInputRef = ref<HTMLInputElement[] | null>(null)
 const prioritySaving = ref(false)
+
+// 点击编辑倍率相关状态
+const editingMultiplierKey = ref<string | null>(null)
+const editingMultiplierFormat = ref<string | null>(null)
+const editingMultiplierValue = ref<number>(1.0)
+const multiplierInputRef = ref<HTMLInputElement[] | null>(null)
+const multiplierSaving = ref(false)
 
 // 任意模态窗口打开时,阻止抽屉被误关闭
 const hasBlockingDialogOpen = computed(() =>
@@ -1335,6 +1363,96 @@ async function savePriority(key: EndpointAPIKey) {
     emit('refresh')
   } catch (err: any) {
     showError(err.response?.data?.detail || '更新优先级失败', '错误')
+  }
+}
+
+// ===== 点击编辑倍率 =====
+function startEditMultiplier(key: EndpointAPIKey, format: string) {
+  editingMultiplierKey.value = key.id
+  editingMultiplierFormat.value = format
+  editingMultiplierValue.value = getKeyRateMultiplier(key, format)
+  multiplierSaving.value = false
+  nextTick(() => {
+    const input = Array.isArray(multiplierInputRef.value) ? multiplierInputRef.value[0] : multiplierInputRef.value
+    input?.focus()
+    input?.select()
+  })
+}
+
+function cancelEditMultiplier() {
+  editingMultiplierKey.value = null
+  editingMultiplierFormat.value = null
+  multiplierSaving.value = false
+}
+
+function handleMultiplierKeydown(e: KeyboardEvent, key: EndpointAPIKey, format: string) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!multiplierSaving.value) {
+      multiplierSaving.value = true
+      saveMultiplier(key, format)
+    }
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    cancelEditMultiplier()
+  }
+}
+
+function handleMultiplierBlur(key: EndpointAPIKey, format: string) {
+  if (multiplierSaving.value) return
+  saveMultiplier(key, format)
+}
+
+async function saveMultiplier(key: EndpointAPIKey, format: string) {
+  // 防止重复调用
+  if (multiplierSaving.value) return
+  multiplierSaving.value = true
+
+  const keyId = editingMultiplierKey.value
+  const newMultiplier = parseFloat(String(editingMultiplierValue.value))
+
+  // 验证输入有效性
+  if (!keyId || isNaN(newMultiplier)) {
+    showError('请输入有效的倍率值')
+    cancelEditMultiplier()
+    return
+  }
+
+  // 验证合理范围
+  if (newMultiplier <= 0 || newMultiplier > 100) {
+    showError('倍率必须在 0.01 到 100 之间')
+    cancelEditMultiplier()
+    return
+  }
+
+  // 如果倍率没有变化,直接取消编辑（使用精度容差比较浮点数）
+  const currentMultiplier = getKeyRateMultiplier(key, format)
+  if (Math.abs(currentMultiplier - newMultiplier) < 0.0001) {
+    cancelEditMultiplier()
+    return
+  }
+
+  cancelEditMultiplier()
+
+  try {
+    // 构建 rate_multipliers 对象
+    const rateMultipliers = { ...(key.rate_multipliers || {}) }
+    rateMultipliers[format] = newMultiplier
+
+    await updateProviderKey(keyId, { rate_multipliers: rateMultipliers })
+    showSuccess('倍率已更新')
+
+    // 更新本地数据
+    const keyToUpdate = providerKeys.value.find(k => k.id === keyId)
+    if (keyToUpdate) {
+      keyToUpdate.rate_multipliers = rateMultipliers
+    }
+    emit('refresh')
+  } catch (err: any) {
+    showError(err.response?.data?.detail || '更新倍率失败', '错误')
+  } finally {
+    multiplierSaving.value = false
   }
 }
 
