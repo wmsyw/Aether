@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.api.handlers.base.base_handler import MessageTelemetry
 from src.api.handlers.base.stream_context import StreamContext
+from src.api.handlers.base.utils import filter_proxy_response_headers
 from src.config.settings import config
 from src.core.logger import logger
 from src.database import get_db
@@ -155,7 +156,7 @@ class StreamTelemetryRecorder:
     ) -> None:
         """记录成功的请求"""
         # 流式成功时，返回给客户端的是提供商响应头 + SSE 必需头
-        client_response_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+        client_response_headers = filter_proxy_response_headers(ctx.response_headers)
         client_response_headers.update({
             "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",

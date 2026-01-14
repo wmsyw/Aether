@@ -44,6 +44,7 @@ from src.api.handlers.base.utils import (
     build_sse_headers,
     check_html_response,
     check_prefetched_response_error,
+    filter_proxy_response_headers,
 )
 from src.config.constants import StreamDefaults
 from src.config.settings import config
@@ -381,7 +382,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             # 透传提供商的响应头给客户端
             # 同时添加必要的 SSE 头以确保流式传输正常工作
-            client_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+            client_headers = filter_proxy_response_headers(ctx.response_headers)
             # 添加/覆盖 SSE 必需的头
             client_headers.update(build_sse_headers())
             client_headers["content-type"] = "text/event-stream"
@@ -1379,7 +1380,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     self._finalize_stream_metadata(ctx)
 
                     # 流式成功时，返回给客户端的是提供商响应头 + SSE 必需头
-                    client_response_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+                    client_response_headers = filter_proxy_response_headers(ctx.response_headers)
                     client_response_headers.update({
                         "Cache-Control": "no-cache, no-transform",
                         "X-Accel-Buffering": "no",
@@ -1769,7 +1770,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             actual_request_body = provider_request_body or original_request_body
 
             # 非流式成功时，返回给客户端的是提供商响应头（透传）
-            client_response_headers = dict(response_headers) if response_headers else {}
+            client_response_headers = filter_proxy_response_headers(response_headers)
             client_response_headers["content-type"] = "application/json"
 
             total_cost = await self.telemetry.record_success(
@@ -1805,7 +1806,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             return JSONResponse(
                 status_code=status_code,
                 content=response_json,
-                headers=response_headers if response_headers else None,
+                headers=client_response_headers,
             )
 
         except Exception as e:
