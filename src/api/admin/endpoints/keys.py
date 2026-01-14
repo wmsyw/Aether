@@ -260,9 +260,21 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
                 logger.error(f"触发模型获取失败: {e}")
                 # 不抛出异常，避免影响 Key 更新操作
         elif auto_fetch_enabled_before and not auto_fetch_enabled_after:
-            # 关闭了 auto_fetch_models，将 allowed_models 设置为 null（不限制）
-            logger.info("[AUTO_FETCH] Key %s 关闭自动获取模型，清空 allowed_models", self.key_id)
-            key.allowed_models = None
+            # 关闭了 auto_fetch_models，只保留锁定的模型，清除自动获取的模型
+            locked = key.locked_models or []
+            if locked:
+                key.allowed_models = locked
+                logger.info(
+                    "[AUTO_FETCH] Key %s 关闭自动获取模型，保留 %d 个锁定模型",
+                    self.key_id,
+                    len(locked),
+                )
+            else:
+                key.allowed_models = None
+                logger.info(
+                    "[AUTO_FETCH] Key %s 关闭自动获取模型，无锁定模型，清空 allowed_models",
+                    self.key_id,
+                )
             db.commit()
             db.refresh(key)
 
