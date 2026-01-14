@@ -166,6 +166,16 @@ class EndpointAPIKeyCreate(BaseModel):
     # 备注
     note: Optional[str] = Field(default=None, max_length=500, description="备注说明（可选）")
 
+    # 自动获取模型
+    auto_fetch_models: bool = Field(
+        default=False, description="是否启用自动获取模型（启用后系统定时从上游 API 获取可用模型）"
+    )
+
+    # 锁定的模型列表
+    locked_models: Optional[List[str]] = Field(
+        default=None, description="被锁定的模型列表（刷新时不会被删除）"
+    )
+
     @field_validator("api_formats")
     @classmethod
     def validate_api_formats(cls, v: Optional[List[str]]) -> Optional[List[str]]:
@@ -335,6 +345,12 @@ class EndpointAPIKeyUpdate(BaseModel):
     )
     is_active: Optional[bool] = Field(default=None, description="是否启用")
     note: Optional[str] = Field(default=None, max_length=500, description="备注说明")
+    auto_fetch_models: Optional[bool] = Field(
+        default=None, description="是否启用自动获取模型"
+    )
+    locked_models: Optional[List[str]] = Field(
+        default=None, description="被锁定的模型列表（刷新时不会被删除）"
+    )
 
     @field_validator("api_formats")
     @classmethod
@@ -487,6 +503,12 @@ class EndpointAPIKeyResponse(BaseModel):
 
     # 备注
     note: Optional[str] = None
+
+    # 自动获取模型
+    auto_fetch_models: bool = Field(default=False, description="是否启用自动获取模型")
+    last_models_fetch_at: Optional[datetime] = Field(None, description="最后获取模型时间")
+    last_models_fetch_error: Optional[str] = Field(None, description="最后获取模型错误信息")
+    locked_models: Optional[List[str]] = Field(None, description="被锁定的模型列表")
 
     # 时间戳
     last_used_at: Optional[datetime] = None

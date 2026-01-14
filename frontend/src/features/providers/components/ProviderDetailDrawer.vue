@@ -309,6 +309,17 @@
                         @keydown="(e) => handlePriorityKeydown(e, key)"
                         @blur="handlePriorityBlur(key)"
                       >
+                      <!-- 自动获取模型状态 -->
+                      <template v-if="key.auto_fetch_models">
+                        <span class="text-muted-foreground/40">|</span>
+                        <span
+                          class="cursor-help"
+                          :class="key.last_models_fetch_error ? 'text-amber-600 dark:text-amber-400' : ''"
+                          :title="getAutoFetchStatusTitle(key)"
+                        >
+                          {{ key.last_models_fetch_error ? '同步失败' : '自动同步' }}
+                        </span>
+                      </template>
                       <!-- RPM 限制信息（第二位） -->
                       <template v-if="key.rpm_limit || key.is_adaptive">
                         <span class="text-muted-foreground/40">|</span>
@@ -1594,6 +1605,22 @@ function getHealthScoreBarColor(score: number): string {
   if (score >= 0.8) return 'bg-green-500 dark:bg-green-400'
   if (score >= 0.5) return 'bg-yellow-500 dark:bg-yellow-400'
   return 'bg-red-500 dark:bg-red-400'
+}
+
+// 获取自动获取模型状态的 title 提示
+function getAutoFetchStatusTitle(key: EndpointAPIKey): string {
+  const parts: string[] = ['自动获取模型已启用']
+
+  if (key.last_models_fetch_at) {
+    const date = new Date(key.last_models_fetch_at)
+    parts.push(`上次同步: ${date.toLocaleString()}`)
+  }
+
+  if (key.last_models_fetch_error) {
+    parts.push(`错误: ${key.last_models_fetch_error}`)
+  }
+
+  return parts.join('\n')
 }
 
 // 检查指定格式是否熔断
