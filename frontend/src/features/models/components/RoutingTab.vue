@@ -506,12 +506,6 @@
                                         >
                                           <RefreshCw class="w-3 h-3" />
                                         </button>
-                                        <span
-                                          v-if="key.effective_rpm"
-                                          class="text-[10px] text-muted-foreground/60 shrink-0"
-                                        >
-                                          {{ key.is_adaptive ? '~' : '' }}{{ key.effective_rpm }}
-                                        </span>
                                       </div>
                                     </div>
                                   </div>
@@ -744,7 +738,7 @@ const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
       }))
 
     const activeProviders = sortedProviders.filter(
-      e => e.provider.is_active && e.provider.model_is_active && e.endpoint?.is_active
+      e => e.provider.is_active && e.provider.model_is_active && e.endpoint?.is_active && e.active_keys > 0
     ).length
     const totalKeys = sortedProviders.reduce((sum, e) => sum + e.keys.length, 0)
     const activeKeys = sortedProviders.reduce((sum, e) => sum + e.active_keys, 0)
@@ -1028,9 +1022,6 @@ function getKeyTooltip(key: RoutingKeyInfo): string {
   const parts: string[] = []
   parts.push(`名称: ${key.name}`)
   parts.push(`健康度: ${((key.health_score || 0) * 100).toFixed(0)}%`)
-  if (key.effective_rpm) {
-    parts.push(`RPM: ${key.is_adaptive ? '~' : ''}${key.effective_rpm}`)
-  }
   if (!key.is_active) {
     parts.push('状态: 已禁用')
   } else if (key.circuit_breaker_open) {
