@@ -758,11 +758,11 @@ const getStatusColorClass = (status: string) => {
   width: 100%;
 }
 
-/* 极简轨道 */
+/* 极简轨道 - 包装器实现溢出时居左、不溢出时居中 */
 .minimal-track {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   gap: 64px;
   padding: 2rem;
   overflow-x: auto;
