@@ -1,5 +1,5 @@
 <template>
-  <div class="block-renderer">
+  <div class="flex flex-col gap-2">
     <template
       v-for="(block, index) in blocks"
       :key="index"
@@ -7,22 +7,25 @@
       <!-- 文本块 -->
       <pre
         v-if="block.type === 'text'"
-        class="render-block text-block"
-        :class="[block.className, { 'pre-wrap': block.preWrap !== false }]"
+        class="m-0 text-[13px] leading-relaxed rounded-md"
+        :class="[
+          block.className,
+          block.preWrap !== false ? 'whitespace-pre-wrap break-words' : ''
+        ]"
       >{{ block.content }}</pre>
 
       <!-- 可折叠块 -->
       <details
         v-else-if="block.type === 'collapsible'"
-        class="render-block collapsible-block"
+        class="group cursor-pointer bg-muted/30 rounded-md px-3 py-2"
         :class="block.className"
         :open="block.defaultOpen"
       >
-        <summary class="collapsible-summary">
-          <ChevronRight class="w-4 h-4 chevron" />
+        <summary class="flex items-center gap-1 list-none select-none [&::-webkit-details-marker]:hidden">
+          <ChevronRight class="w-4 h-4 transition-transform duration-200 group-open:rotate-90" />
           <span class="text-muted-foreground">{{ block.title }}</span>
         </summary>
-        <div class="collapsible-content">
+        <div class="mt-2 p-3 bg-muted/50 rounded-md">
           <BlockRenderer :blocks="block.content" />
         </div>
       </details>
@@ -30,16 +33,16 @@
       <!-- 代码块 -->
       <div
         v-else-if="block.type === 'code'"
-        class="render-block code-block"
+        class="bg-muted/50 rounded-md overflow-hidden"
       >
         <div
           v-if="block.language"
-          class="code-language"
+          class="px-3 py-1 text-[11px] font-medium bg-muted/50 text-muted-foreground border-b border-border"
         >
           {{ block.language }}
         </div>
         <pre
-          class="code-content"
+          class="m-0 p-3 font-mono text-xs max-h-[300px] overflow-auto whitespace-pre-wrap break-words"
           :style="block.maxHeight ? { maxHeight: `${block.maxHeight}px` } : {}"
         >{{ block.code }}</pre>
       </div>
@@ -48,7 +51,7 @@
       <Badge
         v-else-if="block.type === 'badge'"
         :variant="block.variant || 'secondary'"
-        class="render-block badge-block"
+        class="inline-flex w-fit"
       >
         {{ block.label }}
       </Badge>
@@ -56,17 +59,17 @@
       <!-- 图片块 -->
       <div
         v-else-if="block.type === 'image'"
-        class="render-block image-block"
+        class="bg-muted/30 p-3 rounded-md"
       >
         <img
           v-if="block.src"
           :src="block.src"
           :alt="block.alt || '图片'"
-          class="rendered-image"
+          class="max-w-full max-h-[400px] rounded"
         >
         <div
           v-else
-          class="image-placeholder"
+          class="flex items-center gap-2 text-muted-foreground text-xs"
         >
           <ImageIcon class="w-6 h-6" />
           <span>{{ block.mimeType || block.alt || '图片' }}</span>
@@ -76,29 +79,29 @@
       <!-- 错误块 -->
       <div
         v-else-if="block.type === 'error'"
-        class="render-block error-block"
+        class="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-[13px]"
       >
-        <AlertCircle class="w-4 h-4" />
+        <AlertCircle class="w-4 h-4 shrink-0" />
         <span>{{ block.message }}</span>
         <span
           v-if="block.code"
-          class="error-code"
+          class="font-mono text-[11px] opacity-80"
         >{{ block.code }}</span>
       </div>
 
       <!-- 容器块 -->
       <div
         v-else-if="block.type === 'container'"
-        class="render-block container-block"
+        class="flex flex-col gap-2"
         :class="block.className"
       >
         <div
           v-if="block.header"
-          class="container-header"
+          class="flex items-center gap-2"
         >
           <BlockRenderer :blocks="block.header" />
         </div>
-        <div class="container-content">
+        <div>
           <BlockRenderer :blocks="block.children" />
         </div>
       </div>
@@ -106,10 +109,13 @@
       <!-- 消息块 -->
       <div
         v-else-if="block.type === 'message'"
-        class="render-block message-block"
-        :class="block.role"
+        class="rounded-lg overflow-hidden"
+        :class="messageBlockClasses[block.role] || messageBlockClasses.default"
       >
-        <div class="message-header">
+        <div
+          class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium"
+          :class="messageHeaderClasses[block.role] || messageHeaderClasses.default"
+        >
           <component
             :is="getRoleIcon(block.role)"
             class="w-3.5 h-3.5"
@@ -126,7 +132,7 @@
             </Badge>
           </template>
         </div>
-        <div class="message-content">
+        <div class="px-3 pb-3 text-[13px] leading-relaxed">
           <BlockRenderer :blocks="block.content" />
         </div>
       </div>
@@ -134,26 +140,26 @@
       <!-- 工具调用块 -->
       <div
         v-else-if="block.type === 'tool_use'"
-        class="render-block tool-block"
+        class="bg-muted/30 px-3 py-2 rounded-md"
       >
-        <div class="tool-header">
+        <div class="flex items-center gap-1.5 text-xs font-medium mb-2 text-muted-foreground">
           <Wrench class="w-3 h-3" />
           <span>{{ block.toolName }}</span>
           <span
             v-if="block.toolId"
-            class="tool-id"
+            class="font-mono text-[10px] opacity-60"
           >{{ block.toolId }}</span>
         </div>
-        <pre class="tool-content">{{ block.input }}</pre>
+        <pre class="m-0 p-3 bg-muted/50 rounded-md font-mono text-xs max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words">{{ block.input }}</pre>
       </div>
 
       <!-- 工具结果块 -->
       <div
         v-else-if="block.type === 'tool_result'"
-        class="render-block tool-result-block"
-        :class="{ 'is-error': block.isError }"
+        class="px-3 py-2 rounded-md"
+        :class="block.isError ? 'bg-destructive/10 border border-destructive/20' : 'bg-muted/30'"
       >
-        <div class="tool-header">
+        <div class="flex items-center gap-1.5 text-xs font-medium mb-2 text-muted-foreground">
           <FileText class="w-3 h-3" />
           <span>工具结果</span>
           <Badge
@@ -164,25 +170,22 @@
             错误
           </Badge>
         </div>
-        <pre class="tool-content">{{ block.content }}</pre>
+        <pre class="m-0 p-3 bg-muted/50 rounded-md font-mono text-xs max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words">{{ block.content }}</pre>
       </div>
 
       <!-- 分隔符块 -->
       <hr
         v-else-if="block.type === 'divider'"
-        class="render-block divider-block"
+        class="border-0 border-t border-border my-2"
       >
 
       <!-- 标签块 -->
       <div
         v-else-if="block.type === 'label'"
-        class="render-block label-block"
+        class="flex gap-2 text-[13px]"
       >
-        <span class="label-key">{{ block.label }}:</span>
-        <span
-          class="label-value"
-          :class="{ mono: block.mono }"
-        >{{ block.value }}</span>
+        <span class="text-muted-foreground">{{ block.label }}:</span>
+        <span :class="block.mono ? 'font-mono' : ''">{{ block.value }}</span>
       </div>
     </template>
   </div>
@@ -196,6 +199,24 @@ import type { RenderBlock } from '../../conversation'
 defineProps<{
   blocks: RenderBlock[]
 }>()
+
+// 消息块样式映射
+const messageBlockClasses: Record<string, string> = {
+  user: 'bg-primary/[0.08] border border-primary/20',
+  assistant: 'bg-muted/50 border border-border',
+  system: 'bg-muted/30 border border-dashed border-border',
+  tool: 'bg-muted/30 border border-border',
+  default: 'bg-muted/30 border border-border',
+}
+
+// 消息头部样式映射
+const messageHeaderClasses: Record<string, string> = {
+  user: 'text-primary',
+  assistant: 'text-foreground',
+  system: 'text-muted-foreground',
+  tool: 'text-muted-foreground',
+  default: 'text-foreground',
+}
 
 const getRoleIcon = (role: string) => {
   switch (role) {
@@ -227,265 +248,3 @@ const getRoleLabel = (role: string) => {
   }
 }
 </script>
-
-<style scoped>
-.block-renderer {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* 通用渲染块样式 */
-.render-block {
-  border-radius: 6px;
-}
-
-/* 文本块 */
-.text-block {
-  margin: 0;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.text-block.pre-wrap {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* 可折叠块 */
-.collapsible-block {
-  cursor: pointer;
-  background: hsl(var(--muted) / 0.3);
-  padding: 8px 12px;
-}
-
-.collapsible-summary {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  list-style: none;
-  user-select: none;
-}
-
-.collapsible-summary::-webkit-details-marker {
-  display: none;
-}
-
-.collapsible-summary .chevron {
-  transition: transform 0.2s;
-}
-
-.collapsible-block[open] .chevron {
-  transform: rotate(90deg);
-}
-
-.collapsible-content {
-  margin-top: 8px;
-  padding: 12px;
-  background: hsl(var(--muted) / 0.5);
-  border-radius: 6px;
-}
-
-/* 代码块 */
-.code-block {
-  background: hsl(var(--muted) / 0.5);
-  overflow: hidden;
-}
-
-.code-language {
-  padding: 4px 12px;
-  font-size: 11px;
-  font-weight: 500;
-  background: hsl(var(--muted) / 0.5);
-  color: hsl(var(--muted-foreground));
-  border-bottom: 1px solid hsl(var(--border));
-}
-
-.code-content {
-  margin: 0;
-  padding: 12px;
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
-  max-height: 300px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* 徽章块 */
-.badge-block {
-  display: inline-flex;
-}
-
-/* 图片块 */
-.image-block {
-  background: hsl(var(--muted) / 0.3);
-  padding: 12px;
-}
-
-.rendered-image {
-  max-width: 100%;
-  max-height: 400px;
-  border-radius: 4px;
-}
-
-.image-placeholder {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-}
-
-/* 错误块 */
-.error-block {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px;
-  background: hsl(var(--destructive) / 0.1);
-  border: 1px solid hsl(var(--destructive) / 0.2);
-  color: hsl(var(--destructive));
-  font-size: 13px;
-}
-
-.error-code {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 11px;
-  opacity: 0.8;
-}
-
-/* 容器块 */
-.container-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.container-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 消息块 */
-.message-block {
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.message-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.message-content {
-  padding: 0 12px 12px;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-/* User 消息样式 */
-.message-block.user {
-  background: hsl(var(--primary) / 0.08);
-  border: 1px solid hsl(var(--primary) / 0.2);
-}
-
-.message-block.user .message-header {
-  color: hsl(var(--primary));
-}
-
-/* Assistant 消息样式 */
-.message-block.assistant {
-  background: hsl(var(--muted) / 0.5);
-  border: 1px solid hsl(var(--border));
-}
-
-.message-block.assistant .message-header {
-  color: hsl(var(--foreground));
-}
-
-/* System 消息样式 */
-.message-block.system {
-  background: hsl(var(--muted) / 0.3);
-  border: 1px dashed hsl(var(--border));
-}
-
-.message-block.system .message-header {
-  color: hsl(var(--muted-foreground));
-}
-
-/* Tool 消息样式 */
-.message-block.tool {
-  background: hsl(var(--muted) / 0.3);
-  border: 1px solid hsl(var(--border));
-}
-
-/* 工具调用块 */
-.tool-block,
-.tool-result-block {
-  background: hsl(var(--muted) / 0.3);
-  padding: 8px 12px;
-}
-
-.tool-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  margin-bottom: 8px;
-  color: hsl(var(--muted-foreground));
-}
-
-.tool-id {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 10px;
-  opacity: 0.6;
-}
-
-.tool-content {
-  margin: 0;
-  padding: 12px;
-  background: hsl(var(--muted) / 0.5);
-  border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
-  max-height: 200px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.tool-result-block.is-error {
-  background: hsl(var(--destructive) / 0.1);
-  border: 1px solid hsl(var(--destructive) / 0.2);
-}
-
-/* 分隔符块 */
-.divider-block {
-  border: none;
-  border-top: 1px solid hsl(var(--border));
-  margin: 8px 0;
-}
-
-/* 标签块 */
-.label-block {
-  display: flex;
-  gap: 8px;
-  font-size: 13px;
-}
-
-.label-key {
-  color: hsl(var(--muted-foreground));
-}
-
-.label-value.mono {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-}
-</style>
