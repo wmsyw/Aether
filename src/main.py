@@ -24,6 +24,7 @@ from src.clients.http_client import HTTPClientPool, close_http_clients
 from src.config import config
 from src.core.exceptions import ExceptionHandlers, ProxyException
 from src.core.logger import logger
+from src.core.modules import get_module_registry
 from src.database import init_db
 
 from src.middleware.plugin_middleware import PluginMiddleware
@@ -159,6 +160,30 @@ async def lifespan(app: FastAPI):
 
     register_all_converters()
 
+    # 初始化功能模块系统
+    logger.info("初始化功能模块系统...")
+    from src.modules import ALL_MODULES
+
+    module_registry = get_module_registry()
+    for module in ALL_MODULES:
+        module_registry.register(module)
+
+    # 注册可用模块的路由
+    # 注意：模块的 router 自带 prefix，api_prefix 字段仅用于日志和文档
+    available_modules = module_registry.get_available_modules()
+    for module in available_modules:
+        if module.router_factory:
+            router = module.router_factory()
+            app.include_router(router)
+            prefix = module.metadata.api_prefix or "(default)"
+            logger.info(f"模块 [{module.metadata.name}] 路由已注册: {prefix}")
+
+        # 执行启动钩子
+        if module.on_startup:
+            await module.on_startup()
+
+    logger.info(f"功能模块初始化完成: {len(available_modules)}/{len(ALL_MODULES)} 个模块可用")
+
     logger.info(f"服务启动成功: http://{config.host}:{config.port}")
     logger.info("=" * 60)
 
@@ -249,6 +274,12 @@ async def lifespan(app: FastAPI):
     # 关闭插件系统
     logger.info("关闭插件系统...")
     await plugin_manager.shutdown_all()
+
+    # 关闭功能模块
+    logger.info("关闭功能模块...")
+    for module in available_modules:
+        if module.on_shutdown:
+            await module.on_shutdown()
 
     # 关闭并发管理器
     logger.info("关闭并发管理器...")
