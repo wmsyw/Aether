@@ -339,6 +339,7 @@
         :current="currentPage"
         :total="apiKeys.length"
         :page-size="pageSize"
+        cache-key="my-api-keys-page-size"
         @update:current="currentPage = $event"
         @update:page-size="pageSize = $event"
       />

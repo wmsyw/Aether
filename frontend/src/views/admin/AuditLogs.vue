@@ -302,6 +302,7 @@
           :total="totalRecords"
           :page-size="pageSize"
           :page-size-options="[10, 20, 50, 100]"
+          cache-key="audit-logs-page-size"
           @update:current="handlePageChange"
           @update:page-size="pageSize = $event; currentPage = 1; loadLogs()"
         />

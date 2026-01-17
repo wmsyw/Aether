@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { Button, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui'
 
 interface Props {
@@ -83,6 +83,8 @@ interface Props {
   pageSize?: number
   pageSizeOptions?: number[]
   showPageSizeSelector?: boolean
+  /** 缓存键名，设置后会将 pageSize 缓存到 localStorage 并在组件挂载时自动恢复 */
+  cacheKey?: string
 }
 
 interface Emits {
@@ -154,11 +156,30 @@ function handlePageChange(page: number) {
 function handlePageSizeChange(value: string) {
   const newSize = parseInt(value)
   if (newSize !== props.pageSize) {
+    // 缓存到 localStorage
+    if (props.cacheKey) {
+      localStorage.setItem(props.cacheKey, value)
+    }
     emit('update:pageSize', newSize)
     // 切换每页数量时，重置到第一页
     emit('update:current', 1)
   }
 }
+
+// 组件挂载时自动从缓存恢复 pageSize（仅当显示选择器时）
+onMounted(() => {
+  if (props.cacheKey && props.showPageSizeSelector) {
+    const cached = localStorage.getItem(props.cacheKey)
+    if (cached) {
+      const cachedSize = parseInt(cached, 10)
+      if (!isNaN(cachedSize) && props.pageSizeOptions?.includes(cachedSize)) {
+        if (cachedSize !== props.pageSize) {
+          emit('update:pageSize', cachedSize)
+        }
+      }
+    }
+  }
+})
 
 function handleJumpPage() {
   const page = parseInt(jumpPageInput.value)

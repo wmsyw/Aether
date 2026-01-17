@@ -420,6 +420,7 @@
         :current="currentPage"
         :total="filteredProviders.length"
         :page-size="pageSize"
+        cache-key="provider-management-page-size"
         @update:current="currentPage = $event"
         @update:page-size="pageSize = $event"
       />

@@ -498,6 +498,7 @@
         :current="currentPage"
         :total="filteredUsers.length"
         :page-size="pageSize"
+        cache-key="users-page-size"
         @update:current="currentPage = $event"
         @update:page-size="pageSize = $event"
       />

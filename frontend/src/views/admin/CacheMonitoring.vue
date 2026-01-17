@@ -702,6 +702,7 @@ onBeforeUnmount(() => {
         :current="currentPage"
         :total="affinityList.length"
         :page-size="pageSize"
+        cache-key="cache-monitoring-page-size"
         @update:current="currentPage = $event; handlePageChange()"
         @update:page-size="pageSize = $event"
       />
