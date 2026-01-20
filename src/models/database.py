@@ -337,6 +337,7 @@ class Usage(Base):
     # streaming: 流式响应进行中
     # completed: 请求成功完成
     # failed: 请求失败
+    # cancelled: 客户端主动断开连接
     status = Column(String(20), default="completed", nullable=False, index=True)
 
     # 完整请求和响应记录
@@ -1567,7 +1568,7 @@ class RequestCandidate(Base):
     )
 
     # 状态信息
-    status = Column(String(20), nullable=False)  # 'pending', 'success', 'failed', 'skipped'
+    status = Column(String(20), nullable=False)  # 'pending', 'streaming', 'success', 'failed', 'cancelled', 'skipped'
     skip_reason = Column(Text, nullable=True)  # 跳过/失败原因
     is_cached = Column(Boolean, default=False)  # 是否为缓存亲和性候选
 

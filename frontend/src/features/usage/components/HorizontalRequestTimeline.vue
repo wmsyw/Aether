@@ -734,6 +734,7 @@ const getStatusLabel = (status: string) => {
     streaming: '传输中',
     success: '成功',
     failed: '失败',
+    cancelled: '已取消',
     skipped: '跳过'
   }
   return labels[status] || status
@@ -747,6 +748,7 @@ const getStatusColorClass = (status: string) => {
     streaming: 'status-pending',
     success: 'status-success',
     failed: 'status-failed',
+    cancelled: 'status-cancelled',
     skipped: 'status-skipped'
   }
   return classes[status] || 'status-available'
@@ -901,6 +903,7 @@ const getStatusColorClass = (status: string) => {
 /* 子节点状态颜色 */
 .sub-dot.status-success { background: #22c55e; color: #22c55e; }
 .sub-dot.status-failed { background: #ef4444; color: #ef4444; }
+.sub-dot.status-cancelled { background: #f59e0b; color: #f59e0b; }
 .sub-dot.status-pending { background: #3b82f6; color: #3b82f6; }
 .sub-dot.status-skipped { background: #1f2937; color: #1f2937; }
 .sub-dot.status-available { background: #d1d5db; color: #d1d5db; }
@@ -963,6 +966,7 @@ const getStatusColorClass = (status: string) => {
 /* 状态颜色 - 同心圆使用 color */
 .node-dot.status-success { color: #22c55e; }
 .node-dot.status-failed { color: #ef4444; }
+.node-dot.status-cancelled { color: #f59e0b; }
 .node-dot.status-pending { color: #3b82f6; }
 .node-dot.status-skipped { color: #1f2937; }
 .node-dot.status-available { color: #d1d5db; }
@@ -1010,6 +1014,7 @@ const getStatusColorClass = (status: string) => {
 
 .title-dot.status-success { background: #22c55e; }
 .title-dot.status-failed { background: #ef4444; }
+.title-dot.status-cancelled { background: #f59e0b; }
 .title-dot.status-pending { background: #3b82f6; }
 .title-dot.status-skipped { background: #1f2937; }
 .title-dot.status-available { background: #d1d5db; }
@@ -1091,6 +1096,11 @@ const getStatusColorClass = (status: string) => {
 .status-tag.status-failed {
   background: #ef444420;
   color: #dc2626;
+}
+
+.status-tag.status-cancelled {
+  background: #f59e0b20;
+  color: #d97706;
 }
 
 .status-tag.status-pending {

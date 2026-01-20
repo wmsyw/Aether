@@ -97,9 +97,15 @@ class StreamTelemetryRecorder:
                     logger.warning(
                         f"[{self.request_id}] User or ApiKey not found, updating status directly"
                     )
+                    if ctx.is_success():
+                        status = "completed"
+                    elif ctx.is_client_disconnected():
+                        status = "cancelled"
+                    else:
+                        status = "failed"
                     await self._update_usage_status_directly(
                         bg_db,
-                        status="completed" if ctx.is_success() else "failed",
+                        status=status,
                         response_time_ms=response_time_ms,
                         status_code=ctx.status_code,
                     )
@@ -114,6 +120,15 @@ class StreamTelemetryRecorder:
 
                 if ctx.is_success():
                     await self._record_success(
+                        bg_telemetry,
+                        ctx,
+                        original_headers,
+                        actual_request_body,
+                        response_body,
+                        response_time_ms,
+                    )
+                elif ctx.is_client_disconnected():
+                    await self._record_cancelled(
                         bg_telemetry,
                         ctx,
                         original_headers,
@@ -229,6 +244,42 @@ class StreamTelemetryRecorder:
         # 对于失败日志，添加缓存信息
         logger.info(f"{log_summary} cache:{ctx.cached_tokens}")
 
+    async def _record_cancelled(
+        self,
+        telemetry: MessageTelemetry,
+        ctx: StreamContext,
+        original_headers: Dict[str, str],
+        actual_request_body: Dict[str, Any],
+        response_body: Dict[str, Any],
+        response_time_ms: int,
+    ) -> None:
+        """记录客户端取消的请求"""
+        client_response_headers = ctx.client_response_headers or {"content-type": "application/json"}
+
+        await telemetry.record_cancelled(
+            provider=ctx.provider_name or "unknown",
+            model=ctx.model,
+            response_time_ms=response_time_ms,
+            first_byte_time_ms=ctx.first_byte_time_ms,
+            status_code=ctx.status_code,
+            request_headers=original_headers,
+            request_body=actual_request_body,
+            is_stream=True,
+            api_format=ctx.api_format,
+            provider_request_headers=ctx.provider_request_headers,
+            input_tokens=ctx.input_tokens,
+            output_tokens=ctx.output_tokens,
+            cache_creation_tokens=ctx.cache_creation_tokens,
+            cache_read_tokens=ctx.cached_tokens,
+            response_body=response_body,
+            response_headers=ctx.response_headers,
+            client_response_headers=client_response_headers,
+            target_model=ctx.mapped_model,
+        )
+
+        logger.debug(f"{self.format_id} 流式响应被客户端取消")
+        logger.info(ctx.get_log_summary(self.request_id, response_time_ms))
+
     async def _update_candidate_status(
         self,
         db: Session,
@@ -264,14 +315,21 @@ class StreamTelemetryRecorder:
                 latency_ms=response_time_ms,
                 extra_data=extra_data,
             )
+        elif ctx.is_client_disconnected():
+            RequestCandidateService.mark_candidate_cancelled(
+                db=db,
+                candidate_id=ctx.attempt_id,
+                status_code=ctx.status_code,
+                latency_ms=response_time_ms,
+                extra_data=extra_data,
+            )
         else:
-            error_type = "client_disconnected" if ctx.status_code == 499 else "stream_error"
             # 请求链路追踪使用 upstream_response（原始响应），回退到 error_message（友好消息）
             trace_error_message = ctx.upstream_response or ctx.error_message or f"HTTP {ctx.status_code}"
             RequestCandidateService.mark_candidate_failed(
                 db=db,
                 candidate_id=ctx.attempt_id,
-                error_type=error_type,
+                error_type="stream_error",
                 error_message=trace_error_message,
                 status_code=ctx.status_code,
                 latency_ms=response_time_ms,

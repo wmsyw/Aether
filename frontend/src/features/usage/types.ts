@@ -54,7 +54,7 @@ export interface ApiFormatStatsItem {
 
 // 请求记录
 // 请求状态类型
-export type RequestStatus = 'pending' | 'streaming' | 'completed' | 'failed'
+export type RequestStatus = 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 
 export interface UsageRecord {
   id: string
@@ -104,7 +104,7 @@ export interface DateRangeParams {
 export type PeriodValue = 'today' | 'yesterday' | 'last7days' | 'last30days' | 'last90days'
 
 // 筛选状态（包含新的请求状态值）
-export type FilterStatusValue = '__all__' | 'stream' | 'standard' | 'error' | 'active' | 'pending' | 'streaming' | 'completed' | 'failed'
+export type FilterStatusValue = '__all__' | 'stream' | 'standard' | 'error' | 'active' | 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 
 // 默认统计状态
 export function createDefaultStats(): UsageStatsState {

@@ -1219,8 +1219,8 @@ function generateMockEndpointsForProvider(providerId: string) {
       provider_name: provider.name,
       api_format: format,
       base_url: format.includes('CLAUDE') ? 'https://api.anthropic.com' :
-                format.includes('OPENAI') ? 'https://api.openai.com' :
-                'https://generativelanguage.googleapis.com',
+        format.includes('OPENAI') ? 'https://api.openai.com' :
+          'https://generativelanguage.googleapis.com',
       max_retries: 2,
       is_active: healthDetail?.is_active ?? true,
       total_keys: Math.ceil(Math.random() * 3) + 1,

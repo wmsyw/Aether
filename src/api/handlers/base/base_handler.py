@@ -246,6 +246,62 @@ class MessageTelemetry:
             target_model=target_model,
         )
 
+    async def record_cancelled(
+        self,
+        *,
+        provider: str,
+        model: str,
+        response_time_ms: int,
+        first_byte_time_ms: Optional[int],
+        status_code: int,
+        request_body: Dict[str, Any],
+        request_headers: Dict[str, Any],
+        is_stream: bool,
+        api_format: Optional[str] = None,
+        provider_request_headers: Optional[Dict[str, Any]] = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        response_body: Optional[Dict[str, Any]] = None,
+        response_headers: Optional[Dict[str, Any]] = None,
+        client_response_headers: Optional[Dict[str, Any]] = None,
+        target_model: Optional[str] = None,
+    ) -> None:
+        """
+        记录客户端取消的请求
+
+        客户端主动断开连接不算系统失败，使用 cancelled 状态。
+        """
+        provider_name = provider or "unknown"
+
+        await UsageService.record_usage(
+            db=self.db,
+            user=self.user,
+            api_key=self.api_key,
+            provider=provider_name,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_input_tokens=cache_creation_tokens,
+            cache_read_input_tokens=cache_read_tokens,
+            request_type="chat",
+            api_format=api_format,
+            is_stream=is_stream,
+            response_time_ms=response_time_ms,
+            first_byte_time_ms=first_byte_time_ms,
+            status_code=status_code,
+            status="cancelled",
+            request_headers=request_headers,
+            request_body=request_body,
+            provider_request_headers=provider_request_headers or {},
+            response_headers=response_headers or {},
+            client_response_headers=client_response_headers,
+            response_body=response_body or {},
+            request_id=self.request_id,
+            target_model=target_model,
+        )
+
 
 @runtime_checkable
 class MessageHandlerProtocol(Protocol):

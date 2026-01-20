@@ -214,6 +214,10 @@ class StreamContext:
         """检查请求是否成功"""
         return self.status_code < 400
 
+    def is_client_disconnected(self) -> bool:
+        """检查是否因客户端断开连接而结束"""
+        return self.status_code == 499
+
     def build_response_body(self, response_time_ms: int) -> Dict[str, Any]:
         """
         构建响应体元数据
