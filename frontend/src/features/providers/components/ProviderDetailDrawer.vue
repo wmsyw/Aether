@@ -1118,11 +1118,34 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
   handleKeyDragEnd()
 
   try {
-    // 直接交换优先级
-    await Promise.all([
-      updateProviderKey(draggedKey.id, { internal_priority: targetPriority }),
-      updateProviderKey(targetKey.id, { internal_priority: draggedPriority })
-    ])
+    // 收集所有唯一的优先级并排序
+    const uniquePriorities = [...new Set(keys.map(k => k.internal_priority ?? 0))].sort((a, b) => a - b)
+
+    // 找到被拖动组和目标组的索引
+    const draggedGroupIndex = uniquePriorities.indexOf(draggedPriority)
+    const targetGroupIndex = uniquePriorities.indexOf(targetPriority)
+
+    // 移动优先级组
+    uniquePriorities.splice(draggedGroupIndex, 1)
+    uniquePriorities.splice(targetGroupIndex, 0, draggedPriority)
+
+    // 创建旧优先级到新优先级的映射（按顺序重新分配 1, 2, 3...）
+    const priorityMap = new Map<number, number>()
+    uniquePriorities.forEach((oldPriority, index) => {
+      priorityMap.set(oldPriority, index + 1)
+    })
+
+    // 更新所有 key 的优先级
+    const updatePromises = keys.map(key => {
+      const oldPriority = key.internal_priority ?? 0
+      const newPriority = priorityMap.get(oldPriority)
+      if (newPriority !== undefined && oldPriority !== newPriority) {
+        return updateProviderKey(key.id, { internal_priority: newPriority })
+      }
+      return Promise.resolve()
+    })
+
+    await Promise.all(updatePromises)
     showSuccess('优先级已更新')
     await loadEndpoints()
     emit('refresh')

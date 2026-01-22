@@ -39,7 +39,7 @@
       </div>
 
       <!-- 内容区域 -->
-      <div class="min-h-[70vh]">
+      <div class="max-h-[70vh]">
         <!-- 提供商优先级 -->
         <div
           v-show="activeMainTab === 'provider'"
@@ -63,7 +63,7 @@
           <!-- 提供商列表 -->
           <div
             v-else
-            class="space-y-1 max-h-[65vh] overflow-y-auto pr-1"
+            class="space-y-1 max-h-[calc(70vh-80px)] overflow-y-auto pr-1"
           >
             <div
               v-for="(provider, index) in sortedProviders"
@@ -213,7 +213,7 @@
               >
                 <div
                   v-if="keysByFormat[format]?.length > 0"
-                  class="space-y-2 max-h-[65vh] overflow-y-auto pr-1"
+                  class="space-y-2 max-h-[calc(70vh-80px)] overflow-y-auto pr-1"
                 >
                   <div
                     v-for="(key, index) in keysByFormat[format]"
@@ -733,16 +733,37 @@ function handleProviderDrop(dropIndex: number) {
   const draggedPriority = draggedItem.provider_priority
   const targetPriority = targetItem.provider_priority
 
-  // 如果是同组内拖拽（同优先级），忽略操作
+  // 同优先级组内拖拽，忽略
   if (draggedPriority === targetPriority) {
     draggedProvider.value = null
     dragOverProvider.value = null
     return
   }
 
-  // 直接交换优先级
-  draggedItem.provider_priority = targetPriority
-  targetItem.provider_priority = draggedPriority
+  // 收集所有唯一的优先级并排序
+  const uniquePriorities = [...new Set(providers.map(p => p.provider_priority))].sort((a, b) => a - b)
+
+  // 找到被拖动组和目标组的索引
+  const draggedGroupIndex = uniquePriorities.indexOf(draggedPriority)
+  const targetGroupIndex = uniquePriorities.indexOf(targetPriority)
+
+  // 移动优先级组
+  uniquePriorities.splice(draggedGroupIndex, 1)
+  uniquePriorities.splice(targetGroupIndex, 0, draggedPriority)
+
+  // 创建旧优先级到新优先级的映射（按顺序重新分配 1, 2, 3...）
+  const priorityMap = new Map<number, number>()
+  uniquePriorities.forEach((oldPriority, index) => {
+    priorityMap.set(oldPriority, index + 1)
+  })
+
+  // 更新所有 provider 的优先级
+  providers.forEach(provider => {
+    const newPriority = priorityMap.get(provider.provider_priority)
+    if (newPriority !== undefined) {
+      provider.provider_priority = newPriority
+    }
+  })
 
   // 重新排序
   sortedProviders.value = [...providers].sort((a, b) => a.provider_priority - b.provider_priority)
@@ -786,20 +807,40 @@ function handleKeyDrop(format: string, dropIndex: number) {
   const draggedPriority = draggedItem.priority
   const targetPriority = targetItem.priority
 
-  // 如果是同组内拖拽（同优先级），忽略操作
+  // 同优先级组内拖拽，忽略
   if (draggedPriority === targetPriority) {
     draggedKey.value[format] = null
     dragOverKey.value[format] = null
     return
   }
 
-  // 每个格式独立管理优先级，只交换当前格式内的优先级
-  draggedItem.priority = targetPriority
-  targetItem.priority = draggedPriority
+  // 收集所有唯一的优先级并排序
+  const uniquePriorities = [...new Set(keys.map(k => k.priority))].sort((a, b) => a - b)
 
-  // 重新排序当前格式
+  // 找到被拖动组和目标组的索引
+  const draggedGroupIndex = uniquePriorities.indexOf(draggedPriority)
+  const targetGroupIndex = uniquePriorities.indexOf(targetPriority)
+
+  // 移动优先级组
+  uniquePriorities.splice(draggedGroupIndex, 1)
+  uniquePriorities.splice(targetGroupIndex, 0, draggedPriority)
+
+  // 创建旧优先级到新优先级的映射（按顺序重新分配 1, 2, 3...）
+  const priorityMap = new Map<number, number>()
+  uniquePriorities.forEach((oldPriority, index) => {
+    priorityMap.set(oldPriority, index + 1)
+  })
+
+  // 更新所有 key 的优先级
+  keys.forEach(key => {
+    const newPriority = priorityMap.get(key.priority)
+    if (newPriority !== undefined) {
+      key.priority = newPriority
+    }
+  })
+
+  // 按优先级重新排序
   keysByFormat.value[format] = [...keys].sort((a, b) => a.priority - b.priority)
-
   draggedKey.value[format] = null
   dragOverKey.value[format] = null
 }
