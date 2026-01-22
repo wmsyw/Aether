@@ -120,39 +120,56 @@
             <td class="align-top px-4 py-3">
               <div class="flex justify-center gap-1">
                 <!-- 测试按钮（支持多格式选择） -->
-                <div class="relative">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="测试模型"
-                    :disabled="testingModelId === model.id"
-                    @click="handleTestClick(model)"
-                  >
-                    <Loader2
-                      v-if="testingModelId === model.id"
-                      class="w-3.5 h-3.5 animate-spin"
-                    />
-                    <Play
-                      v-else
-                      class="w-3.5 h-3.5"
-                    />
-                  </Button>
-                  <!-- 格式选择下拉菜单 -->
-                  <div
-                    v-if="formatMenuModelId === model.id && availableApiFormats.length > 1"
-                    class="absolute top-full left-0 mt-1 z-10 bg-popover border rounded-md shadow-md py-1 min-w-[120px]"
-                  >
-                    <button
+                <DropdownMenu
+                  v-if="availableApiFormats.length > 1"
+                  v-model:open="formatMenuOpen[model.id]"
+                >
+                  <DropdownMenuTrigger as-child>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      title="测试模型"
+                      :disabled="testingModelId === model.id"
+                    >
+                      <Loader2
+                        v-if="testingModelId === model.id"
+                        class="w-3.5 h-3.5 animate-spin"
+                      />
+                      <Play
+                        v-else
+                        class="w-3.5 h-3.5"
+                      />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem
                       v-for="fmt in availableApiFormats"
                       :key="fmt"
-                      class="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors"
-                      @click="testModelConnection(model, fmt)"
+                      @select="testModelConnection(model, fmt)"
                     >
                       {{ fmt }}
-                    </button>
-                  </div>
-                </div>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  v-else
+                  variant="ghost"
+                  size="icon"
+                  class="h-8 w-8"
+                  title="测试模型"
+                  :disabled="testingModelId === model.id"
+                  @click="testModelConnection(model, availableApiFormats[0])"
+                >
+                  <Loader2
+                    v-if="testingModelId === model.id"
+                    class="w-3.5 h-3.5 animate-spin"
+                  />
+                  <Play
+                    v-else
+                    class="w-3.5 h-3.5"
+                  />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -205,10 +222,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Box, Edit, Trash2, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem
+} from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import {
@@ -248,7 +271,7 @@ const models = ref<Model[]>([])
 const mappingPreview = ref<ProviderMappingPreviewResponse | null>(null)
 const togglingModelId = ref<string | null>(null)
 const testingModelId = ref<string | null>(null)
-const formatMenuModelId = ref<string | null>(null)
+const formatMenuOpen = ref<Record<string, boolean>>({})
 
 // 获取可用的 API 格式（有活跃端点且有活跃 Key）
 const availableApiFormats = computed(() => {
@@ -427,7 +450,7 @@ async function testModelConnection(model: Model, apiFormat?: string) {
   if (testingModelId.value) return
 
   testingModelId.value = model.id
-  formatMenuModelId.value = null
+  formatMenuOpen.value[model.id] = false
   try {
     // 检查是否有正则映射，如果有则使用映射名称和指定 key
     const regexMapping = findRegexMapping(model)
@@ -463,35 +486,8 @@ async function testModelConnection(model: Model, apiFormat?: string) {
   }
 }
 
-// 处理测试按钮点击
-function handleTestClick(model: Model) {
-  const formats = availableApiFormats.value
-  if (formats.length === 0) {
-    // 没有可用格式信息，使用默认行为
-    testModelConnection(model)
-  } else if (formats.length === 1) {
-    // 只有一种格式，直接测试
-    testModelConnection(model, formats[0])
-  } else {
-    // 多种格式，显示选择菜单
-    formatMenuModelId.value = formatMenuModelId.value === model.id ? null : model.id
-  }
-}
-
-// 点击外部关闭格式选择菜单
-function handleClickOutside(event: MouseEvent) {
-  if (formatMenuModelId.value && !(event.target as Element).closest('.relative')) {
-    formatMenuModelId.value = null
-  }
-}
-
 onMounted(() => {
   loadModels()
-  document.addEventListener('click', handleClickOutside)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
 })
 
 // 暴露给父组件
