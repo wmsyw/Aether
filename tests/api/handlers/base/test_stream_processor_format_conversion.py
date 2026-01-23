@@ -91,6 +91,8 @@ async def test_create_response_stream_converts_claude_to_openai() -> None:
     events = []
     for line in text.splitlines():
         if line.startswith("data: "):
+            if line == "data: [DONE]":
+                continue
             events.append(json.loads(line[6:]))
 
     assert len(events) >= 2
@@ -100,4 +102,3 @@ async def test_create_response_stream_converts_claude_to_openai() -> None:
         for e in events
         if isinstance(e, dict)
     )
-

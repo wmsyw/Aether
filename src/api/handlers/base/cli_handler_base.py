@@ -2005,27 +2005,39 @@ class CliMessageHandlerBase(BaseMessageHandler):
         if not line or line.strip() == "" or line == "data: [DONE]":
             return [line] if line else []
 
-        # 如果不是 data 行，直接透传
+        provider_format = (ctx.provider_api_format or "").upper()
+        client_format = (ctx.client_api_format or "").upper()
+
+        # 兼容 Gemini 上游 JSON-array/chunks：可能是“裸 JSON 行”而非 `data: {...}`
         if not line.startswith("data:"):
-            return [line]
+            if provider_format != "GEMINI":
+                return [line]
 
-        # 提取 data 内容
-        data_content = line[5:].strip()  # 去掉 "data:" 前缀
+            stripped = line.strip()
+            if stripped in ("", "[", "]", ","):
+                return []
 
-        # 尝试解析 JSON
-        try:
-            data_obj = json.loads(data_content)
-        except json.JSONDecodeError:
-            # 无法解析，直接透传
-            return [line]
+            candidate = stripped.lstrip(",").rstrip(",").strip()
+            try:
+                data_obj = json.loads(candidate)
+            except json.JSONDecodeError:
+                # 不是可解析的 JSON 对象：不透传（避免把 Gemini 原始分块泄漏到目标 SSE）
+                logger.debug(f"Gemini JSON-array line skip: {stripped[:50]}")
+                return []
+        else:
+            # 提取 data 内容
+            data_content = line[5:].strip()  # 去掉 "data:" 前缀
 
-        # 类型断言：当 needs_conversion=True 调用此方法时，格式字段必定有值
-        provider_format = ctx.provider_api_format or ""
-        client_format = ctx.client_api_format or ""
+            # 尝试解析 JSON
+            try:
+                data_obj = json.loads(data_content)
+            except json.JSONDecodeError:
+                # 无法解析，直接透传
+                return [line]
 
         # 初始化流式转换状态（首次调用时，根据 Provider 格式选择状态类）
         if ctx.stream_conversion_state is None:
-            if provider_format.upper() == "GEMINI":
+            if provider_format == "GEMINI":
                 ctx.stream_conversion_state = GeminiStreamConversionState(
                     model=ctx.mapped_model or ctx.model or "",
                     message_id=ctx.response_id or ctx.request_id or "",
