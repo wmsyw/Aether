@@ -90,8 +90,9 @@
         </SelectContent>
       </Select>
 
-      <!-- 提供商筛选 -->
+      <!-- 提供商筛选（仅管理员可见） -->
       <Select
+        v-if="isAdmin"
         v-model:open="filterProviderSelectOpen"
         :model-value="filterProvider"
         @update:model-value="$emit('update:filterProvider', $event)"

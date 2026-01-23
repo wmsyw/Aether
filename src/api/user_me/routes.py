@@ -857,7 +857,6 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             "quota_usd": user.quota_usd,
             "used_usd": user.used_usd,
             "summary_by_model": summary_by_model,
-            "summary_by_provider": summary_by_provider,
             # 分页信息
             "pagination": {
                 "total": total_records,
@@ -868,7 +867,6 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             "records": [
                 {
                     "id": r.id,
-                    "provider": r.provider_name,
                     "model": r.model,
                     "target_model": r.target_model,  # 映射后的目标模型名
                     "api_format": r.api_format,
@@ -877,6 +875,7 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                     "total_tokens": r.total_tokens,
                     "cost": r.total_cost_usd,
                     "response_time_ms": r.response_time_ms,
+                    "first_byte_time_ms": r.first_byte_time_ms,
                     "is_stream": r.is_stream,
                     "status": r.status,  # 请求状态: pending, streaming, completed, failed
                     "created_at": r.created_at.isoformat(),
