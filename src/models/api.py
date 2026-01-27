@@ -405,6 +405,10 @@ class ProviderCreate(BaseModel):
     config: Optional[dict] = Field(None, description="额外配置")
     is_active: bool = Field(False, description="是否启用（默认false，需要配置API密钥后才能启用）")
 
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
+
 
 class ProviderUpdate(BaseModel):
     """更新提供商请求"""
@@ -422,6 +426,10 @@ class ProviderUpdate(BaseModel):
     concurrent_limit: Optional[int] = None
     config: Optional[dict] = None
     is_active: Optional[bool] = None
+
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
 
 
 class ProviderResponse(BaseModel):
@@ -446,6 +454,10 @@ class ProviderResponse(BaseModel):
     models_count: int = 0
     active_models_count: int = 0
     api_keys_count: int = 0
+
+    # 超时配置
+    stream_first_byte_timeout: Optional[float] = None
+    request_timeout: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 

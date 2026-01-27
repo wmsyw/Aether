@@ -327,7 +327,9 @@ class Usage(Base):
 
     # 请求详情
     request_type = Column(String(50))  # chat, completion, embedding等
-    api_format = Column(String(50), nullable=True)  # API 格式: CLAUDE, OPENAI 等
+    api_format = Column(String(50), nullable=True)  # API 格式: CLAUDE, OPENAI 等（用户请求格式）
+    endpoint_api_format = Column(String(50), nullable=True)  # 端点原生 API 格式
+    has_format_conversion = Column(Boolean, nullable=True, default=False)  # 是否发生了格式转换
     is_stream = Column(Boolean, default=False)  # 是否为流式请求
     status_code = Column(Integer)
     error_message = Column(Text, nullable=True)
@@ -652,6 +654,10 @@ class Provider(Base):
     # 请求配置
     max_retries = Column(Integer, default=2, nullable=True)  # 最大重试次数
     proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password, enabled}
+
+    # 超时配置（秒），为 None 时使用全局配置
+    stream_first_byte_timeout = Column(Float, nullable=True)  # 流式请求首字节超时
+    request_timeout = Column(Float, nullable=True)  # 非流式请求整体超时
 
     # 配置
     config = Column(JSON, nullable=True)  # 额外配置（如Azure deployment name等）
@@ -1178,6 +1184,9 @@ class ProviderAPIKey(Base):
     last_models_fetch_at = Column(DateTime(timezone=True), nullable=True)  # 最后获取时间
     last_models_fetch_error = Column(Text, nullable=True)  # 最后获取错误信息
     locked_models = Column(JSON, nullable=True)  # 被锁定的模型列表（刷新时不会被删除）
+    # 模型过滤规则（支持 * 和 ? 通配符，如 "gpt-*", "claude-?-sonnet"）
+    model_include_patterns = Column(JSON, nullable=True)  # 包含规则列表，空表示不过滤（包含所有）
+    model_exclude_patterns = Column(JSON, nullable=True)  # 排除规则列表，空表示不排除
 
     # 时间戳
     created_at = Column(

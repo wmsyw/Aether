@@ -213,7 +213,8 @@ class StreamProcessor:
 
         try:
             # 使用共享的 TTFB 超时函数读取首字节
-            ttfb_timeout = config.stream_first_byte_timeout
+            # 优先使用 Provider 配置，否则使用全局配置
+            ttfb_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
             first_chunk, aiter = await read_first_chunk_with_ttfb_timeout(
                 byte_iterator,
                 timeout=ttfb_timeout,
@@ -422,6 +423,8 @@ class StreamProcessor:
                     f"[{self.request_id}] needs_conversion=True 但 provider_format 为空，回退到透传模式"
                 )
                 needs_conversion = False
+                # 保持 ctx 与实际行为一致，避免 Usage 记录误标记为转换
+                ctx.needs_conversion = False
 
             def _mark_stream_started() -> None:
                 nonlocal start_time, streaming_started

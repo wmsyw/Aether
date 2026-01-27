@@ -310,6 +310,8 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         quota_expires_at=provider.quota_expires_at,
         max_retries=provider.max_retries,
         proxy=provider.proxy,
+        stream_first_byte_timeout=provider.stream_first_byte_timeout,
+        request_timeout=provider.request_timeout,
         total_endpoints=total_endpoints,
         active_endpoints=active_endpoints,
         total_keys=total_keys,

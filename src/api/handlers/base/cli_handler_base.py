@@ -739,7 +739,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
         )
 
         # 流式请求使用 stream_first_byte_timeout 作为首字节超时
-        request_timeout = config.stream_first_byte_timeout
+        # 优先使用 Provider 配置，否则使用全局配置
+        request_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
 
         logger.debug(
             f"  └─ [{self.request_id}] 发送流式请求: "
@@ -1068,7 +1069,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 provider_parser = self.parser
 
             # 使用共享的 TTFB 超时函数读取首字节
-            ttfb_timeout = config.stream_first_byte_timeout
+            # 优先使用 Provider 配置，否则使用全局配置
+            ttfb_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
             first_chunk, aiter = await read_first_chunk_with_ttfb_timeout(
                 byte_iterator,
                 timeout=ttfb_timeout,
@@ -1804,6 +1806,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         response_body=response_body,
                         response_headers=ctx.response_headers,
                         client_response_headers=client_response_headers,
+                        # 格式转换追踪
+                        endpoint_api_format=ctx.provider_api_format or None,
+                        has_format_conversion=ctx.needs_conversion,
                         # 模型映射信息
                         target_model=ctx.mapped_model,
                     )
@@ -1845,6 +1850,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         is_stream=True,
                         provider_request_headers=ctx.provider_request_headers,
                         api_format=ctx.api_format,
+                        # 格式转换追踪
+                        endpoint_api_format=ctx.provider_api_format or None,
+                        has_format_conversion=ctx.needs_conversion,
                         # Provider 侧追踪信息（用于记录真实成本）
                         provider_id=ctx.provider_id,
                         provider_endpoint_id=ctx.endpoint_id,
@@ -1977,6 +1985,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             provider_request_headers=ctx.provider_request_headers,
             response_headers=ctx.response_headers,
             client_response_headers=client_response_headers,
+            # 格式转换追踪
+            endpoint_api_format=ctx.provider_api_format or None,
+            has_format_conversion=ctx.needs_conversion,
             # 模型映射信息
             target_model=ctx.mapped_model,
         )
@@ -2101,7 +2112,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
             from src.clients.http_client import HTTPClientPool
 
             # 非流式请求使用 http_request_timeout 作为整体超时
-            request_timeout = config.http_request_timeout
+            # 优先使用 Provider 配置，否则使用全局配置
+            request_timeout = provider.request_timeout or config.http_request_timeout
             http_client = await HTTPClientPool.get_proxy_client(
                 proxy_config=provider.proxy,
             )
@@ -2274,6 +2286,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 is_stream=False,
                 provider_request_headers=provider_request_headers,
                 api_format=api_format,
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format or None,
+                has_format_conversion=needs_conversion,
                 # Provider 侧追踪信息（用于记录真实成本）
                 provider_id=provider_id,
                 provider_endpoint_id=endpoint_id,
@@ -2346,6 +2361,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 response_headers=error_response_headers,
                 # 非流式失败返回给客户端的是 JSON 错误响应
                 client_response_headers={"content-type": "application/json"},
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format or None,
+                has_format_conversion=needs_conversion,
                 # 模型映射信息
                 target_model=mapped_model_result,
             )

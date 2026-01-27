@@ -93,6 +93,40 @@
           </div>
         </div>
 
+        <!-- 超时配置 -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="space-y-1.5">
+            <Label>
+              流式首字节超时
+              <span class="text-xs text-muted-foreground">(秒)</span>
+            </Label>
+            <Input
+              :model-value="form.stream_first_byte_timeout ?? ''"
+              type="number"
+              min="1"
+              max="300"
+              step="1"
+              placeholder="30"
+              @update:model-value="(v) => form.stream_first_byte_timeout = parseNumberInput(v)"
+            />
+          </div>
+          <div class="space-y-1.5">
+            <Label>
+              非流式请求超时
+              <span class="text-xs text-muted-foreground">(秒)</span>
+            </Label>
+            <Input
+              :model-value="form.request_timeout ?? ''"
+              type="number"
+              min="1"
+              max="600"
+              step="1"
+              placeholder="300"
+              @update:model-value="(v) => form.request_timeout = parseNumberInput(v)"
+            />
+          </div>
+        </div>
+
         <!-- 月卡配置 -->
         <div
           v-if="form.billing_type === 'monthly_quota'"
@@ -267,6 +301,9 @@ const form = ref({
   concurrent_limit: undefined as number | undefined,
   // 请求配置
   max_retries: undefined as number | undefined,
+  // 超时配置（秒）
+  stream_first_byte_timeout: undefined as number | undefined,
+  request_timeout: undefined as number | undefined,
   // 代理配置（扁平化便于表单绑定）
   proxy_enabled: false,
   proxy_url: '',
@@ -291,6 +328,9 @@ function resetForm() {
     concurrent_limit: undefined,
     // 请求配置
     max_retries: undefined,
+    // 超时配置
+    stream_first_byte_timeout: undefined,
+    request_timeout: undefined,
     // 代理配置
     proxy_enabled: false,
     proxy_url: '',
@@ -321,6 +361,9 @@ function loadProviderData() {
     concurrent_limit: undefined,
     // 请求配置
     max_retries: props.provider.max_retries ?? undefined,
+    // 超时配置
+    stream_first_byte_timeout: props.provider.stream_first_byte_timeout ?? undefined,
+    request_timeout: props.provider.request_timeout ?? undefined,
     // 代理配置
     proxy_enabled: proxy?.enabled ?? false,
     proxy_url: proxy?.url || '',
@@ -376,6 +419,9 @@ const handleSubmit = async () => {
       is_active: form.value.is_active,
       // 请求配置
       max_retries: form.value.max_retries ?? undefined,
+      // 超时配置（null 表示清除，使用全局配置）
+      stream_first_byte_timeout: form.value.stream_first_byte_timeout ?? null,
+      request_timeout: form.value.request_timeout ?? null,
       proxy,
     }
 

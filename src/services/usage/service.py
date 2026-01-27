@@ -30,6 +30,8 @@ class UsageRecordParams:
     cache_read_input_tokens: int
     request_type: str
     api_format: Optional[str]
+    endpoint_api_format: Optional[str]  # 端点原生 API 格式
+    has_format_conversion: bool  # 是否发生了格式转换
     is_stream: bool
     response_time_ms: Optional[int]
     first_byte_time_ms: Optional[int]
@@ -214,6 +216,8 @@ class UsageService:
         cache_read_input_tokens: int,
         request_type: str,
         api_format: Optional[str],
+        endpoint_api_format: Optional[str],
+        has_format_conversion: bool,
         is_stream: bool,
         response_time_ms: Optional[int],
         first_byte_time_ms: Optional[int],
@@ -349,6 +353,8 @@ class UsageService:
             "price_per_request": request_price,
             "request_type": request_type,
             "api_format": api_format,
+            "endpoint_api_format": endpoint_api_format,
+            "has_format_conversion": has_format_conversion,
             "is_stream": is_stream,
             "status_code": status_code,
             "error_message": error_message,
@@ -706,6 +712,8 @@ class UsageService:
             cache_read_input_tokens=params.cache_read_input_tokens,
             request_type=params.request_type,
             api_format=params.api_format,
+            endpoint_api_format=params.endpoint_api_format,
+            has_format_conversion=params.has_format_conversion,
             is_stream=params.is_stream,
             response_time_ms=params.response_time_ms,
             first_byte_time_ms=params.first_byte_time_ms,
@@ -756,6 +764,8 @@ class UsageService:
         cache_read_input_tokens: int = 0,
         request_type: str = "chat",
         api_format: Optional[str] = None,
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
         is_stream: bool = False,
         response_time_ms: Optional[int] = None,
         first_byte_time_ms: Optional[int] = None,
@@ -794,7 +804,9 @@ class UsageService:
             input_tokens=input_tokens, output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
-            request_type=request_type, api_format=api_format, is_stream=is_stream,
+            request_type=request_type, api_format=api_format,
+            endpoint_api_format=endpoint_api_format, has_format_conversion=has_format_conversion,
+            is_stream=is_stream,
             response_time_ms=response_time_ms, first_byte_time_ms=first_byte_time_ms,
             status_code=status_code, error_message=error_message, metadata=metadata,
             request_headers=request_headers, request_body=request_body,
@@ -849,6 +861,8 @@ class UsageService:
         cache_read_input_tokens: int = 0,
         request_type: str = "chat",
         api_format: Optional[str] = None,
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
         is_stream: bool = False,
         response_time_ms: Optional[int] = None,
         first_byte_time_ms: Optional[int] = None,
@@ -889,7 +903,9 @@ class UsageService:
             input_tokens=input_tokens, output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
-            request_type=request_type, api_format=api_format, is_stream=is_stream,
+            request_type=request_type, api_format=api_format,
+            endpoint_api_format=endpoint_api_format, has_format_conversion=has_format_conversion,
+            is_stream=is_stream,
             response_time_ms=response_time_ms, first_byte_time_ms=first_byte_time_ms,
             status_code=status_code, error_message=error_message, metadata=metadata,
             request_headers=request_headers, request_body=request_body,
@@ -1486,6 +1502,8 @@ class UsageService:
         provider_endpoint_id: Optional[str] = None,
         provider_api_key_id: Optional[str] = None,
         api_format: Optional[str] = None,
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: Optional[bool] = None,
     ) -> Optional[Usage]:
         """
         快速更新使用记录状态
@@ -1502,6 +1520,8 @@ class UsageService:
             provider_endpoint_id: Endpoint ID（可选，streaming 状态时更新）
             provider_api_key_id: Provider API Key ID（可选，streaming 状态时更新）
             api_format: API 格式（可选，用于获取按格式配置的倍率）
+            endpoint_api_format: 端点原生 API 格式（可选）
+            has_format_conversion: 是否发生了格式转换（可选）
 
         Returns:
             更新后的 Usage 记录，如果未找到则返回 None
@@ -1540,6 +1560,10 @@ class UsageService:
             )
             if rate_multiplier is not None:
                 usage.rate_multiplier = rate_multiplier
+        if endpoint_api_format is not None:
+            usage.endpoint_api_format = endpoint_api_format
+        if has_format_conversion is not None:
+            usage.has_format_conversion = has_format_conversion
 
         db.commit()
 

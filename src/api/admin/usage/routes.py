@@ -802,6 +802,22 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             if usage.provider_id and str(usage.provider_id) in provider_map:
                 provider_name = provider_map[str(usage.provider_id)]
 
+            # 格式转换追踪（兼容历史数据：尽量回填可展示信息）
+            api_format = usage.api_format or (
+                endpoint.api_format if endpoint and endpoint.api_format else None
+            )
+            endpoint_api_format = usage.endpoint_api_format or (
+                endpoint.api_format if endpoint else None
+            )
+
+            has_format_conversion = usage.has_format_conversion
+            if has_format_conversion is None:
+                client_fmt = str(api_format or "").upper()
+                endpoint_fmt = str(endpoint_api_format or "").upper()
+                has_format_conversion = bool(
+                    client_fmt and endpoint_fmt and client_fmt != endpoint_fmt
+                )
+
             data.append(
                 {
                     "id": usage.id,
@@ -842,8 +858,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     "has_fallback": fallback_map.get(usage.request_id, False),
                     "has_retry": retry_map.get(usage.request_id, False),
                     "has_rectified": rectified_map.get(usage.request_id, False),
-                    "api_format": usage.api_format
-                    or (endpoint.api_format if endpoint and endpoint.api_format else None),
+                    "api_format": api_format,
+                    "endpoint_api_format": endpoint_api_format,
+                    "has_format_conversion": bool(has_format_conversion),
                     "api_key_name": provider_api_key.name if provider_api_key else None,
                     "request_metadata": usage.request_metadata,  # Provider 响应元数据
                 }

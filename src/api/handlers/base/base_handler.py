@@ -109,6 +109,9 @@ class MessageTelemetry:
         provider_endpoint_id: Optional[str] = None,
         provider_api_key_id: Optional[str] = None,
         api_format: Optional[str] = None,
+        # 格式转换追踪
+        endpoint_api_format: Optional[str] = None,  # 端点原生 API 格式
+        has_format_conversion: bool = False,  # 是否发生了格式转换
         # 模型映射信息
         target_model: Optional[str] = None,
         # Provider 响应元数据（如 Gemini 的 modelVersion）
@@ -135,6 +138,8 @@ class MessageTelemetry:
             cache_read_input_tokens=cache_read_tokens,
             request_type="chat",
             api_format=api_format,
+            endpoint_api_format=endpoint_api_format,
+            has_format_conversion=has_format_conversion,
             is_stream=is_stream,
             response_time_ms=response_time_ms,
             first_byte_time_ms=first_byte_time_ms,  # 传递首字时间
@@ -195,6 +200,9 @@ class MessageTelemetry:
         response_body: Optional[Dict[str, Any]] = None,
         response_headers: Optional[Dict[str, Any]] = None,
         client_response_headers: Optional[Dict[str, Any]] = None,
+        # 格式转换追踪
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
         # 模型映射信息
         target_model: Optional[str] = None,
     ) -> None:
@@ -230,6 +238,8 @@ class MessageTelemetry:
             cache_read_input_tokens=cache_read_tokens,
             request_type="chat",
             api_format=api_format,
+            endpoint_api_format=endpoint_api_format,
+            has_format_conversion=has_format_conversion,
             is_stream=is_stream,
             response_time_ms=response_time_ms,
             status_code=status_code,
@@ -265,6 +275,9 @@ class MessageTelemetry:
         response_body: Optional[Dict[str, Any]] = None,
         response_headers: Optional[Dict[str, Any]] = None,
         client_response_headers: Optional[Dict[str, Any]] = None,
+        # 格式转换追踪
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
         target_model: Optional[str] = None,
     ) -> None:
         """
@@ -286,6 +299,8 @@ class MessageTelemetry:
             cache_read_input_tokens=cache_read_tokens,
             request_type="chat",
             api_format=api_format,
+            endpoint_api_format=endpoint_api_format,
+            has_format_conversion=has_format_conversion,
             is_stream=is_stream,
             response_time_ms=response_time_ms,
             first_byte_time_ms=first_byte_time_ms,
@@ -488,6 +503,9 @@ class BaseMessageHandler:
         key_id = ctx.key_id
         first_byte_time_ms = ctx.first_byte_time_ms
         api_format = ctx.api_format
+        # 格式转换追踪
+        endpoint_api_format = ctx.provider_api_format or None
+        has_format_conversion = ctx.needs_conversion
 
         # 如果 provider 为空，记录警告（不应该发生，但用于调试）
         if not provider:
@@ -512,6 +530,8 @@ class BaseMessageHandler:
                         provider_api_key_id=key_id,
                         first_byte_time_ms=first_byte_time_ms,
                         api_format=api_format,
+                        endpoint_api_format=endpoint_api_format,
+                        has_format_conversion=has_format_conversion,
                     )
                 finally:
                     db.close()

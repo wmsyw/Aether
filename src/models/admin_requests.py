@@ -91,6 +91,9 @@ class CreateProviderRequest(BaseModel):
     # 请求配置（从 Endpoint 迁移）
     max_retries: Optional[int] = Field(2, ge=0, le=10, description="最大重试次数")
     proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
     config: Optional[Dict[str, Any]] = Field(None, description="其他配置")
 
     @field_validator("name", "description")
@@ -161,6 +164,9 @@ class UpdateProviderRequest(BaseModel):
     # 请求配置（从 Endpoint 迁移）
     max_retries: Optional[int] = Field(None, ge=0, le=10, description="最大重试次数")
     proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
     config: Optional[Dict[str, Any]] = None
 
     # 复用相同的验证器

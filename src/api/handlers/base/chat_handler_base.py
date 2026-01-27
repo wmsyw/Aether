@@ -713,7 +713,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         )
 
         # 流式请求使用 stream_first_byte_timeout 作为首字节超时
-        request_timeout = config.stream_first_byte_timeout
+        # 优先使用 Provider 配置，否则使用全局配置
+        request_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
 
         # 创建 HTTP 客户端（支持代理配置，从 Provider 读取）
         from src.clients.http_client import HTTPClientPool
@@ -851,6 +852,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             provider_request_headers=ctx.provider_request_headers,
             response_headers=ctx.response_headers,
             client_response_headers=client_response_headers,
+            # 格式转换追踪
+            endpoint_api_format=ctx.provider_api_format or None,
+            has_format_conversion=ctx.needs_conversion,
             target_model=ctx.mapped_model,
         )
 
@@ -987,7 +991,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             from src.clients.http_client import HTTPClientPool
 
             # 非流式请求使用 http_request_timeout 作为整体超时
-            request_timeout = config.http_request_timeout
+            # 优先使用 Provider 配置，否则使用全局配置
+            request_timeout = provider.request_timeout or config.http_request_timeout
             http_client = await HTTPClientPool.get_proxy_client(
                 proxy_config=provider.proxy,
             )
@@ -1140,6 +1145,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 is_stream=False,
                 provider_request_headers=provider_request_headers,
                 api_format=api_format,
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format_for_error or None,
+                has_format_conversion=needs_conversion_for_error,
                 provider_id=provider_id,
                 provider_endpoint_id=endpoint_id,
                 provider_api_key_id=key_id,
@@ -1203,6 +1211,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 provider_request_headers=provider_request_headers,
                 response_headers=response_headers,
                 client_response_headers={"content-type": "application/json"},
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format_for_error or None,
+                has_format_conversion=needs_conversion_for_error,
                 target_model=mapped_model_result,
             )
             client_format = (client_api_format_for_error or "").upper()
@@ -1249,6 +1260,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 response_headers=error_response_headers,
                 # 非流式失败返回给客户端的是 JSON 错误响应
                 client_response_headers={"content-type": "application/json"},
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format_for_error or None,
+                has_format_conversion=needs_conversion_for_error,
                 # 模型映射信息
                 target_model=mapped_model_result,
             )

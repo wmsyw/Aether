@@ -295,6 +295,9 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                 concurrent_limit=validated_data.concurrent_limit,
                 max_retries=validated_data.max_retries,
                 proxy=validated_data.proxy.model_dump() if validated_data.proxy else None,
+                # 超时配置
+                stream_first_byte_timeout=validated_data.stream_first_byte_timeout,
+                request_timeout=validated_data.request_timeout,
                 config=validated_data.config,
             )
 

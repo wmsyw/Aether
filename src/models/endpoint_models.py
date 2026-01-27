@@ -211,6 +211,14 @@ class EndpointAPIKeyCreate(BaseModel):
         default=None, description="被锁定的模型列表（刷新时不会被删除）"
     )
 
+    # 模型过滤规则（仅当 auto_fetch_models=True 时生效）
+    model_include_patterns: Optional[List[str]] = Field(
+        default=None, description="模型包含规则（支持 * 和 ? 通配符），空表示包含所有"
+    )
+    model_exclude_patterns: Optional[List[str]] = Field(
+        default=None, description="模型排除规则（支持 * 和 ? 通配符），空表示不排除"
+    )
+
     @field_validator("api_formats")
     @classmethod
     def validate_api_formats(cls, v: Optional[List[str]]) -> Optional[List[str]]:
@@ -344,6 +352,13 @@ class EndpointAPIKeyUpdate(BaseModel):
     )
     locked_models: Optional[List[str]] = Field(
         default=None, description="被锁定的模型列表（刷新时不会被删除）"
+    )
+    # 模型过滤规则（仅当 auto_fetch_models=True 时生效）
+    model_include_patterns: Optional[List[str]] = Field(
+        default=None, description="模型包含规则（支持 * 和 ? 通配符），空表示包含所有"
+    )
+    model_exclude_patterns: Optional[List[str]] = Field(
+        default=None, description="模型排除规则（支持 * 和 ? 通配符），空表示不排除"
     )
 
     @field_validator("api_formats")
@@ -502,6 +517,9 @@ class EndpointAPIKeyResponse(BaseModel):
     last_models_fetch_at: Optional[datetime] = Field(None, description="最后获取模型时间")
     last_models_fetch_error: Optional[str] = Field(None, description="最后获取模型错误信息")
     locked_models: Optional[List[str]] = Field(None, description="被锁定的模型列表")
+    # 模型过滤规则
+    model_include_patterns: Optional[List[str]] = Field(None, description="模型包含规则")
+    model_exclude_patterns: Optional[List[str]] = Field(None, description="模型排除规则")
 
     # 时间戳
     last_used_at: Optional[datetime] = None
@@ -605,6 +623,9 @@ class ProviderUpdateRequest(BaseModel):
     # 请求配置（从 Endpoint 迁移）
     max_retries: Optional[int] = Field(None, ge=0, le=10, description="最大重试次数")
     proxy: Optional[Dict[str, Any]] = Field(None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
 
 
 class ProviderWithEndpointsSummary(BaseModel):
@@ -629,6 +650,9 @@ class ProviderWithEndpointsSummary(BaseModel):
     # 请求配置（从 Endpoint 迁移）
     max_retries: Optional[int] = Field(default=2, description="最大重试次数")
     proxy: Optional[Dict[str, Any]] = Field(default=None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(default=None, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(default=None, description="非流式请求整体超时（秒）")
 
     # Endpoint 统计
     total_endpoints: int = Field(default=0, description="总 Endpoint 数量")
