@@ -2030,6 +2030,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         key_id = None  # Key ID（用于失败记录）
         mapped_model_result = None  # 映射后的目标模型名（用于 Usage 记录）
         response_metadata_result: Dict[str, Any] = {}  # Provider 响应元数据
+        needs_conversion = False  # 是否需要格式转换（由 candidate 决定）
 
         # 可变请求体容器：允许 orchestrator 在遇到 Thinking 签名错误时整流请求体后重试
         # 结构: {"body": 实际请求体, "_rectified": 是否已整流, "_rectified_this_turn": 本轮是否整流}
@@ -2041,7 +2042,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             key: ProviderAPIKey,
             candidate: ProviderCandidate,
         ) -> Dict[str, Any]:
-            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result
+            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result, needs_conversion
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
 

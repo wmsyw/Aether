@@ -900,6 +900,8 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                     "model": r.model,
                     "target_model": r.target_model,  # 映射后的目标模型名
                     "api_format": r.api_format,
+                    "endpoint_api_format": r.endpoint_api_format,
+                    "has_format_conversion": bool(r.has_format_conversion) if r.has_format_conversion is not None else False,
                     "input_tokens": r.input_tokens,
                     "output_tokens": r.output_tokens,
                     "total_tokens": r.total_tokens,
