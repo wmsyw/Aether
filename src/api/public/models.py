@@ -113,12 +113,13 @@ def _get_convertible_formats(client_format: str, global_conversion_enabled: bool
     获取客户端格式可转换到的所有目标格式列表
 
     当启用格式转换时，返回所有可以转换的格式；
-    否则只返回客户端格式本身。
+    否则只返回客户端格式本身（不包括同族的其他格式）。
     """
-    if not global_conversion_enabled:
-        return _get_formats_for_api(client_format)
-
     client_format_upper = client_format.upper()
+
+    # 格式转换关闭时，只返回客户端格式本身
+    if not global_conversion_enabled:
+        return [client_format_upper]
 
     # 收集所有可转换的格式
     register_default_normalizers()
@@ -137,7 +138,7 @@ def _get_convertible_formats(client_format: str, global_conversion_enabled: bool
         ):
             convertible_formats.append(target_format)
 
-    return convertible_formats if convertible_formats else _get_formats_for_api(client_format)
+    return convertible_formats if convertible_formats else [client_format_upper]
 
 
 def _flatten_provider_formats(provider_to_formats: dict[str, set[str]]) -> list[str]:
