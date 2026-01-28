@@ -197,6 +197,7 @@ class CliAdapterBase(ApiAdapter):
                     original_headers=original_headers,
                     query_params=query_params,
                     path_params=context.path_params,
+                    http_request=http_request,
                 )
             return await handler.process_sync(
                 original_request_body=original_request_body,

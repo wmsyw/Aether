@@ -22,14 +22,18 @@ Chat Handler Base - Chat API 格式的通用基类
 import asyncio
 import json
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Callable, Dict, Optional, Union
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Union
 
 import httpx
 from fastapi import BackgroundTasks, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from src.api.handlers.base.base_handler import BaseMessageHandler
+from src.api.handlers.base.base_handler import (
+    BaseMessageHandler,
+    ClientDisconnectedException,
+    wait_for_with_disconnect_detection,
+)
 from src.api.handlers.base.parsers import get_parser_for_format
 from src.api.handlers.base.request_builder import PassthroughRequestBuilder
 from src.api.handlers.base.response_parser import ResponseParser
@@ -499,6 +503,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 original_headers,
                 query_params,
                 candidate,
+                is_disconnected=http_request.is_disconnected,
             )
 
         try:
@@ -608,6 +613,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         original_headers: Dict[str, str],
         query_params: Optional[Dict[str, str]] = None,
         candidate: Optional[ProviderCandidate] = None,
+        is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> AsyncGenerator[bytes, None]:
         """执行流式请求并返回流生成器"""
         # 重置上下文状态（重试时清除之前的数据）
@@ -757,7 +763,29 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         try:
             # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
             # stream_first_byte_timeout 控制首字节超时，避免上游长时间无响应
-            await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
+            # 同时检测客户端断连，避免客户端已断开但服务端仍在等待上游响应
+            if is_disconnected is not None:
+                await wait_for_with_disconnect_detection(
+                    _connect_and_prefetch(),
+                    timeout=request_timeout,
+                    is_disconnected=is_disconnected,
+                    request_id=self.request_id,
+                )
+            else:
+                await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
+
+        except ClientDisconnectedException:
+            # 客户端断开连接，清理资源
+            if response_ctx is not None:
+                try:
+                    await response_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            await http_client.aclose()
+            logger.warning(f"  [{self.request_id}] 客户端在等待首字节时断开连接")
+            ctx.status_code = 499
+            ctx.error_message = "client_disconnected_during_prefetch"
+            raise
 
         except asyncio.TimeoutError:
             # 整体请求超时（建立连接 + 获取首字节）

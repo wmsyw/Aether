@@ -27,8 +27,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -322,8 +334,7 @@ class MessageHandlerProtocol(Protocol):
     """
     消息处理器协议 - 定义标准接口
 
-    ChatHandlerBase 使用完整签名（含 request, http_request）。
-    CliMessageHandlerBase 使用简化签名（仅 original_request_body, original_headers）。
+    ChatHandlerBase 和 CliMessageHandlerBase 均支持 http_request 参数用于客户端断连检测。
     """
 
     async def process_stream(
@@ -562,3 +573,79 @@ class BaseMessageHandler:
         else:
             # 未知异常：完整堆栈
             logger.exception(f"{message}: {error}")
+
+
+# ============================================================================
+# 客户端断连检测
+# ============================================================================
+
+
+class ClientDisconnectedException(Exception):
+    """客户端在等待首字节时断开连接"""
+
+    pass
+
+
+_T = TypeVar("_T")
+
+
+async def wait_for_with_disconnect_detection(
+    coro: Coroutine[Any, Any, _T],
+    timeout: float,
+    is_disconnected: Callable[[], Awaitable[bool]],
+    request_id: str,
+    check_interval: float = 0.5,
+) -> _T:
+    """
+    等待协程完成，同时检测客户端断连
+
+    在等待上游响应（如首字节）时，定期检测客户端是否已断连。
+    若检测到断连，取消任务并抛出 ClientDisconnectedException。
+
+    Args:
+        coro: 要等待的协程
+        timeout: 超时时间（秒）
+        is_disconnected: 异步断连检测函数（如 http_request.is_disconnected）
+        request_id: 请求 ID（用于日志）
+        check_interval: 断连检测间隔（秒），默认 0.5s
+
+    Returns:
+        协程的返回值
+
+    Raises:
+        ClientDisconnectedException: 客户端断连
+        asyncio.TimeoutError: 超时
+        asyncio.CancelledError: 任务被外部取消
+    """
+    task = asyncio.create_task(coro)
+    client_disconnected = False
+
+    async def check_client_disconnect() -> None:
+        nonlocal client_disconnected
+        while not task.done():
+            await asyncio.sleep(check_interval)
+            try:
+                if await is_disconnected():
+                    client_disconnected = True
+                    logger.debug(f"  [{request_id}] 检测到客户端断连，取消预取任务")
+                    task.cancel()
+                    break
+            except Exception as e:
+                logger.debug(f"  [{request_id}] 断连检测异常: {e}")
+
+    disconnect_task = asyncio.create_task(check_client_disconnect())
+
+    try:
+        return await asyncio.wait_for(task, timeout=timeout)
+
+    except asyncio.CancelledError:
+        if client_disconnected:
+            raise ClientDisconnectedException("Client disconnected during prefetch")
+        raise
+
+    finally:
+        disconnect_task.cancel()
+        try:
+            await disconnect_task
+        except asyncio.CancelledError:
+            pass

@@ -26,7 +26,7 @@ from typing import (
 )
 
 import httpx
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -35,7 +35,9 @@ if TYPE_CHECKING:
 
 from src.api.handlers.base.base_handler import (
     BaseMessageHandler,
+    ClientDisconnectedException,
     MessageTelemetry,
+    wait_for_with_disconnect_detection,
 )
 from src.api.handlers.base.parsers import get_parser_for_format
 from src.api.handlers.base.request_builder import PassthroughRequestBuilder
@@ -505,6 +507,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         original_headers: Dict[str, str],
         query_params: Optional[Dict[str, str]] = None,
         path_params: Optional[Dict[str, Any]] = None,
+        http_request: Optional[Request] = None,
     ) -> StreamingResponse:
         """
         处理流式请求
@@ -514,6 +517,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
         2. 定义请求函数（供 FallbackOrchestrator 调用）
         3. 执行请求并返回 StreamingResponse
         4. 后台任务记录统计信息
+
+        Args:
+            original_request_body: 原始请求体
+            original_headers: 原始请求头
+            query_params: 查询参数
+            path_params: 路径参数
+            http_request: FastAPI Request 对象，用于检测客户端断连
         """
         logger.debug(f"开始流式响应处理 ({self.FORMAT_ID})")
 
@@ -550,6 +560,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 original_headers,
                 query_params,
                 candidate,
+                http_request,  # 传递 http_request 用于断连检测
             )
 
         try:
@@ -600,8 +611,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 original_request_body,
             )
 
-            # 创建监控流
-            monitored_stream = self._create_monitored_stream(ctx, stream_generator)
+            # 创建监控流（传递 http_request 用于断连检测）
+            monitored_stream = self._create_monitored_stream(ctx, stream_generator, http_request)
 
             # 透传提供商的响应头给客户端
             # 同时添加必要的 SSE 头以确保流式传输正常工作
@@ -640,6 +651,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         original_headers: Dict[str, str],
         query_params: Optional[Dict[str, str]] = None,
         candidate: Optional[ProviderCandidate] = None,
+        http_request: Optional[Request] = None,
     ) -> AsyncGenerator[bytes, None]:
         """执行流式请求并返回流生成器"""
         # 重置上下文状态（重试时清除之前的数据，避免累积）
@@ -789,7 +801,16 @@ class CliMessageHandlerBase(BaseMessageHandler):
         try:
             # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
             # stream_first_byte_timeout 控制首字节超时，避免上游长时间无响应
-            await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
+            # 同时检测客户端断连，避免客户端已断开但服务端仍在等待上游响应
+            if http_request is not None:
+                await wait_for_with_disconnect_detection(
+                    _connect_and_prefetch(),
+                    timeout=request_timeout,
+                    is_disconnected=http_request.is_disconnected,
+                    request_id=self.request_id,
+                )
+            else:
+                await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
 
         except asyncio.TimeoutError:
             # 整体请求超时（建立连接 + 获取首字节）
@@ -807,6 +828,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 provider_name=str(provider.name),
                 timeout=int(request_timeout),
             )
+
+        except ClientDisconnectedException:
+            # 客户端断开连接，清理资源
+            if response_ctx is not None:
+                try:
+                    await response_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            await http_client.aclose()
+            logger.warning(f"  [{self.request_id}] 客户端在等待首字节时断开连接")
+            ctx.status_code = 499
+            ctx.error_message = "client_disconnected_during_prefetch"
+            raise
 
         except httpx.HTTPStatusError as e:
             error_text = await self._extract_error_text(e)
@@ -1692,17 +1726,74 @@ class CliMessageHandlerBase(BaseMessageHandler):
         self,
         ctx: StreamContext,
         stream_generator: AsyncGenerator[bytes, None],
+        http_request: Optional[Request] = None,
     ) -> AsyncGenerator[bytes, None]:
-        """创建带监控的流生成器"""
+        """
+        创建带监控的流生成器
+
+        支持两种断连检测方式：
+        1. 如果提供了 http_request，使用后台任务主动检测客户端断连
+        2. 如果未提供，仅依赖 asyncio.CancelledError 被动检测
+
+        Args:
+            ctx: 流上下文
+            stream_generator: 底层流生成器
+            http_request: FastAPI Request 对象，用于检测客户端断连
+        """
         import time as time_module
 
         last_chunk_time = time_module.time()
         chunk_count = 0
+
         try:
-            async for chunk in stream_generator:
-                last_chunk_time = time_module.time()
-                chunk_count += 1
-                yield chunk
+            if http_request is not None:
+                # 使用后台任务检测断连，完全不阻塞流式传输
+                disconnected = False
+
+                async def check_disconnect_background() -> None:
+                    nonlocal disconnected
+                    while not disconnected and not ctx.has_completion:
+                        await asyncio.sleep(0.5)
+                        try:
+                            if await http_request.is_disconnected():
+                                disconnected = True
+                                break
+                        except Exception as e:
+                            # 检测失败时不中断流，继续传输
+                            logger.debug(f"ID:{ctx.request_id} | 断连检测异常: {e}")
+
+                # 启动后台检查任务
+                check_task = asyncio.create_task(check_disconnect_background())
+
+                try:
+                    async for chunk in stream_generator:
+                        if disconnected:
+                            # 如果响应已完成，客户端断开不算失败
+                            if ctx.has_completion:
+                                logger.info(
+                                    f"ID:{ctx.request_id} | Client disconnected after completion"
+                                )
+                            else:
+                                logger.warning(f"ID:{ctx.request_id} | Client disconnected")
+                                ctx.status_code = 499
+                                ctx.error_message = "client_disconnected"
+                            break
+                        last_chunk_time = time_module.time()
+                        chunk_count += 1
+                        yield chunk
+                finally:
+                    check_task.cancel()
+                    try:
+                        await check_task
+                    except asyncio.CancelledError:
+                        pass
+            else:
+                # 无 http_request，仅被动监控
+                async for chunk in stream_generator:
+                    last_chunk_time = time_module.time()
+                    chunk_count += 1
+                    yield chunk
+
         except asyncio.CancelledError:
             # 计算距离上次收到 chunk 的时间
             time_since_last_chunk = time_module.time() - last_chunk_time
