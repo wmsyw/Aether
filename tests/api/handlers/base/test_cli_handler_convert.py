@@ -54,9 +54,10 @@ class MockCliHandler:
             return [line]
 
         # 初始化流式转换状态
+        # 使用客户端请求的模型名（ctx.model），而非映射后的模型名（ctx.mapped_model）
         if ctx.stream_conversion_state is None:
             ctx.stream_conversion_state = StreamState(
-                model=ctx.mapped_model or ctx.model,
+                model=ctx.model,
                 message_id=ctx.response_id or ctx.request_id,
             )
 
@@ -143,12 +144,16 @@ class TestConvertSseLineWithMockConverter:
         assert json.loads(result[0][6:]) == chunk
 
     def test_state_initialization(self) -> None:
-        """测试状态自动初始化"""
+        """测试状态自动初始化
+        
+        流式转换状态应使用用户请求的原始模型名（ctx.model），
+        而非映射后的模型名（ctx.mapped_model），确保返回给客户端的响应使用原始模型名。
+        """
         handler = MockCliHandler()
         ctx = StreamContext(model="gpt-4", api_format="OPENAI")
         ctx.provider_api_format = "OPENAI"
         ctx.client_api_format = "OPENAI"
-        ctx.mapped_model = "claude-3-5-sonnet"
+        ctx.mapped_model = "claude-3-5-sonnet"  # 映射后的模型名（发给上游的）
         ctx.request_id = "req_123"
 
         chunk = {"choices": [{"delta": {"content": "test"}}]}
@@ -156,9 +161,9 @@ class TestConvertSseLineWithMockConverter:
 
         handler._convert_sse_line(ctx, line, [])
 
-        # 验证状态已初始化
+        # 验证状态已初始化，使用用户请求的原始模型名
         assert ctx.stream_conversion_state is not None
-        assert ctx.stream_conversion_state.model == "claude-3-5-sonnet"
+        assert ctx.stream_conversion_state.model == "gpt-4"  # 应使用原始模型名，非 mapped_model
         assert ctx.stream_conversion_state.message_id == "req_123"
 
 

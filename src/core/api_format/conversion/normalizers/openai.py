@@ -281,13 +281,20 @@ class OpenAINormalizer(FormatNormalizer):
 
         return internal
 
-    def response_from_internal(self, internal: InternalResponse) -> Dict[str, Any]:
+    def response_from_internal(
+        self,
+        internal: InternalResponse,
+        *,
+        requested_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         # OpenAI Chat Completions response envelope
+        # 优先使用用户请求的原始模型名，回退到上游返回的模型名
+        model_name = requested_model if requested_model else internal.model
         out: Dict[str, Any] = {
             "id": internal.id or "chatcmpl-unknown",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": internal.model,
+            "model": model_name,
             "choices": [],
         }
 
@@ -452,7 +459,9 @@ class OpenAINormalizer(FormatNormalizer):
 
         if isinstance(event, MessageStartEvent):
             state.message_id = event.message_id or state.message_id
-            state.model = event.model or state.model
+            # 保留初始化时设置的 model（客户端请求的模型），仅在空时用事件值
+            if not state.model:
+                state.model = event.model or ""
             out.append(base_chunk({"role": "assistant"}))
             return out
 

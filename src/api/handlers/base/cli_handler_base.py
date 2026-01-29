@@ -2350,6 +2350,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         response_json,
                         provider_api_format,
                         api_format,
+                        requested_model=model,  # 使用用户请求的原始模型名
                     )
                     logger.debug(f"非流式响应格式转换完成: {provider_api_format} -> {api_format}")
                 except Exception as conv_err:

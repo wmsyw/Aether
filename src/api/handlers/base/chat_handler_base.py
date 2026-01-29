@@ -1104,6 +1104,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     response_json,
                     provider_api_format,
                     client_api_format,
+                    requested_model=model,  # 使用用户请求的原始模型名
                 )
 
             return response_json if isinstance(response_json, dict) else {}

@@ -107,6 +107,8 @@ class StreamProcessor:
         ctx: StreamContext,
         event_name: Optional[str],
         data_str: str,
+        *,
+        skip_record: bool = False,
     ) -> None:
         """
         处理单个 SSE 事件
@@ -117,6 +119,7 @@ class StreamProcessor:
             ctx: 流式上下文
             event_name: 事件名称
             data_str: 事件数据字符串
+            skip_record: 是否跳过记录到 parsed_chunks（当需要格式转换时应为 True）
         """
         if not data_str:
             return
@@ -130,13 +133,13 @@ class StreamProcessor:
         except json.JSONDecodeError:
             return
 
-        ctx.data_count += 1
-
         if not isinstance(data, dict):
             return
 
-        # 收集原始 chunk 数据
-        ctx.parsed_chunks.append(data)
+        # 收集原始 chunk 数据（当需要格式转换时跳过，由 _emit_converted_line 记录转换后的数据）
+        if not skip_record:
+            ctx.parsed_chunks.append(data)
+            ctx.data_count += 1
 
         # 根据 Provider 格式选择解析器
         parser = self.get_parser_for_provider(ctx)
@@ -557,7 +560,13 @@ class StreamProcessor:
 
                         skip_next_blank_line = True
                         out: list[bytes] = []
+
                         for evt in converted_events:
+                            # 记录转换后的数据到 parsed_chunks（这是客户端实际收到的格式）
+                            if isinstance(evt, dict):
+                                ctx.parsed_chunks.append(evt)
+                                ctx.data_count += 1
+
                             # 统一使用 SSE 格式输出（Gemini streamGenerateContent 也使用 SSE）
                             # 参考: https://ai.google.dev/api/generate-content
                             out.append(
@@ -580,7 +589,8 @@ class StreamProcessor:
                                 line = ""
 
                             if line:
-                                self._process_line(ctx, sse_parser, line)
+                                # 需要格式转换时，跳过记录原始数据（由 _emit_converted_line 记录转换后的数据）
+                                self._process_line(ctx, sse_parser, line, skip_record=True)
                             normalized_line = line.rstrip("\r\n") if line else ""
                             out_chunks = _emit_converted_line(normalized_line)
                             if not out_chunks:
@@ -613,7 +623,8 @@ class StreamProcessor:
                             line = ""
 
                         if line:
-                            self._process_line(ctx, sse_parser, line)
+                            # 需要格式转换时，跳过记录原始数据（由 _emit_converted_line 记录转换后的数据）
+                            self._process_line(ctx, sse_parser, line, skip_record=True)
                         normalized_line = line.rstrip("\r\n") if line else ""
                         out_chunks = _emit_converted_line(normalized_line)
                         if not out_chunks:
@@ -642,7 +653,8 @@ class StreamProcessor:
                         )
                         line = ""
                     if line:
-                        self._process_line(ctx, sse_parser, line)
+                        # 需要格式转换时，跳过记录原始数据
+                        self._process_line(ctx, sse_parser, line, skip_record=True)
                         normalized_line = line.rstrip("\r\n")
                         out_chunks = _emit_converted_line(normalized_line)
                         for out in out_chunks:
@@ -729,6 +741,8 @@ class StreamProcessor:
         ctx: StreamContext,
         sse_parser: SSEEventParser,
         line: str,
+        *,
+        skip_record: bool = False,
     ) -> None:
         """
         处理单行数据
@@ -737,6 +751,7 @@ class StreamProcessor:
             ctx: 流式上下文
             sse_parser: SSE 解析器
             line: 原始行数据
+            skip_record: 是否跳过记录到 parsed_chunks（当需要格式转换时应为 True）
         """
         # SSEEventParser 以"去掉换行符"的单行文本作为输入；这里统一剔除 CR/LF，
         # 避免把空行误判成 "\n" 并导致事件边界解析错误。
@@ -747,7 +762,9 @@ class StreamProcessor:
             ctx.chunk_count += 1
 
         for event in events:
-            self.handle_sse_event(ctx, event.get("event"), event.get("data") or "")
+            self.handle_sse_event(
+                ctx, event.get("event"), event.get("data") or "", skip_record=skip_record
+            )
 
     async def create_monitored_stream(
         self,

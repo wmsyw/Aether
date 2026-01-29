@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .internal import FormatCapabilities, InternalError, InternalRequest, InternalResponse
 from .stream_events import InternalStreamEvent
@@ -41,8 +41,20 @@ class FormatNormalizer(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def response_from_internal(self, internal: InternalResponse) -> Dict[str, Any]:
-        """将内部表示转换为格式特定响应"""
+    def response_from_internal(
+        self,
+        internal: InternalResponse,
+        *,
+        requested_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """将内部表示转换为格式特定响应
+
+        Args:
+            internal: 内部响应表示
+            requested_model: 用户请求的原始模型名（可选）。
+                            如果提供，响应中的 model 字段将使用此值，
+                            而不是上游返回的映射后模型名。
+        """
         raise NotImplementedError
 
     # ============ 流式转换（可选） ============

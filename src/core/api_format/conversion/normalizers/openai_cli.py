@@ -187,7 +187,12 @@ class OpenAICliNormalizer(FormatNormalizer):
             extra=extra,
         )
 
-    def response_from_internal(self, internal: InternalResponse) -> Dict[str, Any]:
+    def response_from_internal(
+        self,
+        internal: InternalResponse,
+        *,
+        requested_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         text = self._collapse_internal_text(internal.content)
 
         output_message = {
@@ -204,11 +209,14 @@ class OpenAICliNormalizer(FormatNormalizer):
             "total_tokens": usage.total_tokens or (usage.input_tokens + usage.output_tokens),
         }
 
+        # 优先使用用户请求的原始模型名，回退到上游返回的模型名
+        model_name = requested_model if requested_model else (internal.model or "")
+
         return {
             "id": internal.id or "resp",
             "object": "response",
             "created": int(time.time()),
-            "model": internal.model or "",
+            "model": model_name,
             "status": "completed",
             "output": [output_message],
             "usage": usage_obj,
@@ -241,10 +249,12 @@ class OpenAICliNormalizer(FormatNormalizer):
             resp_obj = chunk.get("response")
             resp_obj = resp_obj if isinstance(resp_obj, dict) else {}
             msg_id = str(resp_obj.get("id") or chunk.get("id") or state.message_id or "")
-            model = str(resp_obj.get("model") or chunk.get("model") or state.model or "")
+            # 保留初始化时设置的 model（客户端请求的模型），仅在空时用上游值
+            model = state.model or str(resp_obj.get("model") or chunk.get("model") or "")
             if msg_id or model or etype:
                 state.message_id = msg_id
-                state.model = model
+                if not state.model:
+                    state.model = model
                 ss["message_started"] = True
                 ss.setdefault("text_block_started", False)
                 ss.setdefault("text_block_stopped", False)
@@ -301,11 +311,13 @@ class OpenAICliNormalizer(FormatNormalizer):
         # response.in_progress：状态更新，不产生内容事件
         if etype == "response.in_progress":
             # 更新 state 中的元数据（如果有）
+            # 注意：model 保持初始值（客户端请求的模型），不被上游覆盖
             resp_obj = chunk.get("response")
             if isinstance(resp_obj, dict):
                 if resp_obj.get("id"):
                     state.message_id = str(resp_obj.get("id"))
-                if resp_obj.get("model"):
+                # 仅在 model 为空时才用上游值
+                if not state.model and resp_obj.get("model"):
                     state.model = str(resp_obj.get("model"))
             return []
 
@@ -390,7 +402,9 @@ class OpenAICliNormalizer(FormatNormalizer):
 
         if isinstance(event, MessageStartEvent):
             state.message_id = event.message_id or state.message_id or "resp_stream"
-            state.model = event.model or state.model or ""
+            # 保留初始化时设置的 model（客户端请求的模型），仅在空时用事件值
+            if not state.model:
+                state.model = event.model or ""
             ss.setdefault("collected_text", "")
             out.append(
                 event_block(

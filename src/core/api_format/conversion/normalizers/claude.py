@@ -241,7 +241,12 @@ class ClaudeNormalizer(FormatNormalizer):
 
         return internal
 
-    def response_from_internal(self, internal: InternalResponse) -> Dict[str, Any]:
+    def response_from_internal(
+        self,
+        internal: InternalResponse,
+        *,
+        requested_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         cid = internal.id or "unknown"
         if not cid.startswith("msg_"):
             cid = f"msg_{cid}"
@@ -294,11 +299,14 @@ class ClaudeNormalizer(FormatNormalizer):
             if internal.usage.cache_write_tokens:
                 usage["cache_creation_input_tokens"] = int(internal.usage.cache_write_tokens)
 
+        # 优先使用用户请求的原始模型名，回退到上游返回的模型名
+        model_name = requested_model if requested_model else internal.model
+
         return {
             "id": cid,
             "type": "message",
             "role": "assistant",
-            "model": internal.model,
+            "model": model_name,
             "content": content,
             "stop_reason": stop_reason,
             "stop_sequence": None,
@@ -329,9 +337,11 @@ class ClaudeNormalizer(FormatNormalizer):
             message_raw = chunk.get("message")
             message: Dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
             msg_id = str(message.get("id") or "")
-            model = str(message.get("model") or "")
+            # 保留初始化时设置的 model（客户端请求的模型），仅在空时用上游值
+            model = state.model or str(message.get("model") or "")
             state.message_id = msg_id or state.message_id
-            state.model = model or state.model
+            if not state.model:
+                state.model = model
             ss["message_started"] = True
             ss.setdefault("block_index_to_tool_id", {})
             events.append(MessageStartEvent(message_id=msg_id, model=model))
@@ -440,7 +450,9 @@ class ClaudeNormalizer(FormatNormalizer):
 
         if isinstance(event, MessageStartEvent):
             state.message_id = event.message_id or state.message_id
-            state.model = event.model or state.model
+            # 保留初始化时设置的 model（客户端请求的模型），仅在空时用事件值
+            if not state.model:
+                state.model = event.model or ""
             ss.setdefault("block_index_to_tool_id", {})
             message_obj: Dict[str, Any] = {
                 "id": state.message_id or "msg_stream",

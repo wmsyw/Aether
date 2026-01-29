@@ -88,8 +88,28 @@ class FormatConversionRegistry:
         response: Dict[str, Any],
         source_format: str,
         target_format: str,
+        *,
+        requested_model: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """转换响应格式
+
+        Args:
+            response: 原始响应
+            source_format: 源格式
+            target_format: 目标格式
+            requested_model: 用户请求的原始模型名（可选）。
+                            如果提供，响应中的 model 字段将使用此值，
+                            而不是上游返回的映射后模型名。
+        """
         if str(source_format).upper() == str(target_format).upper():
+            # 即使格式相同，也需要替换 model 字段
+            if requested_model and isinstance(response, dict):
+                response = dict(response)  # 避免修改原始响应
+                # 支持不同格式的 model 字段名
+                if "model" in response:
+                    response["model"] = requested_model
+                elif "modelVersion" in response:
+                    response["modelVersion"] = requested_model
             return response
 
         src = self._require_normalizer(source_format)
@@ -98,7 +118,7 @@ class FormatConversionRegistry:
         with _track_conversion_metrics("response", str(source_format).upper(), str(target_format).upper()):
             try:
                 internal = src.response_to_internal(response)
-                return tgt.response_from_internal(internal)
+                return tgt.response_from_internal(internal, requested_model=requested_model)
             except Exception as e:
                 raise FormatConversionError(source_format, target_format, str(e)) from e
 
@@ -151,6 +171,12 @@ class FormatConversionRegistry:
             )
 
         if state is None:
+            # 调用方应提供预初始化的 state（包含 model/message_id），
+            # 这里仅作为防御性回退，可能导致响应中 model 字段为空
+            logger.debug(
+                f"convert_stream_chunk: state is None, creating empty StreamState "
+                f"(source={source_format}, target={target_format})"
+            )
             state = StreamState()
 
         with _track_conversion_metrics("stream", str(source_format).upper(), str(target_format).upper()):
