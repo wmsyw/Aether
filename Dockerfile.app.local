@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # 运行镜像：从 base 提取产物到精简运行时（国内镜像源版本）
 # 构建命令: docker build -f Dockerfile.app.local -t aether-app:latest .
 # 用于本地/国内服务器部署
@@ -14,14 +15,15 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-# 运行时依赖（使用清华镜像源）
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources && \
-    apt-get update && apt-get install -y \
+# 运行时依赖（使用清华镜像源 + BuildKit 缓存加速）
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     supervisor \
     libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    curl
 
 # 从 base 镜像复制 Python 包
 COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages

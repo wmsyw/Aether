@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # 运行镜像：从 base 提取产物到精简运行时
 # 构建命令: docker build -f Dockerfile.app -t aether-app:latest .
 # 用于 GitHub Actions CI（官方源）
@@ -9,13 +10,14 @@ RUN cd frontend && npm run build
 # ==================== 运行时镜像 ====================
 FROM python:3.14-slim
 WORKDIR /app
-# 运行时依赖（无 gcc/nodejs/npm）
-RUN apt-get update && apt-get install -y \
+# 运行时依赖（无 gcc/nodejs/npm，使用 BuildKit 缓存加速）
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     supervisor \
     libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    curl
 # 从 base 镜像复制 Python 包
 COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 # 只复制需要的 Python 可执行文件
