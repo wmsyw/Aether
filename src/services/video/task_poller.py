@@ -6,14 +6,19 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from src.api.handlers.base.request_builder import ProviderAuthInfo, get_provider_auth
-from src.api.handlers.base.video_handler_base import sanitize_error_message
+from src.api.handlers.base.video_handler_base import (
+    normalize_gemini_operation_id,
+    sanitize_error_message,
+)
 from src.clients.http_client import HTTPClientPool
 from src.clients.redis_client import get_redis_client
+from src.config.settings import config
 from src.core.api_format import APIFormat, build_upstream_headers, get_extra_headers_from_endpoint
 from src.core.api_format.conversion.internal_video import InternalVideoPollResult, VideoStatus
 from src.core.api_format.conversion.normalizers.gemini import GeminiNormalizer
@@ -21,8 +26,12 @@ from src.core.api_format.conversion.normalizers.openai import OpenAINormalizer
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.database import create_session
-from src.models.database import ProviderAPIKey, ProviderEndpoint, VideoTask
+from src.models.database import ApiKey, Provider, ProviderAPIKey, ProviderEndpoint, User, VideoTask
+from src.services.billing.dimension_collector_service import DimensionCollectorService
+from src.services.billing.formula_engine import BillingIncompleteError, FormulaEngine
+from src.services.billing.rule_service import BillingRuleService
 from src.services.system.scheduler import get_scheduler
+from src.services.usage.service import UsageService
 
 # 永久性错误指示词（用于降级判断，不应重试）
 _PERMANENT_ERROR_INDICATORS = frozenset(
@@ -53,7 +62,6 @@ class VideoTaskPollerService:
 
     LOCK_KEY = "video_task_poller:lock"
     LOCK_TTL = 60
-    BATCH_SIZE = 50
     MAX_BACKOFF_SECONDS = 300
     # 连续失败告警阈值
     CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 5
@@ -63,17 +71,26 @@ class VideoTaskPollerService:
         self.redis = None
         self._openai_normalizer = OpenAINormalizer()
         self._gemini_normalizer = GeminiNormalizer()
+        self._formula_engine = FormulaEngine()
         # 追踪连续失败次数（用于告警）
         self._consecutive_failures = 0
+        # 从配置读取参数
+        self._batch_size = config.video_poll_batch_size
+        self._concurrency = config.video_poll_concurrency
+        # Semaphore 延迟初始化，避免在事件循环外创建
+        self._semaphore: asyncio.Semaphore | None = None
 
     async def start(self) -> None:
+        # 在事件循环内初始化 Semaphore
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._concurrency)
         if self.redis is None:
             self.redis = await get_redis_client(require_redis=False)
 
         scheduler = get_scheduler()
         scheduler.add_interval_job(
             self.poll_pending_tasks,
-            seconds=10,
+            seconds=config.video_poll_interval_seconds,
             job_id="video_task_poller",
             name="视频任务轮询",
         )
@@ -106,7 +123,7 @@ class VideoTaskPollerService:
                             VideoTask.poll_count < VideoTask.max_poll_count,
                         )
                         .order_by(VideoTask.next_poll_at.asc())
-                        .limit(self.BATCH_SIZE)
+                        .limit(self._batch_size)
                         .all()
                     )
 
@@ -115,32 +132,55 @@ class VideoTaskPollerService:
                         self._consecutive_failures = 0
                         return
 
-                    batch_failures = 0
-                    for task in tasks:
+                    # 提取任务 ID 列表，释放查询 session 后逐个轮询
+                    task_ids = [t.id for t in tasks]
+
+                # 并发轮询：每个任务使用独立 session，避免共享 session 的并发风险
+                poll_results: list[bool] = []
+
+                # 确保 semaphore 已初始化（在 start 中初始化，此处防御性检查）
+                if self._semaphore is None:
+                    self._semaphore = asyncio.Semaphore(self._concurrency)
+                semaphore = self._semaphore
+
+                async def poll_with_semaphore(task_id: str) -> None:
+                    """带信号量的轮询，结果写入 poll_results"""
+                    async with semaphore:
                         try:
-                            await self._poll_single_task(db, task)
+                            with create_session() as task_db:
+                                task_obj = task_db.query(VideoTask).get(task_id)
+                                if not task_obj:
+                                    logger.warning("Task %s disappeared during poll", task_id)
+                                    poll_results.append(True)
+                                    return
+                                await self._poll_single_task(task_db, task_obj)
+                                task_db.commit()
+                            poll_results.append(True)
                         except Exception as exc:
-                            batch_failures += 1
-                            # 单个任务失败不影响其他任务处理
                             logger.exception(
                                 "Unexpected error polling task %s: %s",
-                                task.id,
+                                task_id,
                                 sanitize_error_message(str(exc)),
                             )
+                            poll_results.append(False)
 
-                    # 更新连续失败计数并检查告警阈值
-                    if batch_failures == len(tasks):
-                        self._consecutive_failures += 1
-                        if self._consecutive_failures >= self.CONSECUTIVE_FAILURE_ALERT_THRESHOLD:
-                            logger.error(
-                                "[ALERT] Video task poller: %d consecutive batches failed. "
-                                "Provider connectivity or configuration issue suspected.",
-                                self._consecutive_failures,
-                            )
-                    else:
-                        self._consecutive_failures = 0
+                async with asyncio.TaskGroup() as tg:
+                    for tid in task_ids:
+                        tg.create_task(poll_with_semaphore(tid))
 
-                    db.commit()
+                batch_failures = sum(1 for r in poll_results if r is False)
+
+                # 更新连续失败计数并检查告警阈值
+                if batch_failures == len(task_ids):
+                    self._consecutive_failures += 1
+                    if self._consecutive_failures >= self.CONSECUTIVE_FAILURE_ALERT_THRESHOLD:
+                        logger.error(
+                            "[ALERT] Video task poller: %d consecutive batches failed. "
+                            "Provider connectivity or configuration issue suspected.",
+                            self._consecutive_failures,
+                        )
+                else:
+                    self._consecutive_failures = 0
             finally:
                 await self._release_redis_lock(token)
 
@@ -156,11 +196,14 @@ class VideoTaskPollerService:
                 # 存储多视频 URL（Gemini sampleCount > 1 时）
                 if result.video_urls:
                     task.video_urls = result.video_urls
+                # 保存上游原始响应（用于审计/重算）
+                self._attach_poll_raw_response(task, result)
             elif result.status == VideoStatus.FAILED:
                 task.status = VideoStatus.FAILED.value
                 task.error_code = result.error_code
                 task.error_message = result.error_message
                 task.completed_at = datetime.now(timezone.utc)
+                self._attach_poll_raw_response(task, result)
             else:
                 task.poll_count += 1
                 task.progress_percent = result.progress_percent
@@ -201,6 +244,308 @@ class VideoTaskPollerService:
             task.error_code = "poll_timeout"
             task.error_message = f"Task timed out after {task.poll_count} polls"
             task.completed_at = datetime.now(timezone.utc)
+
+        # 终态写入 Usage（复用外层 per-task session）
+        if task.status in (VideoStatus.COMPLETED.value, VideoStatus.FAILED.value):
+            try:
+                await self._record_terminal_usage(db, task)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to record video usage for task=%s: %s",
+                    task.id,
+                    sanitize_error_message(str(exc)),
+                )
+
+    def _attach_poll_raw_response(self, task: VideoTask, result: InternalVideoPollResult) -> None:
+        if not result.raw_response:
+            return
+        if task.request_metadata is None:
+            task.request_metadata = {}
+        # 仅在终态写一次，避免污染 request_metadata
+        task.request_metadata["poll_raw_response"] = result.raw_response
+
+    async def _record_terminal_usage(self, db: Session, task: VideoTask) -> None:
+        """
+        为视频任务终态写入 Usage：
+        - COMPLETED: 使用 FormulaEngine 计算 cost（或 no_rule / incomplete -> cost=0）
+        - FAILED: cost=0
+        """
+        request_id = None
+        if isinstance(task.request_metadata, dict):
+            request_id = task.request_metadata.get("request_id")
+        request_id = request_id or task.id
+
+        # 计算异步任务总耗时（ms）
+        response_time_ms = None
+        if task.submitted_at and task.completed_at:
+            delta = task.completed_at - task.submitted_at
+            response_time_ms = int(delta.total_seconds() * 1000)
+
+        # 基础维度（无需 collectors 也可计费）
+        base_dimensions: dict[str, Any] = {
+            "duration_seconds": task.duration_seconds,
+            "resolution": task.resolution,
+            "aspect_ratio": task.aspect_ratio,
+            "size": task.size or "",
+            "retry_count": task.retry_count,
+        }
+
+        # collectors 可用的 metadata（结构稳定，便于配置 path）
+        collector_metadata: dict[str, Any] = {
+            "task": {
+                "id": task.id,
+                "external_task_id": task.external_task_id,
+                "model": task.model,
+                "duration_seconds": task.duration_seconds,
+                "resolution": task.resolution,
+                "aspect_ratio": task.aspect_ratio,
+                "size": task.size,
+                "retry_count": task.retry_count,
+                "video_size_bytes": task.video_size_bytes,
+            },
+            "result": {
+                "video_url": task.video_url,
+                "video_urls": task.video_urls or [],
+            },
+        }
+
+        # 维度采集：base + collectors 覆盖/补全
+        dims = DimensionCollectorService(db).collect_dimensions(
+            api_format=task.provider_api_format,
+            task_type="video",
+            request=task.original_request_body or {},
+            response=(
+                (task.request_metadata or {}).get("poll_raw_response")
+                if isinstance(task.request_metadata, dict)
+                else None
+            ),
+            metadata=collector_metadata,
+            base_dimensions=base_dimensions,
+        )
+
+        # 取冻结的 rule_snapshot；若缺失则回退 DB 查找（兼容旧任务）
+        rule_snapshot = None
+        if isinstance(task.request_metadata, dict):
+            rule_snapshot = task.request_metadata.get("billing_rule_snapshot")
+
+        # 构建 billing_snapshot（写入 Usage.request_metadata）
+        billing_snapshot: dict[str, Any] = {
+            "status": "complete",
+            "missing_required": [],
+            "strict_mode": config.billing_strict_mode,
+        }
+        cost = 0.0
+
+        if task.status == VideoStatus.FAILED.value:
+            billing_snapshot["billed_reason"] = "task_failed"
+        else:
+            # COMPLETED：计算成本
+            expression = None
+            variables = None
+            dimension_mappings = None
+            rule_id = None
+            rule_name = None
+            rule_scope = None
+
+            if isinstance(rule_snapshot, dict) and rule_snapshot.get("status") == "ok":
+                rule_id = rule_snapshot.get("rule_id")
+                rule_name = rule_snapshot.get("rule_name")
+                rule_scope = rule_snapshot.get("scope")
+                expression = rule_snapshot.get("expression")
+                variables = rule_snapshot.get("variables")
+                dimension_mappings = rule_snapshot.get("dimension_mappings")
+            else:
+                lookup = BillingRuleService.find_rule(
+                    db,
+                    provider_id=task.provider_id,
+                    model_name=task.model,
+                    task_type="video",
+                )
+                if lookup:
+                    rule = lookup.rule
+                    rule_id = rule.id
+                    rule_name = rule.name
+                    rule_scope = lookup.scope
+                    expression = rule.expression
+                    variables = rule.variables
+                    dimension_mappings = rule.dimension_mappings
+
+            if not expression:
+                billing_snapshot["status"] = "no_rule"
+                billing_snapshot["cost_breakdown"] = {"total": 0.0}
+                logger.warning(
+                    "No billing rule for video task (request_id=%s, model=%s, provider_id=%s)",
+                    request_id,
+                    task.model,
+                    task.provider_id,
+                )
+            else:
+                billing_snapshot.update(
+                    {
+                        "rule_id": rule_id,
+                        "rule_name": rule_name,
+                        "rule_scope": rule_scope,
+                        "expression": expression,
+                        "variables": variables or {},
+                    }
+                )
+                try:
+                    result = self._formula_engine.evaluate(
+                        expression=expression,
+                        variables=variables or {},
+                        dimensions=dims,
+                        dimension_mappings=dimension_mappings or {},
+                        strict_mode=config.billing_strict_mode,
+                    )
+                    billing_snapshot["status"] = result.status
+                    billing_snapshot["missing_required"] = result.missing_required
+                    billing_snapshot["resolved_values"] = result.resolved_values
+                    if result.status == "complete":
+                        cost = result.cost
+                    else:
+                        logger.error(
+                            "Billing incomplete due to missing required dimensions "
+                            "(request_id=%s, model=%s, missing=%s)",
+                            request_id,
+                            task.model,
+                            result.missing_required,
+                        )
+                        cost = 0.0
+                        await self._maybe_alert_missing_required(
+                            model=task.model,
+                            missing_required=result.missing_required,
+                        )
+                    if result.error:
+                        billing_snapshot["error"] = result.error
+                except BillingIncompleteError as exc:
+                    logger.error(
+                        "Billing strict mode triggered (request_id=%s, model=%s, missing=%s)",
+                        request_id,
+                        task.model,
+                        exc.missing_required,
+                    )
+                    billing_snapshot["status"] = "incomplete"
+                    billing_snapshot["missing_required"] = exc.missing_required
+                    billing_snapshot["resolved_values"] = {}
+                    billing_snapshot["error"] = "strict_mode_missing_required"
+                    cost = 0.0
+
+                    # strict_mode=true：标记任务失败并隐藏产物，避免"免费放行"
+                    task.status = VideoStatus.FAILED.value
+                    task.error_code = "billing_incomplete"
+                    task.error_message = f"Missing required dimensions: {exc.missing_required}"
+                    task.video_url = None
+                    task.video_urls = None
+
+                    await self._maybe_alert_missing_required(
+                        model=task.model,
+                        missing_required=exc.missing_required,
+                    )
+
+                billing_snapshot["cost_breakdown"] = {"total": cost}
+
+        # Usage 元数据（包含 snapshot + dimensions + raw_response_ref）
+        usage_metadata: dict[str, Any] = {
+            "billing_snapshot": billing_snapshot,
+            "dimensions": dims,
+            "raw_response_ref": {
+                "video_task_id": task.id,
+                "field": "video_tasks.request_metadata.poll_raw_response",
+            },
+        }
+
+        # 查询关联对象（用于写入 usage.user_id/api_key_id 等）
+        user_obj = db.query(User).filter(User.id == task.user_id).first()
+        api_key_obj = (
+            db.query(ApiKey).filter(ApiKey.id == task.api_key_id).first()
+            if task.api_key_id
+            else None
+        )
+        provider_obj = (
+            db.query(Provider).filter(Provider.id == task.provider_id).first()
+            if task.provider_id
+            else None
+        )
+        provider_name = provider_obj.name if provider_obj else "unknown"
+
+        await UsageService.record_usage_with_custom_cost(
+            db=db,
+            user=user_obj,
+            api_key=api_key_obj,
+            provider=provider_name,
+            model=task.model,
+            request_type="video",
+            total_cost_usd=cost,
+            request_cost_usd=cost,
+            input_tokens=0,
+            output_tokens=0,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+            api_format=task.client_api_format,
+            endpoint_api_format=task.provider_api_format,
+            has_format_conversion=bool(task.format_converted),
+            is_stream=False,
+            response_time_ms=response_time_ms,
+            first_byte_time_ms=None,
+            status_code=200 if task.status == VideoStatus.COMPLETED.value else 500,
+            error_message=(
+                None
+                if task.status == VideoStatus.COMPLETED.value
+                else (task.error_message or task.error_code or "video_task_failed")
+            ),
+            metadata=usage_metadata,
+            request_headers=(
+                (task.request_metadata or {}).get("request_headers")
+                if isinstance(task.request_metadata, dict)
+                else None
+            ),
+            request_body=task.original_request_body,
+            provider_request_headers=None,
+            response_headers=None,
+            client_response_headers=None,
+            response_body=None,
+            request_id=request_id,
+            provider_id=task.provider_id,
+            provider_endpoint_id=task.endpoint_id,
+            provider_api_key_id=task.key_id,
+            status="completed" if task.status == VideoStatus.COMPLETED.value else "failed",
+            target_model=None,
+        )
+
+    async def _maybe_alert_missing_required(
+        self, *, model: str, missing_required: list[str]
+    ) -> None:
+        """required 维度缺失告警：同一 (model, dimension) 1 小时内 >= 10 次触发升级告警。"""
+        if not missing_required:
+            return
+        if not self.redis:
+            # Redis 不可用：降级为日志
+            logger.error(
+                "Missing required billing dimensions (model=%s): %s", model, missing_required
+            )
+            return
+
+        # 按小时 bucket 聚合
+        now = datetime.now(timezone.utc)
+        hour_bucket = now.strftime("%Y%m%d%H")
+        for dim in missing_required:
+            key = f"billing:missing_required:{model}:{dim}:{hour_bucket}"
+            try:
+                count = await self.redis.incr(key)
+                # TTL 略大于 1h，避免边界抖动
+                if count == 1:
+                    await self.redis.expire(key, 3700)
+                if count >= 10:
+                    logger.warning(
+                        "Billing required dimension missing frequently (model=%s, dim=%s, count=%s/hour)",
+                        model,
+                        dim,
+                        count,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to record billing alert counter: %s", sanitize_error_message(str(exc))
+                )
 
     def _is_permanent_error(self, exc: Exception, status_code: int | None = None) -> bool:
         """判断是否为永久性错误（不应重试）"""
@@ -282,9 +627,7 @@ class VideoTaskPollerService:
                 error_code="missing_external_task_id",
                 error_message="Task missing external_task_id",
             )
-        operation_name = task.external_task_id
-        if not operation_name.startswith("operations/"):
-            operation_name = f"operations/{operation_name}"
+        operation_name = normalize_gemini_operation_id(task.external_task_id)
         url = self._build_gemini_url(endpoint.base_url, operation_name)
         headers = self._build_headers(APIFormat.GEMINI, upstream_key, endpoint, auth_info)
 

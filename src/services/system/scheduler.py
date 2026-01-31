@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
 import os
 from datetime import datetime
+from typing import Any, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -176,6 +176,19 @@ class TaskScheduler:
                     f"  - {job.name}: 下次执行 {next_run.strftime('%Y-%m-%d %H:%M')} "
                     f"({hours}小时{minutes}分钟后)"
                 )
+
+    def remove_job(self, job_id: str) -> None:
+        """
+        移除指定的定时任务
+
+        Args:
+            job_id: 任务ID
+        """
+        try:
+            self.scheduler.remove_job(job_id)
+            logger.info(f"已移除定时任务: {job_id}")
+        except Exception as e:
+            logger.warning(f"移除定时任务失败 {job_id}: {e}")
 
     @property
     def is_running(self) -> bool:

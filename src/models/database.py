@@ -28,6 +28,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
@@ -1097,6 +1098,122 @@ class Model(Base):
         return names
 
 
+class BillingRule(Base):
+    """计费规则表（单条 formula 规则，支持 Model 覆盖 GlobalModel）。"""
+
+    __tablename__ = "billing_rules"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # 规则关联（两者必有其一）
+    global_model_id = Column(
+        String(36), ForeignKey("global_models.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    model_id = Column(
+        String(36), ForeignKey("models.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    name = Column(String(100), nullable=False)
+    # 注：CLI 在计费域里恒等于 chat，不单独存 "cli"
+    task_type = Column(String(20), nullable=False, default="chat")
+
+    # Formula 表达式及其配置
+    expression = Column(Text, nullable=False)
+    variables = Column(JSONB, nullable=False, default=dict)
+    dimension_mappings = Column(JSONB, nullable=False, default=dict)
+
+    is_enabled = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    global_model = relationship("GlobalModel", foreign_keys=[global_model_id])
+    model = relationship("Model", foreign_keys=[model_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "(global_model_id IS NOT NULL AND model_id IS NULL) OR "
+            "(global_model_id IS NULL AND model_id IS NOT NULL)",
+            name="chk_billing_rules_model_ref",
+        ),
+        # 同级同 task_type 只允许一条启用规则（partial unique index）
+        Index(
+            "uq_billing_rules_global_model_task",
+            "global_model_id",
+            "task_type",
+            unique=True,
+            postgresql_where=text("is_enabled = TRUE AND global_model_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_billing_rules_model_task",
+            "model_id",
+            "task_type",
+            unique=True,
+            postgresql_where=text("is_enabled = TRUE AND model_id IS NOT NULL"),
+        ),
+    )
+
+
+class DimensionCollector(Base):
+    """维度收集器配置表（从请求/响应/元数据/派生计算收集维度）。"""
+
+    __tablename__ = "dimension_collectors"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    api_format = Column(String(50), nullable=False)
+    task_type = Column(String(20), nullable=False)
+    dimension_name = Column(String(100), nullable=False)
+
+    # 来源配置
+    # - response / request / metadata / computed
+    source_type = Column(String(20), nullable=False)
+    source_path = Column(String(200), nullable=True)  # computed 允许为空
+
+    # 值类型与转换
+    value_type = Column(String(20), nullable=False, default="float")  # float/int/string
+    transform_expression = Column(Text, nullable=True)  # computed 时为派生公式
+    default_value = Column(String(100), nullable=True)
+
+    priority = Column(Integer, nullable=False, default=0)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(source_type = 'computed' AND source_path IS NULL AND transform_expression IS NOT NULL) OR "
+            "(source_type != 'computed' AND source_path IS NOT NULL)",
+            name="chk_dimension_collectors_source_config",
+        ),
+        # 同维度 + 同优先级 + enabled 才唯一（允许禁用旧配置后重建）
+        Index(
+            "uq_dimension_collectors_enabled",
+            "api_format",
+            "task_type",
+            "dimension_name",
+            "priority",
+            unique=True,
+            postgresql_where=text("is_enabled = TRUE"),
+        ),
+    )
+
+
 class ProviderAPIKey(Base):
     """Provider API密钥表 - 直接归属于 Provider，支持多种 API 格式"""
 
@@ -1289,6 +1406,16 @@ class VideoTask(Base):
     remixed_from_task_id = Column(
         String(36), ForeignKey("video_tasks.id", ondelete="SET NULL"), nullable=True
     )
+
+    # 使用追踪（候选 key、请求头等）
+    request_metadata = Column(JSON, nullable=True)  # 存储候选 key 列表、请求头等追踪信息
+    # 示例: {
+    #   "candidate_keys": [{"key_id": "xxx", "endpoint_id": "yyy", "priority": 1}, ...],
+    #   "selected_key_index": 0,
+    #   "client_ip": "1.2.3.4",
+    #   "user_agent": "...",
+    #   "request_headers": {...}
+    # }
 
     # 时间戳
     created_at = Column(

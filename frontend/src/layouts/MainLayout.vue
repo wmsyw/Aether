@@ -365,6 +365,7 @@ import {
   X,
   Mail,
   Puzzle,
+  Video,
   type LucideIcon,
 } from 'lucide-vue-next'
 
@@ -530,6 +531,7 @@ const navigation = computed(() => {
         { name: '模型管理', href: '/admin/models', icon: Layers },
         { name: '独立密钥', href: '/admin/keys', icon: Key },
         { name: '访问令牌', href: '/admin/management-tokens', icon: KeyRound },
+        { name: '视频任务', href: '/admin/video-tasks', icon: Video },
         { name: '使用记录', href: '/admin/usage', icon: BarChart3 },
       ]
     },

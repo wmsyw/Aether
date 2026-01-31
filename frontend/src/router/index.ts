@@ -207,6 +207,11 @@ const routes: RouteRecordRaw[] = [
         path: 'announcements',
         name: 'AnnouncementManagement',
         component: () => importWithRetry(() => import('@/views/user/Announcements.vue'))
+      },
+      {
+        path: 'video-tasks',
+        name: 'VideoTasks',
+        component: () => importWithRetry(() => import('@/views/admin/VideoTasks.vue'))
       }
     ]
   }

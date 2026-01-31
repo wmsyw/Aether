@@ -843,6 +843,16 @@ class GeminiNormalizer(FormatNormalizer):
                 },
             }
 
+        if internal.status == VideoStatus.FAILED:
+            return {
+                "name": operation_name,
+                "done": True,
+                "error": {
+                    "code": internal.error_code or "UNKNOWN",
+                    "message": internal.error_message or "Video generation failed",
+                },
+            }
+
         return {
             "name": operation_name,
             "done": False,

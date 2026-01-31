@@ -220,6 +220,7 @@ frontend/public/*-firework.svg
 # Debug and experimental files
 debug_*.html
 extracted_*.ts
+test.py
 
 # Deploy script cache
 .deps-hash

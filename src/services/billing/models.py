@@ -9,6 +9,7 @@
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -89,7 +90,7 @@ class BillingDimension:
         )
 
 
-@dataclass
+@dataclass(init=False)
 class StandardizedUsage:
     """
     标准化的 Usage 数据
@@ -114,8 +115,49 @@ class StandardizedUsage:
     # 请求计数（用于按次计费）
     request_count: int = 1
 
-    # 扩展字段（未来可能需要的额外维度）
-    extra: dict[str, Any] = field(default_factory=dict)
+    # 任意维度存储（用于多维度计费；数值/字符串均可）
+    # 兼容旧字段名：extra 作为 dimensions 的别名
+    dimensions: dict[str, Any] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        reasoning_tokens: int = 0,
+        cache_storage_token_hours: float = 0.0,
+        request_count: int = 1,
+        dimensions: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        # 基础字段
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_creation_tokens = cache_creation_tokens
+        self.cache_read_tokens = cache_read_tokens
+        self.reasoning_tokens = reasoning_tokens
+        self.cache_storage_token_hours = cache_storage_token_hours
+        self.request_count = request_count
+
+        # 兼容：支持 extra 与 dimensions 同时传入（dimensions 优先级更高）
+        merged: dict[str, Any] = {}
+        if isinstance(extra, dict):
+            merged.update(extra)
+        if isinstance(dimensions, dict):
+            merged.update(dimensions)
+        self.dimensions = merged
+
+    @property
+    def extra(self) -> dict[str, Any]:
+        """向后兼容：旧代码使用 usage.extra 访问扩展维度。"""
+        return self.dimensions
+
+    @extra.setter
+    def extra(self, value: dict[str, Any]) -> None:
+        """向后兼容：允许旧代码写入 usage.extra。"""
+        self.dimensions = value or {}
 
     def get(self, field_name: str, default: Any = 0) -> Any:
         """
@@ -130,12 +172,14 @@ class StandardizedUsage:
         Returns:
             字段值
         """
-        if hasattr(self, field_name):
-            value = getattr(self, field_name)
-            # 对于 extra 字段，不直接返回
-            if field_name != "extra":
-                return value
-        return self.extra.get(field_name, default)
+        # 兼容旧字段名
+        if field_name == "extra":
+            return self.dimensions
+
+        if hasattr(self, field_name) and field_name not in {"dimensions"}:
+            return getattr(self, field_name)
+
+        return self.dimensions.get(field_name, default)
 
     def set(self, field_name: str, value: Any) -> None:
         """
@@ -145,10 +189,16 @@ class StandardizedUsage:
             field_name: 字段名
             value: 字段值
         """
-        if hasattr(self, field_name) and field_name != "extra":
+        # 兼容旧字段名
+        if field_name == "extra":
+            self.dimensions = value or {}
+            return
+
+        if hasattr(self, field_name) and field_name not in {"dimensions"}:
             setattr(self, field_name, value)
-        else:
-            self.extra[field_name] = value
+            return
+
+        self.dimensions[field_name] = value
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -161,14 +211,24 @@ class StandardizedUsage:
             "cache_storage_token_hours": self.cache_storage_token_hours,
             "request_count": self.request_count,
         }
-        if self.extra:
-            result["extra"] = self.extra
+        if self.dimensions:
+            # 新字段名
+            result["dimensions"] = self.dimensions
+            # 旧字段名（兼容）
+            result["extra"] = self.dimensions
         return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StandardizedUsage:
         """从字典创建实例"""
+        # 兼容：支持 extra / dimensions 两种键名
         extra = data.pop("extra", {}) if "extra" in data else {}
+        dimensions = data.pop("dimensions", {}) if "dimensions" in data else {}
+        merged_dimensions: dict[str, Any] = {}
+        if isinstance(extra, dict):
+            merged_dimensions.update(extra)
+        if isinstance(dimensions, dict):
+            merged_dimensions.update(dimensions)
         # 只取已知字段
         known_fields = {
             "input_tokens",
@@ -180,7 +240,7 @@ class StandardizedUsage:
             "request_count",
         }
         filtered = {k: v for k, v in data.items() if k in known_fields}
-        return cls(**filtered, extra=extra)
+        return cls(**filtered, dimensions=merged_dimensions)
 
 
 @dataclass

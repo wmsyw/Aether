@@ -1,0 +1,371 @@
+"""
+DimensionCollector 运行时维度采集
+
+特性（与 .plans/humming-seeking-marble.md 对齐）：
+- (api_format, task_type) 作用域
+- 同一维度支持多条 collector（priority 回退）
+- 支持 transform_expression（与 billing expression 共用 AST 安全规范）
+- computed 维度支持依赖拓扑排序，并对环依赖做保护性降级
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from sqlalchemy.orm import Session
+
+from src.core.logger import logger
+from src.models.database import DimensionCollector
+from src.services.billing.formula_engine import (
+    ExpressionEvaluationError,
+    SafeExpressionEvaluator,
+    UnsafeExpressionError,
+    extract_variable_names,
+)
+
+ValueType = Literal["float", "int", "string"]
+
+
+def _normalize_api_format(api_format: str | None) -> str:
+    return (api_format or "").upper()
+
+
+def _normalize_task_type(task_type: str | None) -> str:
+    return (task_type or "").lower()
+
+
+def _get_nested_value(data: Any, path: str) -> Any:
+    """
+    简单 JSON path：
+    - a.b.c
+    - 列表索引用数字：items.0.id
+    """
+    if data is None or path is None or path == "":
+        return None
+
+    value: Any = data
+    for key in path.split("."):
+        if isinstance(value, dict):
+            value = value.get(key)
+        elif isinstance(value, list):
+            if not key.isdigit():
+                return None
+            idx = int(key)
+            if idx < 0 or idx >= len(value):
+                return None
+            value = value[idx]
+        else:
+            return None
+        if value is None:
+            return None
+    return value
+
+
+def _cast_value(value: Any, value_type: ValueType) -> Any:
+    if value_type == "string":
+        return "" if value is None else str(value)
+    if value_type == "int":
+        if value is None:
+            return 0
+        if isinstance(value, bool):
+            raise ValueError("bool is not a valid int dimension value")
+        return int(float(value))
+    # float
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        raise ValueError("bool is not a valid float dimension value")
+    return float(value)
+
+
+def _type_default(value_type: ValueType) -> Any:
+    return "" if value_type == "string" else (0 if value_type == "int" else 0.0)
+
+
+@dataclass(frozen=True)
+class DimensionCollectInput:
+    request: dict[str, Any] | None = None
+    response: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    base_dimensions: dict[str, Any] | None = None
+
+
+class DimensionCollectorRuntime:
+    """纯运行时逻辑（不依赖 DB），便于测试与复用。"""
+
+    def __init__(self) -> None:
+        self._evaluator = SafeExpressionEvaluator()
+
+    def collect(
+        self,
+        *,
+        collectors: list[DimensionCollector],
+        inp: DimensionCollectInput,
+    ) -> dict[str, Any]:
+        dims: dict[str, Any] = dict(inp.base_dimensions or {})
+
+        # dimension_name -> collectors (priority desc)
+        grouped: dict[str, list[DimensionCollector]] = {}
+        for c in collectors:
+            grouped.setdefault(c.dimension_name, []).append(c)
+        for name in grouped:
+            grouped[name].sort(key=lambda x: (x.priority or 0), reverse=True)
+
+        # 1) 先收集非 computed
+        computed_only: set[str] = set()
+        for dim_name, cs in grouped.items():
+            non_computed = [c for c in cs if (c.source_type or "").lower() != "computed"]
+            if not non_computed:
+                computed_only.add(dim_name)
+                continue
+            value = self._resolve_dimension(dim_name, non_computed, dims, inp)
+            dims[dim_name] = value
+
+        # 2) computed 维度拓扑排序
+        ordered = self._toposort_computed(grouped, computed_only)
+        for dim_name in ordered:
+            cs = [
+                c for c in grouped.get(dim_name, []) if (c.source_type or "").lower() == "computed"
+            ]
+            if not cs:
+                continue
+            cs.sort(key=lambda x: (x.priority or 0), reverse=True)
+            value = self._resolve_computed_dimension(dim_name, cs, dims)
+            dims[dim_name] = value
+
+        return dims
+
+    def _resolve_dimension(
+        self,
+        dim_name: str,
+        collectors: list[DimensionCollector],
+        dims: dict[str, Any],
+        inp: DimensionCollectInput,
+    ) -> Any:
+        fallback_default: str | None = None
+        fallback_value_type: ValueType | None = None
+        value_type: ValueType = (
+            (collectors[0].value_type or "float").lower()  # type: ignore[assignment]
+            if collectors
+            else "float"
+        )
+
+        for c in collectors:
+            value_type = (c.value_type or "float").lower()  # type: ignore[assignment]
+            if c.default_value is not None and fallback_default is None:
+                fallback_default = c.default_value
+                fallback_value_type = value_type
+
+            src = (c.source_type or "").lower()
+            path = c.source_path or ""
+
+            if src == "request":
+                raw = _get_nested_value(inp.request or {}, path)
+            elif src == "response":
+                raw = _get_nested_value(inp.response or {}, path)
+            elif src == "metadata":
+                raw = _get_nested_value(inp.metadata or {}, path)
+            else:
+                # 未知 source：跳过尝试
+                continue
+
+            if raw is None:
+                continue
+
+            try:
+                value: Any = raw
+                if c.transform_expression:
+                    # transform_expression 仅允许使用 value
+                    value = self._evaluator.eval_number(c.transform_expression, {"value": value})
+                casted = _cast_value(value, value_type)
+                return casted
+            except (ValueError, UnsafeExpressionError, ExpressionEvaluationError, Exception) as exc:
+                # 注意：这里选择“不中断，尝试下一优先级”
+                logger.debug(
+                    "Dimension collector failed (dim=%s, id=%s): %s",
+                    dim_name,
+                    getattr(c, "id", None),
+                    str(exc),
+                )
+                continue
+
+        # 兜底：default_value（仅允许配置一条，但这里不依赖 DB 校验）
+        if fallback_default is not None:
+            try:
+                return _cast_value(fallback_default, fallback_value_type or value_type)
+            except Exception:
+                return _type_default(fallback_value_type or value_type)
+
+        return _type_default(value_type)
+
+    def _resolve_computed_dimension(
+        self,
+        dim_name: str,
+        collectors: list[DimensionCollector],
+        dims: dict[str, Any],
+    ) -> Any:
+        fallback_default: str | None = None
+        fallback_value_type: ValueType | None = None
+        value_type: ValueType = (
+            (collectors[0].value_type or "float").lower()  # type: ignore[assignment]
+            if collectors
+            else "float"
+        )
+
+        for c in collectors:
+            value_type = (c.value_type or "float").lower()  # type: ignore[assignment]
+            if c.default_value is not None and fallback_default is None:
+                fallback_default = c.default_value
+                fallback_value_type = value_type
+
+            expr = c.transform_expression
+            if not expr:
+                continue
+
+            try:
+                value = self._evaluator.eval_number(expr, dims)
+                casted = _cast_value(value, value_type)
+                return casted
+            except (ValueError, ExpressionEvaluationError, UnsafeExpressionError, Exception):
+                continue
+
+        if fallback_default is not None:
+            try:
+                return _cast_value(fallback_default, fallback_value_type or value_type)
+            except Exception:
+                return _type_default(fallback_value_type or value_type)
+
+        return _type_default(value_type)
+
+    def _toposort_computed(
+        self,
+        grouped: dict[str, list[DimensionCollector]],
+        computed_only: set[str],
+    ) -> list[str]:
+        # 建图：dependency -> dim
+        allowed_func_names = set(self._evaluator.ALLOWED_FUNCS.keys())
+
+        deps: dict[str, set[str]] = {d: set() for d in computed_only}
+        for dim_name in computed_only:
+            for c in grouped.get(dim_name, []):
+                if (c.source_type or "").lower() != "computed" or not c.transform_expression:
+                    continue
+                try:
+                    names = extract_variable_names(c.transform_expression)
+                except UnsafeExpressionError:
+                    # 配置错误：按无依赖处理，避免阻塞
+                    logger.error(
+                        "Invalid computed transform_expression (dim=%s, id=%s)",
+                        dim_name,
+                        getattr(c, "id", None),
+                    )
+                    names = set()
+                names.discard("value")
+                names -= allowed_func_names
+                # 仅关心依赖的 computed 维度（非 computed 会在前一步收集）
+                deps[dim_name] |= {n for n in names if n in computed_only and n != dim_name}
+
+        # Kahn
+        in_degree: dict[str, int] = {d: 0 for d in computed_only}
+        forward: dict[str, set[str]] = {d: set() for d in computed_only}
+        for dim_name, dim_deps in deps.items():
+            for dep in dim_deps:
+                forward[dep].add(dim_name)
+                in_degree[dim_name] += 1
+
+        queue = deque(sorted(d for d, deg in in_degree.items() if deg == 0))
+        ordered: list[str] = []
+
+        while queue:
+            node = queue.popleft()
+            ordered.append(node)
+            for nxt in sorted(forward.get(node, set())):
+                in_degree[nxt] -= 1
+                if in_degree[nxt] == 0:
+                    queue.append(nxt)
+
+        if len(ordered) != len(computed_only):
+            # 有环依赖：保护性降级（按名称补齐），避免阻塞整条计费链路
+            remaining = sorted(list(computed_only - set(ordered)))
+            logger.error("Computed dimension cycle detected: %s", remaining)
+            ordered.extend(remaining)
+
+        return ordered
+
+
+class DimensionCollectorService:
+    """DB + runtime 的封装：读取 collectors 并执行采集。"""
+
+    def __init__(self, db: Session):
+        self.db = db
+        self._runtime = DimensionCollectorRuntime()
+
+    def list_enabled_collectors(
+        self,
+        *,
+        api_format: str | None,
+        task_type: str | None,
+    ) -> list[DimensionCollector]:
+        api = _normalize_api_format(api_format)
+        task = _normalize_task_type(task_type)
+        api_variants = list({api, api.lower()})
+
+        if task == "cli":
+            # CLI → chat：按维度回退（维度存在 cli collector 则用 cli，否则用 chat）
+            cli_collectors = (
+                self.db.query(DimensionCollector)
+                .filter(
+                    DimensionCollector.api_format.in_(api_variants),
+                    DimensionCollector.task_type == "cli",
+                    DimensionCollector.is_enabled == True,  # noqa: E712
+                )
+                .all()
+            )
+            chat_collectors = (
+                self.db.query(DimensionCollector)
+                .filter(
+                    DimensionCollector.api_format.in_(api_variants),
+                    DimensionCollector.task_type == "chat",
+                    DimensionCollector.is_enabled == True,  # noqa: E712
+                )
+                .all()
+            )
+            cli_dims: set[str] = {c.dimension_name for c in cli_collectors}
+            result: list[DimensionCollector] = list(cli_collectors)
+            for c in chat_collectors:
+                if c.dimension_name not in cli_dims:
+                    result.append(c)
+            return result
+
+        return (
+            self.db.query(DimensionCollector)
+            .filter(
+                DimensionCollector.api_format.in_(api_variants),
+                DimensionCollector.task_type == task,
+                DimensionCollector.is_enabled == True,  # noqa: E712
+            )
+            .all()
+        )
+
+    def collect_dimensions(
+        self,
+        *,
+        api_format: str | None,
+        task_type: str | None,
+        request: dict[str, Any] | None = None,
+        response: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        base_dimensions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        collectors = self.list_enabled_collectors(api_format=api_format, task_type=task_type)
+        return self._runtime.collect(
+            collectors=collectors,
+            inp=DimensionCollectInput(
+                request=request,
+                response=response,
+                metadata=metadata,
+                base_dimensions=base_dimensions,
+            ),
+        )

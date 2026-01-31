@@ -106,7 +106,7 @@ async def create_video_veo(model: str, http_request: Request, db: Session = Depe
     )
 
 
-@router.get("/v1beta/operations/{operation_id}")
+@router.get("/v1beta/operations/{operation_id:path}")
 async def get_video_veo(
     operation_id: str, http_request: Request, db: Session = Depends(get_db)
 ) -> Any:
@@ -148,7 +148,7 @@ async def cancel_video_veo(
     )
 
 
-@router.get("/v1beta/operations/{operation_id}/content")
+@router.get("/v1beta/operations/{operation_id:path}/content")
 async def download_video_content_veo(
     operation_id: str, http_request: Request, db: Session = Depends(get_db)
 ) -> Any:

@@ -14,8 +14,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.api.handlers.base.request_builder import get_provider_auth
-from src.api.handlers.base.video_handler_base import VideoHandlerBase, sanitize_error_message
+from src.api.handlers.base.video_handler_base import (
+    VideoHandlerBase,
+    normalize_gemini_operation_id,
+    sanitize_error_message,
+)
 from src.clients.http_client import HTTPClientPool
+from src.config.settings import config
 from src.core.api_format import APIFormat, build_upstream_headers, get_extra_headers_from_endpoint
 from src.core.api_format.conversion.internal_video import (
     InternalVideoRequest,
@@ -27,6 +32,7 @@ from src.core.api_format.headers import HOP_BY_HOP_HEADERS
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
+from src.services.billing.rule_service import BillingRuleLookupResult, BillingRuleService
 from src.services.cache.aware_scheduler import CacheAwareScheduler, ProviderCandidate
 
 
@@ -34,8 +40,6 @@ class GeminiVeoHandler(VideoHandlerBase):
     FORMAT_ID = "GEMINI"
 
     DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
-    POLL_INTERVAL_SECONDS = 10
-    MAX_POLL_COUNT = 360
 
     def __init__(
         self,
@@ -80,15 +84,38 @@ class GeminiVeoHandler(VideoHandlerBase):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        candidate = await self._select_candidate(internal_request.model)
+        candidate, candidate_keys, rule_lookup = await self._select_candidate(
+            internal_request.model
+        )
         if not candidate:
-            raise HTTPException(
-                status_code=503, detail="No available provider for video generation"
+            detail = "No available provider for video generation"
+            if config.billing_require_rule:
+                detail = "No available provider with billing rule for video generation"
+            raise HTTPException(status_code=503, detail=detail)
+
+        # 冻结 billing_rule 配置（用于异步任务的成本一致性）
+        # 复用 _select_candidate 中已查询的结果；billing_require_rule=false 时需补查
+        if rule_lookup is None:
+            rule_lookup = BillingRuleService.find_rule(
+                self.db,
+                provider_id=candidate.provider.id,
+                model_name=internal_request.model,
+                task_type="video",
             )
+        billing_rule_snapshot = self._build_billing_rule_snapshot(rule_lookup)
 
         upstream_key, endpoint, key, auth_info = await self._resolve_upstream_key(candidate)
         upstream_url = self._build_upstream_url(endpoint.base_url, internal_request.model)
         headers = self._build_upstream_headers(original_headers, upstream_key, endpoint, auth_info)
+
+        api_key_header = (
+            headers.get("x-goog-api-key", "")[:10] + "..."
+            if headers.get("x-goog-api-key")
+            else "MISSING"
+        )
+        logger.info(
+            f"[GeminiVeoHandler] Create task: endpoint_id={endpoint.id}, base_url={endpoint.base_url}, upstream_url={upstream_url}, api_key_prefix={api_key_header}"
+        )
 
         client = await HTTPClientPool.get_default_client_async()
         response = await client.post(upstream_url, headers=headers, json=original_request_body)
@@ -99,18 +126,25 @@ class GeminiVeoHandler(VideoHandlerBase):
         external_task_id = str(payload.get("name") or "")
         if not external_task_id:
             raise HTTPException(status_code=502, detail="Upstream returned empty task id")
+        external_task_id = normalize_gemini_operation_id(external_task_id)
 
         task = self._create_task_record(
             external_task_id=external_task_id,
             candidate=candidate,
             original_request_body=original_request_body,
             internal_request=internal_request,
+            candidate_keys=candidate_keys,
+            original_headers=original_headers,
+            billing_rule_snapshot=billing_rule_snapshot,
         )
         try:
             self.db.add(task)
             self.db.flush()  # 先 flush 检测冲突
             self.db.commit()
             self.db.refresh(task)
+            logger.info(
+                f"[GeminiVeoHandler] Task created: id={task.id}, external_task_id={task.external_task_id}, user_id={task.user_id}"
+            )
         except IntegrityError:
             self.db.rollback()
             raise HTTPException(status_code=409, detail="Task already exists")
@@ -136,6 +170,8 @@ class GeminiVeoHandler(VideoHandlerBase):
     ) -> JSONResponse:
         # Gemini 使用 operations/{id} 格式，需要按 external_task_id 查找
         task = self._get_task_by_external_id(task_id)
+
+        # 直接从数据库返回任务状态（后台轮询服务会持续更新状态）
         internal_task = self._task_to_internal(task)
         response_body = self._normalizer.video_task_from_internal(internal_task)
         return JSONResponse(response_body)
@@ -272,7 +308,10 @@ class GeminiVeoHandler(VideoHandlerBase):
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _select_candidate(self, model_name: str) -> ProviderCandidate | None:
+    async def _select_candidate(
+        self, model_name: str
+    ) -> tuple[ProviderCandidate | None, list[dict[str, Any]], BillingRuleLookupResult | None]:
+        """选择候选 key，返回 (选中的候选, 所有候选列表, 选中候选的 billing rule lookup)"""
         scheduler = CacheAwareScheduler()
         candidates, _ = await scheduler.list_all_candidates(
             db=self.db,
@@ -282,11 +321,47 @@ class GeminiVeoHandler(VideoHandlerBase):
             user_api_key=self.api_key,
             max_candidates=10,
         )
-        for candidate in candidates:
+        # 记录所有候选 key 信息
+        candidate_keys = []
+        selected_candidate = None
+        selected_index = -1
+        selected_rule_lookup: BillingRuleLookupResult | None = None
+        for idx, candidate in enumerate(candidates):
             auth_type = getattr(candidate.key, "auth_type", "api_key") or "api_key"
-            if auth_type in {"api_key", "vertex_ai"}:
-                return candidate
-        return None
+            has_billing_rule = True
+            rule_lookup: BillingRuleLookupResult | None = None
+            if config.billing_require_rule:
+                rule_lookup = BillingRuleService.find_rule(
+                    self.db,
+                    provider_id=candidate.provider.id,
+                    model_name=model_name,
+                    task_type="video",
+                )
+                has_billing_rule = rule_lookup is not None
+            candidate_info = {
+                "index": idx,
+                "provider_id": candidate.provider.id,
+                "provider_name": candidate.provider.name,
+                "endpoint_id": candidate.endpoint.id,
+                "key_id": candidate.key.id,
+                "key_name": candidate.key.name,
+                "auth_type": auth_type,
+                "has_billing_rule": has_billing_rule,
+                "priority": getattr(candidate.key, "priority", 0) or 0,
+            }
+            candidate_keys.append(candidate_info)
+            if (
+                selected_candidate is None
+                and auth_type in {"api_key", "vertex_ai"}
+                and has_billing_rule
+            ):
+                selected_candidate = candidate
+                selected_index = idx
+                selected_rule_lookup = rule_lookup
+        # 标记选中的候选
+        if selected_index >= 0:
+            candidate_keys[selected_index]["selected"] = True
+        return selected_candidate, candidate_keys, selected_rule_lookup
 
     async def _resolve_upstream_key(
         self, candidate: ProviderCandidate
@@ -351,8 +426,31 @@ class GeminiVeoHandler(VideoHandlerBase):
         candidate: ProviderCandidate,
         original_request_body: dict[str, Any],
         internal_request: Any,
+        candidate_keys: list[dict[str, Any]] | None = None,
+        original_headers: dict[str, str] | None = None,
+        billing_rule_snapshot: dict[str, Any] | None = None,
     ) -> VideoTask:
         now = datetime.now(timezone.utc)
+
+        # 构建请求元数据（使用追踪信息）
+        request_metadata = {
+            "candidate_keys": candidate_keys or [],
+            "selected_key_id": candidate.key.id,
+            "selected_endpoint_id": candidate.endpoint.id,
+            "client_ip": self.client_ip,
+            "user_agent": self.user_agent,
+            "request_id": self.request_id,
+            "billing_rule_snapshot": billing_rule_snapshot,
+        }
+        # 记录请求头（脱敏处理）
+        if original_headers:
+            safe_headers = {
+                k: v
+                for k, v in original_headers.items()
+                if k.lower() not in {"authorization", "x-api-key", "x-goog-api-key", "cookie"}
+            }
+            request_metadata["request_headers"] = safe_headers
+
         return VideoTask(
             id=str(uuid4()),
             external_task_id=external_task_id,
@@ -373,18 +471,21 @@ class GeminiVeoHandler(VideoHandlerBase):
             aspect_ratio=internal_request.aspect_ratio,
             status=VideoStatus.SUBMITTED.value,
             progress_percent=0,
-            poll_interval_seconds=self.POLL_INTERVAL_SECONDS,
-            next_poll_at=now + timedelta(seconds=self.POLL_INTERVAL_SECONDS),
+            poll_interval_seconds=config.video_poll_interval_seconds,
+            next_poll_at=now + timedelta(seconds=config.video_poll_interval_seconds),
             poll_count=0,
-            max_poll_count=self.MAX_POLL_COUNT,
+            max_poll_count=config.video_max_poll_count,
             submitted_at=now,
+            request_metadata=request_metadata,
         )
 
     def _get_task_by_external_id(self, external_id: str) -> VideoTask:
         """按 external_task_id 查找任务（Gemini 使用 operations/{id} 格式）"""
-        normalized_id = external_id
-        if not normalized_id.startswith("operations/"):
-            normalized_id = f"operations/{normalized_id}"
+        normalized_id = normalize_gemini_operation_id(external_id)
+
+        logger.info(
+            f"[GeminiVeoHandler] Looking for task: normalized_id={normalized_id}, user_id={self.user.id}"
+        )
 
         task = (
             self.db.query(VideoTask)
@@ -395,7 +496,13 @@ class GeminiVeoHandler(VideoHandlerBase):
             .first()
         )
         if not task:
+            logger.warning(
+                f"[GeminiVeoHandler] Task not found: normalized_id={normalized_id}, user_id={self.user.id}"
+            )
             raise HTTPException(status_code=404, detail="Video task not found")
+        logger.info(
+            f"[GeminiVeoHandler] Task found: id={task.id}, external_task_id={task.external_task_id}"
+        )
         return task
 
 

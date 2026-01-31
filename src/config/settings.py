@@ -3,9 +3,9 @@
 从环境变量或 .env 文件加载配置
 """
 
-from typing import Any
 import os
 from pathlib import Path
+from typing import Any
 
 # 尝试加载 .env 文件
 try:
@@ -110,9 +110,9 @@ class Config:
         # 异常处理配置
         # 设置为 True 时，ProxyException 会传播到路由层以便记录 provider_request_headers
         # 设置为 False 时，使用全局异常处理器统一处理
-        self.propagate_provider_exceptions = os.getenv(
-            "PROPAGATE_PROVIDER_EXCEPTIONS", "true"
-        ).lower() == "true"
+        self.propagate_provider_exceptions = (
+            os.getenv("PROPAGATE_PROVIDER_EXCEPTIONS", "true").lower() == "true"
+        )
 
         # 数据库连接池配置 - 智能自动调整
         # 系统会根据 Worker 数量和 PostgreSQL 限制自动计算安全值
@@ -151,17 +151,17 @@ class Config:
         # 格式转换配置
         # FORMAT_CONVERSION_ENABLED: 全局格式转换总开关，默认开启
         # 注意：即使开启，也需要端点配置 format_acceptance_config.enabled=true 才能生效
-        self.format_conversion_enabled = os.getenv(
-            "FORMAT_CONVERSION_ENABLED", "true"
-        ).lower() == "true"
+        self.format_conversion_enabled = (
+            os.getenv("FORMAT_CONVERSION_ENABLED", "true").lower() == "true"
+        )
 
         # KEEP_PRIORITY_ON_CONVERSION: 格式转换时是否保持提供商原优先级，默认关闭
         # - false（默认）: 需要格式转换的候选整体降级到不需要转换的候选之后
         # - true: 所有提供商保持原优先级，不因格式转换降级
         # 注意：即使全局关闭，单个提供商也可以通过 keep_priority_on_conversion 字段保持自己的优先级
-        self.keep_priority_on_conversion = os.getenv(
-            "KEEP_PRIORITY_ON_CONVERSION", "false"
-        ).lower() == "true"
+        self.keep_priority_on_conversion = (
+            os.getenv("KEEP_PRIORITY_ON_CONVERSION", "false").lower() == "true"
+        )
 
         # HTTP 连接池配置
         # HTTP_MAX_CONNECTIONS: 最大连接数，影响并发能力
@@ -200,24 +200,14 @@ class Config:
             os.getenv("USAGE_QUEUE_INCLUDE_BODIES", "true").lower() == "true"
         )
         # 0 表示不截断，由系统设置（max_request/response_body_size）统一控制
-        self.usage_queue_body_max_bytes = int(
-            os.getenv("USAGE_QUEUE_BODY_MAX_BYTES", "0")
-        )
+        self.usage_queue_body_max_bytes = int(os.getenv("USAGE_QUEUE_BODY_MAX_BYTES", "0"))
         self.usage_queue_stream_key = os.getenv("USAGE_QUEUE_STREAM_KEY", "usage:events")
-        self.usage_queue_stream_group = os.getenv(
-            "USAGE_QUEUE_STREAM_GROUP", "usage_consumers"
-        )
-        self.usage_queue_stream_maxlen = int(
-            os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "200000")
-        )
+        self.usage_queue_stream_group = os.getenv("USAGE_QUEUE_STREAM_GROUP", "usage_consumers")
+        self.usage_queue_stream_maxlen = int(os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "200000"))
         self.usage_queue_dlq_key = os.getenv("USAGE_QUEUE_DLQ_KEY", "usage:events:dlq")
         self.usage_queue_dlq_maxlen = int(os.getenv("USAGE_QUEUE_DLQ_MAXLEN", "5000"))
-        self.usage_queue_consumer_batch = int(
-            os.getenv("USAGE_QUEUE_CONSUMER_BATCH", "200")
-        )
-        self.usage_queue_consumer_block_ms = int(
-            os.getenv("USAGE_QUEUE_CONSUMER_BLOCK_MS", "500")
-        )
+        self.usage_queue_consumer_batch = int(os.getenv("USAGE_QUEUE_CONSUMER_BATCH", "200"))
+        self.usage_queue_consumer_block_ms = int(os.getenv("USAGE_QUEUE_CONSUMER_BLOCK_MS", "500"))
         self.usage_queue_claim_idle_ms = int(os.getenv("USAGE_QUEUE_CLAIM_IDLE_MS", "30000"))
         self.usage_queue_claim_interval_seconds = float(
             os.getenv("USAGE_QUEUE_CLAIM_INTERVAL_SECONDS", "5")
@@ -245,12 +235,8 @@ class Config:
         self.internal_user_agent_claude_cli = os.getenv(
             "CLAUDE_CLI_USER_AGENT", "claude-code/1.0.1"
         )
-        self.internal_user_agent_openai_cli = os.getenv(
-            "OPENAI_CLI_USER_AGENT", "openai-codex/1.0"
-        )
-        self.internal_user_agent_gemini_cli = os.getenv(
-            "GEMINI_CLI_USER_AGENT", "gemini-cli/0.1.0"
-        )
+        self.internal_user_agent_openai_cli = os.getenv("OPENAI_CLI_USER_AGENT", "openai-codex/1.0")
+        self.internal_user_agent_gemini_cli = os.getenv("GEMINI_CLI_USER_AGENT", "gemini-cli/0.1.0")
 
         # 邮箱验证配置
         # VERIFICATION_CODE_EXPIRE_MINUTES: 验证码有效期（分钟）
@@ -258,19 +244,29 @@ class Config:
         self.verification_code_expire_minutes = int(
             os.getenv("VERIFICATION_CODE_EXPIRE_MINUTES", "5")
         )
-        self.verification_send_cooldown = int(
-            os.getenv("VERIFICATION_SEND_COOLDOWN", "60")
-        )
+        self.verification_send_cooldown = int(os.getenv("VERIFICATION_SEND_COOLDOWN", "60"))
+
+        # 计费系统配置（多维度计费 / 异步任务）
+        # BILLING_REQUIRE_RULE: Video/Image/Audio 缺失 billing_rule 时是否拒绝请求（默认 false，缺失则 cost=0 并告警）
+        # BILLING_STRICT_MODE: required 维度缺失时是否拒绝请求/标记任务失败（默认 false，缺失则 cost=0 + 标记 incomplete）
+        self.billing_require_rule = os.getenv("BILLING_REQUIRE_RULE", "false").lower() == "true"
+        self.billing_strict_mode = os.getenv("BILLING_STRICT_MODE", "false").lower() == "true"
+
+        # 视频任务轮询配置
+        # VIDEO_POLL_INTERVAL_SECONDS: 轮询间隔（秒），默认 10 秒
+        # VIDEO_MAX_POLL_COUNT: 最大轮询次数，默认 360 次（约 1 小时）
+        # VIDEO_POLL_BATCH_SIZE: 每批处理任务数，默认 50
+        # VIDEO_POLL_CONCURRENCY: 并发轮询数，默认 10
+        self.video_poll_interval_seconds = int(os.getenv("VIDEO_POLL_INTERVAL_SECONDS", "10"))
+        self.video_max_poll_count = int(os.getenv("VIDEO_MAX_POLL_COUNT", "360"))
+        self.video_poll_batch_size = int(os.getenv("VIDEO_POLL_BATCH_SIZE", "50"))
+        self.video_poll_concurrency = int(os.getenv("VIDEO_POLL_CONCURRENCY", "10"))
 
         # Management Token 速率限制（每分钟每 IP）
-        self.management_token_rate_limit = int(
-            os.getenv("MANAGEMENT_TOKEN_RATE_LIMIT", "30")
-        )
+        self.management_token_rate_limit = int(os.getenv("MANAGEMENT_TOKEN_RATE_LIMIT", "30"))
 
         # 每个用户最多可创建的 Management Token 数量
-        self.management_token_max_per_user = int(
-            os.getenv("MANAGEMENT_TOKEN_MAX_PER_USER", "20")
-        )
+        self.management_token_max_per_user = int(os.getenv("MANAGEMENT_TOKEN_MAX_PER_USER", "20"))
 
         # API 文档配置
         # DOCS_ENABLED: 是否启用 API 文档（/docs, /redoc, /openapi.json）
@@ -416,9 +412,7 @@ class Config:
 
         # 加密密钥警告
         if not self.encryption_key and self.environment != "production":
-            logger.warning(
-                "ENCRYPTION_KEY 未设置，使用开发环境默认密钥。生产环境必须设置。"
-            )
+            logger.warning("ENCRYPTION_KEY 未设置，使用开发环境默认密钥。生产环境必须设置。")
 
         # CORS 配置警告（生产环境）
         if self.environment == "production" and not self.cors_origins:

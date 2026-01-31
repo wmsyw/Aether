@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from src.core.api_format.conversion.internal_video import InternalVideoTask, VideoStatus
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
+from src.services.billing.rule_service import BillingRuleLookupResult
 
 if TYPE_CHECKING:
     import httpx
@@ -43,6 +44,24 @@ def sanitize_error_message(message: str, max_length: int = 200) -> str:
     # 先脱敏再截断，确保敏感信息不会因截断位置而泄露
     sanitized = _SENSITIVE_PATTERN.sub("[REDACTED]", message)
     return sanitized[:max_length]
+
+
+def normalize_gemini_operation_id(operation_id: str) -> str:
+    """
+    规范化 Gemini operation ID，确保以 "operations/" 开头
+
+    Gemini API 返回的任务 ID 格式可能是 "operations/xxx" 或 "xxx"，
+    此函数统一规范化为 "operations/xxx" 格式。
+
+    Args:
+        operation_id: 原始 operation ID
+
+    Returns:
+        规范化后的 operation ID
+    """
+    if not operation_id.startswith("operations/"):
+        return f"operations/{operation_id}"
+    return operation_id
 
 
 class VideoHandlerBase(ABC):
@@ -204,5 +223,28 @@ class VideoHandlerBase(ABC):
             extra={"model": task.model},
         )
 
+    def _build_billing_rule_snapshot(
+        self, rule_lookup: BillingRuleLookupResult | None
+    ) -> dict[str, Any]:
+        """
+        构建 billing_rule 快照，用于冻结到视频任务的 request_metadata 中。
 
-__all__ = ["VideoHandlerBase", "sanitize_error_message"]
+        快照确保异步任务完成时使用创建时刻的计费规则，避免规则变更导致成本计算不一致。
+        """
+        if not rule_lookup:
+            return {"status": "no_rule"}
+
+        rule = rule_lookup.rule
+        return {
+            "status": "ok",
+            "scope": rule_lookup.scope,
+            "effective_task_type": rule_lookup.effective_task_type,
+            "rule_id": rule.id,
+            "rule_name": rule.name,
+            "expression": rule.expression,
+            "variables": rule.variables,
+            "dimension_mappings": rule.dimension_mappings,
+        }
+
+
+__all__ = ["VideoHandlerBase", "normalize_gemini_operation_id", "sanitize_error_message"]
