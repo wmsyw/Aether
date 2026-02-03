@@ -162,6 +162,21 @@ const routes: RouteRecordRaw[] = [
         component: () => importWithRetry(() => import('@/views/shared/Usage.vue'))
       },
       {
+        path: 'user-stats',
+        name: 'UserStats',
+        component: () => importWithRetry(() => import('@/views/admin/UserStats.vue'))
+      },
+      {
+        path: 'cost-analysis',
+        name: 'CostAnalysis',
+        component: () => importWithRetry(() => import('@/views/admin/CostAnalysis.vue'))
+      },
+      {
+        path: 'performance-analysis',
+        name: 'PerformanceAnalysis',
+        component: () => importWithRetry(() => import('@/views/admin/PerformanceAnalysis.vue'))
+      },
+      {
         path: 'system',
         name: 'SystemSettings',
         component: () => importWithRetry(() => import('@/views/admin/SystemSettings.vue'))

@@ -55,15 +55,17 @@
                   </div>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    :title="provider.enable_format_conversion ? '已启用格式转换（点击关闭）' : '启用格式转换'"
-                    :class="provider.enable_format_conversion ? 'text-primary' : ''"
-                    @click="toggleFormatConversion"
-                  >
-                    <Shuffle class="w-4 h-4" />
-                  </Button>
+                  <span :title="systemFormatConversionEnabled ? '请先关闭系统级开关' : (provider.enable_format_conversion ? '已启用格式转换（点击关闭）' : '启用格式转换')">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      :class="`${provider.enable_format_conversion ? 'text-primary' : ''} ${systemFormatConversionEnabled ? 'opacity-50' : ''}`"
+                      :disabled="systemFormatConversionEnabled"
+                      @click="toggleFormatConversion"
+                    >
+                      <Shuffle class="w-4 h-4" />
+                    </Button>
+                  </span>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -437,6 +439,8 @@
     v-model="endpointDialogOpen"
     :provider="provider"
     :endpoints="endpoints"
+    :system-format-conversion-enabled="systemFormatConversionEnabled"
+    :provider-format-conversion-enabled="provider.enable_format_conversion"
     @endpoint-created="handleEndpointChanged"
     @endpoint-updated="handleEndpointChanged"
   />
@@ -522,6 +526,7 @@ import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import { useCountdownTimer, formatCountdown } from '@/composables/useCountdownTimer'
 import { getProvider, getProviderEndpoints, updateProvider } from '@/api/endpoints'
+import { adminApi } from '@/api/admin'
 import {
   KeyFormDialog,
   KeyAllowedModelsEditDialog,
@@ -574,6 +579,9 @@ const loading = ref(false)
 const provider = ref<any>(null)
 const endpoints = ref<ProviderEndpointWithKeys[]>([])
 const providerKeys = ref<EndpointAPIKey[]>([])  // Provider 级别的 keys
+
+// 系统级格式转换配置
+const systemFormatConversionEnabled = ref(false)
 
 // 端点相关状态
 const endpointDialogOpen = ref(false)
@@ -1256,13 +1264,29 @@ function getFormatProbeCountdown(key: EndpointAPIKey, format: string): string {
   return ''
 }
 
+// 加载系统级格式转换配置
+async function loadSystemFormatConversionConfig() {
+  try {
+    const result = await adminApi.getSystemConfig('enable_format_conversion')
+    systemFormatConversionEnabled.value = result.value === true
+  } catch {
+    // 获取失败时默认为关闭
+    systemFormatConversionEnabled.value = false
+  }
+}
+
 // 加载 Provider 信息
 async function loadProvider() {
   if (!props.providerId) return
 
   try {
     loading.value = true
-    provider.value = await getProvider(props.providerId)
+    // 并行加载 Provider 信息和系统级格式转换配置
+    const [providerData] = await Promise.all([
+      getProvider(props.providerId),
+      loadSystemFormatConversionConfig(),
+    ])
+    provider.value = providerData
 
     if (!provider.value) {
       throw new Error('Provider 不存在')

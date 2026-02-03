@@ -4,7 +4,16 @@ import type { PeriodValue, DateRangeParams } from '../types'
  * 格式化日期为 ISO 格式（不带毫秒，兼容 FastAPI datetime 解析）
  */
 function formatDateForApi(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function getTimezoneParams() {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const tz_offset_minutes = -new Date().getTimezoneOffset()
+  return { timezone, tz_offset_minutes }
 }
 
 /**
@@ -38,7 +47,9 @@ export function getDateRangeFromPeriod(period: PeriodValue): DateRangeParams {
 
   return {
     start_date: formatDateForApi(startDate),
-    end_date: formatDateForApi(endDate)
+    end_date: formatDateForApi(endDate),
+    preset: period,
+    ...getTimezoneParams()
   }
 }
 

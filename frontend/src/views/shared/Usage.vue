@@ -55,11 +55,12 @@
       :is-admin="isAdminPage"
       :show-actual-cost="authStore.isAdmin"
       :loading="isLoadingRecords"
-      :selected-period="selectedPeriod"
+      :time-range="timeRange"
       :filter-search="filterSearch"
       :filter-user="filterUser"
       :filter-model="filterModel"
       :filter-provider="filterProvider"
+      :filter-api-format="filterApiFormat"
       :filter-status="filterStatus"
       :available-users="availableUsers"
       :available-models="availableModels"
@@ -69,17 +70,17 @@
       :total-records="totalRecords"
       :page-size-options="pageSizeOptions"
       :auto-refresh="globalAutoRefresh"
-      @update:selected-period="handlePeriodChange"
+      @update:time-range="handleTimeRangeChange"
       @update:filter-search="handleFilterSearchChange"
       @update:filter-user="handleFilterUserChange"
       @update:filter-model="handleFilterModelChange"
       @update:filter-provider="handleFilterProviderChange"
+      @update:filter-api-format="handleFilterApiFormatChange"
       @update:filter-status="handleFilterStatusChange"
       @update:current-page="handlePageChange"
       @update:page-size="handlePageSizeChange"
       @update:auto-refresh="handleAutoRefreshChange"
       @refresh="refreshData"
-      @export="exportData"
       @show-detail="showRequestDetail"
     />
 
@@ -113,7 +114,7 @@ import {
   useUsageData,
   getDateRangeFromPeriod
 } from '@/features/usage/composables'
-import type { PeriodValue, FilterStatusValue } from '@/features/usage/types'
+import type { DateRangeParams, FilterStatusValue } from '@/features/usage/types'
 import type { UserOption } from '@/features/usage/components/UsageRecordsTable.vue'
 import { log } from '@/utils/logger'
 import type { ActivityHeatmap } from '@/types/activity'
@@ -126,8 +127,8 @@ const authStore = useAuthStore()
 // 判断是否是管理员页面
 const isAdminPage = computed(() => route.path.startsWith('/admin'))
 
-// 时间段选择
-const selectedPeriod = ref<PeriodValue>('today')
+// 时间范围选择
+const timeRange = ref<DateRangeParams>(getDateRangeFromPeriod('today'))
 
 // 分页状态
 const currentPage = ref(1)
@@ -139,6 +140,7 @@ const filterSearch = ref('')
 const filterUser = ref('__all__')
 const filterModel = ref('__all__')
 const filterProvider = ref('__all__')
+const filterApiFormat = ref('__all__')
 const filterStatus = ref<FilterStatusValue>('__all__')
 
 // 用户列表（仅管理员页面使用）
@@ -192,6 +194,12 @@ const filteredRecords = computed(() => {
 
     if (filterProvider.value !== '__all__') {
       records = records.filter(record => record.provider === filterProvider.value)
+    }
+
+    if (filterApiFormat.value !== '__all__') {
+      records = records.filter(record =>
+        record.api_format?.toUpperCase() === filterApiFormat.value.toUpperCase()
+      )
     }
 
     if (filterStatus.value !== '__all__') {
@@ -386,11 +394,9 @@ const selectedRequestId = ref<string | null>(null)
 
 // 初始化加载
 onMounted(async () => {
-  const dateRange = getDateRangeFromPeriod(selectedPeriod.value)
-
   // 并行加载统计数据和热力图（使用 allSettled 避免其中一个失败影响另一个）
   const [statsResult, heatmapResult] = await Promise.allSettled([
-    loadStats(dateRange),
+    loadStats(timeRange.value),
     loadHeatmapData()
   ])
 
@@ -418,13 +424,11 @@ onMounted(async () => {
   }
 })
 
-// 处理时间段变化
-async function handlePeriodChange(value: string) {
-  selectedPeriod.value = value as PeriodValue
-  currentPage.value = 1  // 重置到第一页
-
-  const dateRange = getDateRangeFromPeriod(selectedPeriod.value)
-  await loadStats(dateRange)
+// 处理时间范围变化
+async function handleTimeRangeChange(value: DateRangeParams) {
+  timeRange.value = value
+  currentPage.value = 1 // 重置到第一页
+  await loadStats(timeRange.value)
   await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
 }
 
@@ -448,6 +452,7 @@ function getCurrentFilters() {
     user_id: filterUser.value !== '__all__' ? filterUser.value : undefined,
     model: filterModel.value !== '__all__' ? filterModel.value : undefined,
     provider: filterProvider.value !== '__all__' ? filterProvider.value : undefined,
+    api_format: filterApiFormat.value !== '__all__' ? filterApiFormat.value : undefined,
     status: filterStatus.value !== '__all__' ? filterStatus.value : undefined
   }
 }
@@ -487,6 +492,15 @@ async function handleFilterProviderChange(value: string) {
   }
 }
 
+async function handleFilterApiFormatChange(value: string) {
+  filterApiFormat.value = value
+  currentPage.value = 1
+
+  if (isAdminPage.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
+  }
+}
+
 async function handleFilterStatusChange(value: string) {
   filterStatus.value = value as FilterStatusValue
   currentPage.value = 1
@@ -498,8 +512,7 @@ async function handleFilterStatusChange(value: string) {
 
 // 刷新数据
 async function refreshData() {
-  const dateRange = getDateRangeFromPeriod(selectedPeriod.value)
-  await loadStats(dateRange)
+  await loadStats(timeRange.value)
   await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
 }
 
@@ -510,20 +523,6 @@ function showRequestDetail(id: string) {
   detailModalOpen.value = true
 }
 
-// 导出数据
-async function exportData(format: 'csv' | 'json') {
-  try {
-    const blob = await usageApi.exportUsage(format)
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `usage-stats.${format}`
-    a.click()
-    window.URL.revokeObjectURL(url)
-  } catch (error) {
-    log.error('导出失败:', error)
-  }
-}
 </script>
 
 <style scoped>

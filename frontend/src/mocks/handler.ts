@@ -2559,3 +2559,185 @@ mockHandlers['GET /api/admin/usage/cache-affinity/hit-analysis'] = async (config
   const data = generateCacheHitAnalysisData(hours)
   return createMockResponse(data)
 }
+
+// ========== Admin: Stats / Leaderboard ==========
+mockHandlers['GET /api/admin/stats/leaderboard/users'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    items: [
+      { rank: 1, id: 'user-1', name: 'Demo Admin', value: 1200, requests: 1200, tokens: 240000, cost: 123.4 },
+      { rank: 2, id: 'user-2', name: 'Demo User', value: 980, requests: 980, tokens: 180000, cost: 98.7 }
+    ],
+    total: 2,
+    metric: 'requests',
+    start_date: '2026-02-01',
+    end_date: '2026-02-07'
+  })
+}
+
+mockHandlers['GET /api/admin/stats/leaderboard/api-keys'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    items: [
+      { rank: 1, id: 'key-1', name: 'Key A', value: 800, requests: 800, tokens: 160000, cost: 76.2 },
+      { rank: 2, id: 'key-2', name: 'Key B', value: 620, requests: 620, tokens: 120000, cost: 55.1 }
+    ],
+    total: 2,
+    metric: 'requests',
+    start_date: '2026-02-01',
+    end_date: '2026-02-07'
+  })
+}
+
+mockHandlers['GET /api/admin/stats/leaderboard/models'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    items: [
+      { rank: 1, id: 'gpt-4', name: 'gpt-4', value: 500, requests: 500, tokens: 100000, cost: 44.2 },
+      { rank: 2, id: 'claude-3', name: 'claude-3', value: 420, requests: 420, tokens: 90000, cost: 40.1 }
+    ],
+    total: 2,
+    metric: 'requests',
+    start_date: '2026-02-01',
+    end_date: '2026-02-07'
+  })
+}
+
+mockHandlers['GET /api/admin/stats/cost/forecast'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    history: [
+      { date: '2026-02-01', total_cost: 120 },
+      { date: '2026-02-02', total_cost: 132 },
+      { date: '2026-02-03', total_cost: 140 }
+    ],
+    forecast: [
+      { date: '2026-02-04', total_cost: 150 },
+      { date: '2026-02-05', total_cost: 158 }
+    ],
+    slope: 5.2,
+    intercept: 110.5,
+    start_date: '2026-02-01',
+    end_date: '2026-02-03'
+  })
+}
+
+mockHandlers['GET /api/admin/stats/cost/savings'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    cache_read_tokens: 120000,
+    cache_read_cost: 8.2,
+    cache_creation_cost: 3.4,
+    estimated_full_cost: 82.0,
+    cache_savings: 73.8
+  })
+}
+
+mockHandlers['GET /api/admin/stats/providers/quota-usage'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    providers: [
+      {
+        id: 'prov-1',
+        name: 'Provider A',
+        quota_usd: 500,
+        used_usd: 320,
+        remaining_usd: 180,
+        usage_percent: 64,
+        quota_expires_at: null,
+        estimated_exhaust_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()
+      }
+    ]
+  })
+}
+
+mockHandlers['GET /api/admin/stats/performance/percentiles'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse([
+    {
+      date: '2026-02-01',
+      p50_response_time_ms: 320,
+      p90_response_time_ms: 560,
+      p99_response_time_ms: 860,
+      p50_first_byte_time_ms: 120,
+      p90_first_byte_time_ms: 210,
+      p99_first_byte_time_ms: 400
+    },
+    {
+      date: '2026-02-02',
+      p50_response_time_ms: 300,
+      p90_response_time_ms: 540,
+      p99_response_time_ms: 820,
+      p50_first_byte_time_ms: 110,
+      p90_first_byte_time_ms: 200,
+      p99_first_byte_time_ms: 380
+    }
+  ])
+}
+
+mockHandlers['GET /api/admin/stats/errors/distribution'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    distribution: [
+      { category: 'rate_limit', count: 24 },
+      { category: 'server_error', count: 12 },
+      { category: 'timeout', count: 6 }
+    ],
+    trend: [
+      { date: '2026-02-01', total: 8, categories: { rate_limit: 5, server_error: 3 } },
+      { date: '2026-02-02', total: 6, categories: { rate_limit: 4, timeout: 2 } }
+    ]
+  })
+}
+
+mockHandlers['GET /api/admin/stats/comparison'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse({
+    current: {
+      total_requests: 1200,
+      total_tokens: 320000,
+      total_cost: 180,
+      actual_total_cost: 190,
+      avg_response_time_ms: 350,
+      error_requests: 42
+    },
+    comparison: {
+      total_requests: 900,
+      total_tokens: 260000,
+      total_cost: 150,
+      actual_total_cost: 160,
+      avg_response_time_ms: 370,
+      error_requests: 38
+    },
+    change_percent: {
+      total_requests: 33.3,
+      total_tokens: 23.1,
+      total_cost: 20.0,
+      actual_total_cost: 18.8,
+      avg_response_time_ms: -5.4,
+      error_requests: 10.5
+    },
+    current_start: '2026-02-01',
+    current_end: '2026-02-07',
+    comparison_start: '2026-01-25',
+    comparison_end: '2026-01-31'
+  })
+}
+
+mockHandlers['GET /api/admin/stats/time-series'] = async () => {
+  await delay()
+  requireAdmin()
+  return createMockResponse([
+    { date: '2026-02-01', total_requests: 120, input_tokens: 20000, output_tokens: 30000, total_cost: 12.3 },
+    { date: '2026-02-02', total_requests: 140, input_tokens: 22000, output_tokens: 32000, total_cost: 13.8 }
+  ])
+}

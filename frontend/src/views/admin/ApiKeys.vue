@@ -20,13 +20,6 @@
               <h3 class="text-sm sm:text-base font-semibold">
                 独立余额 API Keys
               </h3>
-              <p class="text-xs text-muted-foreground mt-0.5">
-                活跃 {{ activeKeyCount }} · 禁用 {{ inactiveKeyCount }} · 无限 Key {{ unlimitedKeyCount }}
-                <span
-                  v-if="expiringSoonCount > 0"
-                  class="text-amber-600"
-                > · 即将到期 {{ expiringSoonCount }}</span>
-              </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <!-- 搜索框 -->

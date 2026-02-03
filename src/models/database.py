@@ -344,6 +344,7 @@ class Usage(Base):
     is_stream = Column(Boolean, default=False)  # 是否为流式请求
     status_code = Column(Integer)
     error_message = Column(Text, nullable=True)
+    error_category = Column(String(50), nullable=True, index=True)
     response_time_ms = Column(Integer)  # 总响应时间（毫秒）
     first_byte_time_ms = Column(Integer, nullable=True)  # 首字时间/TTFB（毫秒）
 
@@ -1944,6 +1945,147 @@ class RequestCandidate(Base):
 # ==================== 统计数据模型 ====================
 
 
+class StatsHourly(Base):
+    """小时级统计快照 - 用于时间序列查询"""
+
+    __tablename__ = "stats_hourly"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # 小时起点 (UTC)
+    hour_utc = Column(DateTime(timezone=True), nullable=False, unique=True, index=True)
+
+    # 请求统计
+    total_requests = Column(Integer, default=0, nullable=False)
+    success_requests = Column(Integer, default=0, nullable=False)
+    error_requests = Column(Integer, default=0, nullable=False)
+
+    # Token 统计
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_creation_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_read_tokens = Column(BigInteger, default=0, nullable=False)
+
+    # 成本统计 (USD)
+    total_cost = Column(Float, default=0.0, nullable=False)
+    actual_total_cost = Column(Float, default=0.0, nullable=False)
+
+    # 性能统计
+    avg_response_time_ms = Column(Float, default=0.0, nullable=False)
+
+    # 完成标记
+    is_complete = Column(Boolean, default=False, nullable=False)
+    aggregated_at = Column(DateTime(timezone=True), nullable=True)
+
+    # 时间戳
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (Index("idx_stats_hourly_hour", "hour_utc"),)
+
+
+class StatsHourlyUser(Base):
+    """小时级用户维度统计"""
+
+    __tablename__ = "stats_hourly_user"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    hour_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    user_id = Column(String(36), nullable=False, index=True)
+
+    total_requests = Column(Integer, default=0, nullable=False)
+    success_requests = Column(Integer, default=0, nullable=False)
+    error_requests = Column(Integer, default=0, nullable=False)
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    total_cost = Column(Float, default=0.0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("hour_utc", "user_id", name="uq_stats_hourly_user"),
+        Index("idx_stats_hourly_user_hour", "hour_utc"),
+        Index("idx_stats_hourly_user_user_hour", "user_id", "hour_utc"),
+    )
+
+
+class StatsHourlyModel(Base):
+    """小时级模型维度统计"""
+
+    __tablename__ = "stats_hourly_model"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    hour_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    model = Column(String(100), nullable=False, index=True)
+
+    total_requests = Column(Integer, default=0, nullable=False)
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    total_cost = Column(Float, default=0.0, nullable=False)
+    avg_response_time_ms = Column(Float, default=0.0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("hour_utc", "model", name="uq_stats_hourly_model"),
+        Index("idx_stats_hourly_model_hour", "hour_utc"),
+        Index("idx_stats_hourly_model_model_hour", "model", "hour_utc"),
+    )
+
+
+class StatsHourlyProvider(Base):
+    """小时级提供商维度统计"""
+
+    __tablename__ = "stats_hourly_provider"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    hour_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    provider_name = Column(String(100), nullable=False, index=True)
+
+    total_requests = Column(Integer, default=0, nullable=False)
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    total_cost = Column(Float, default=0.0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("hour_utc", "provider_name", name="uq_stats_hourly_provider"),
+        Index("idx_stats_hourly_provider_hour", "hour_utc"),
+    )
+
+
 class StatsDaily(Base):
     """每日统计快照 - 用于快速查询历史数据"""
 
@@ -1975,11 +2117,21 @@ class StatsDaily(Base):
 
     # 性能统计
     avg_response_time_ms = Column(Float, default=0.0, nullable=False)
+    p50_response_time_ms = Column(Integer, nullable=True)
+    p90_response_time_ms = Column(Integer, nullable=True)
+    p99_response_time_ms = Column(Integer, nullable=True)
+    p50_first_byte_time_ms = Column(Integer, nullable=True)
+    p90_first_byte_time_ms = Column(Integer, nullable=True)
+    p99_first_byte_time_ms = Column(Integer, nullable=True)
     fallback_count = Column(Integer, default=0, nullable=False)  # Provider 切换次数
 
     # 使用维度统计
     unique_models = Column(Integer, default=0, server_default="0", nullable=False)
     unique_providers = Column(Integer, default=0, server_default="0", nullable=False)
+
+    # 完成标记
+    is_complete = Column(Boolean, default=False, nullable=False)
+    aggregated_at = Column(DateTime(timezone=True), nullable=True)
 
     # 时间戳
     created_at = Column(
@@ -2081,6 +2233,82 @@ class StatsDailyProvider(Base):
         UniqueConstraint("date", "provider_name", name="uq_stats_daily_provider"),
         Index("idx_stats_daily_provider_date", "date"),
         Index("idx_stats_daily_provider_date_provider", "date", "provider_name"),
+    )
+
+
+class StatsDailyApiKey(Base):
+    """API Key 每日统计"""
+
+    __tablename__ = "stats_daily_api_key"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    api_key_id = Column(String(36), ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=False)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    total_requests = Column(Integer, default=0, nullable=False)
+    success_requests = Column(Integer, default=0, nullable=False)
+    error_requests = Column(Integer, default=0, nullable=False)
+
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_creation_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_read_tokens = Column(BigInteger, default=0, nullable=False)
+
+    total_cost = Column(Float, default=0.0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("api_key_id", "date", name="uq_stats_daily_api_key"),
+        Index("idx_stats_daily_api_key_date", "date"),
+        Index("idx_stats_daily_api_key_key_date", "api_key_id", "date"),
+        Index("idx_stats_daily_api_key_date_requests", "date", "total_requests"),
+        Index("idx_stats_daily_api_key_date_cost", "date", "total_cost"),
+    )
+
+    api_key = relationship("ApiKey")
+
+
+class StatsDailyError(Base):
+    """每日错误统计"""
+
+    __tablename__ = "stats_daily_error"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+    error_category = Column(String(50), nullable=False)
+    provider_name = Column(String(100), nullable=True)
+    model = Column(String(100), nullable=True)
+    count = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "date",
+            "error_category",
+            "provider_name",
+            "model",
+            name="uq_stats_daily_error",
+        ),
+        Index("idx_stats_daily_error_date", "date"),
+        Index("idx_stats_daily_error_category", "date", "error_category"),
     )
 
 

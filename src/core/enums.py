@@ -29,3 +29,19 @@ class AuthSource(str, Enum):
     LOCAL = "local"  # 本地认证
     LDAP = "ldap"  # LDAP 认证
     OAUTH = "oauth"  # OAuth 认证（账号首创来源）
+
+
+class ErrorCategory(str, Enum):
+    """错误分类枚举"""
+
+    RATE_LIMIT = "rate_limit"
+    AUTH = "auth"
+    INVALID_REQUEST = "invalid_request"
+    NOT_FOUND = "not_found"
+    CONTENT_FILTER = "content_filter"
+    CONTEXT_LENGTH = "context_length"
+    SERVER_ERROR = "server_error"
+    TIMEOUT = "timeout"
+    NETWORK = "network"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"

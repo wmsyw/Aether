@@ -1,33 +1,11 @@
 <template>
   <TableCard title="使用记录">
     <template #actions>
-      <!-- 时间段筛选 -->
-      <Select
-        v-model:open="periodSelectOpen"
-        :model-value="selectedPeriod"
-        @update:model-value="$emit('update:selectedPeriod', $event)"
-      >
-        <SelectTrigger class="w-24 sm:w-32 h-8 text-xs border-border/60">
-          <SelectValue placeholder="选择时间段" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="today">
-            今天
-          </SelectItem>
-          <SelectItem value="yesterday">
-            昨天
-          </SelectItem>
-          <SelectItem value="last7days">
-            最近7天
-          </SelectItem>
-          <SelectItem value="last30days">
-            最近30天
-          </SelectItem>
-          <SelectItem value="last90days">
-            最近90天
-          </SelectItem>
-        </SelectContent>
-      </Select>
+      <!-- 时间范围筛选 -->
+      <TimeRangePicker
+        v-model="timeRangeModel"
+        :show-granularity="false"
+      />
 
       <!-- 分隔线 -->
       <div class="hidden sm:block h-4 w-px bg-border" />
@@ -114,6 +92,29 @@
         </SelectContent>
       </Select>
 
+      <!-- API格式筛选 -->
+      <Select
+        v-model:open="filterApiFormatSelectOpen"
+        :model-value="filterApiFormat"
+        @update:model-value="$emit('update:filterApiFormat', $event)"
+      >
+        <SelectTrigger class="w-24 sm:w-32 h-8 text-xs border-border/60">
+          <SelectValue placeholder="全部格式" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__all__">
+            全部格式
+          </SelectItem>
+          <SelectItem
+            v-for="format in availableApiFormats"
+            :key="format.value"
+            :value="format.value"
+          >
+            {{ format.label }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+
       <!-- 状态筛选 -->
       <Select
         v-model:open="filterStatusSelectOpen"
@@ -127,20 +128,23 @@
           <SelectItem value="__all__">
             全部状态
           </SelectItem>
-          <SelectItem value="active">
-            进行中
+          <SelectItem value="stream">
+            流式
+          </SelectItem>
+          <SelectItem value="standard">
+            标准
           </SelectItem>
           <SelectItem value="pending">
             等待中
           </SelectItem>
           <SelectItem value="streaming">
-            流式传输
+            传输中
           </SelectItem>
           <SelectItem value="completed">
-            已完成
+            完成
           </SelectItem>
           <SelectItem value="failed">
-            已失败
+            失败
           </SelectItem>
         </SelectContent>
       </Select>
@@ -520,7 +524,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useDebounceFn, useIntervalFn } from '@vueuse/core'
 import {
   TableCard,
   Badge,
@@ -544,7 +549,8 @@ import { formatTokens, formatCurrency } from '@/utils/format'
 import { formatDateTime } from '../composables'
 import { useRowClick } from '@/composables/useRowClick'
 import { API_FORMAT_LABELS } from '@/api/endpoints/types'
-import type { UsageRecord } from '../types'
+import type { DateRangeParams, UsageRecord } from '../types'
+import { TimeRangePicker } from '@/components/common'
 
 export interface UserOption {
   id: string
@@ -557,13 +563,14 @@ const props = defineProps<{
   isAdmin: boolean
   showActualCost: boolean
   loading: boolean
-  // 时间段
-  selectedPeriod: string
+  // 时间范围
+  timeRange: DateRangeParams
   // 筛选
   filterSearch: string
   filterUser: string
   filterModel: string
   filterProvider: string
+  filterApiFormat: string
   filterStatus: string
   availableUsers: UserOption[]
   availableModels: string[]
@@ -578,11 +585,12 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'update:selectedPeriod': [value: string]
+  'update:timeRange': [value: DateRangeParams]
   'update:filterSearch': [value: string]
   'update:filterUser': [value: string]
   'update:filterModel': [value: string]
   'update:filterProvider': [value: string]
+  'update:filterApiFormat': [value: string]
   'update:filterStatus': [value: string]
   'update:currentPage': [value: number]
   'update:pageSize': [value: number]
@@ -591,16 +599,38 @@ const emit = defineEmits<{
   'showDetail': [id: string]
 }>()
 
+// 静态常量（放在 defineProps/defineEmits 之后）
+const AVAILABLE_API_FORMATS = [
+  { value: 'openai:chat', label: 'OpenAI Chat' },
+  { value: 'openai:cli', label: 'OpenAI CLI' },
+  { value: 'openai:video', label: 'OpenAI Video' },
+  { value: 'claude:chat', label: 'Claude Chat' },
+  { value: 'claude:cli', label: 'Claude CLI' },
+  { value: 'gemini:chat', label: 'Gemini Chat' },
+  { value: 'gemini:cli', label: 'Gemini CLI' },
+  { value: 'gemini:video', label: 'Gemini Video' },
+] as const
+
 // Select 打开状态
-const periodSelectOpen = ref(false)
 const filterUserSelectOpen = ref(false)
 const filterModelSelectOpen = ref(false)
 const filterProviderSelectOpen = ref(false)
+const filterApiFormatSelectOpen = ref(false)
 const filterStatusSelectOpen = ref(false)
+
+// 使用模块级常量
+const availableApiFormats = AVAILABLE_API_FORMATS
+
+const timeRangeModel = computed({
+  get: () => props.timeRange,
+  set: (value: DateRangeParams) => emit('update:timeRange', value)
+})
 
 // 通用搜索（输入防抖）
 const localSearch = ref(props.filterSearch)
-let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+const emitSearchDebounced = useDebounceFn((value: string) => {
+  emit('update:filterSearch', value)
+}, 300)
 
 watch(() => props.filterSearch, (value) => {
   if (value !== localSearch.value) {
@@ -609,36 +639,23 @@ watch(() => props.filterSearch, (value) => {
 })
 
 watch(localSearch, (value) => {
-  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
-  searchDebounceTimer = setTimeout(() => {
-    emit('update:filterSearch', value)
-  }, 300)
+  emitSearchDebounced(value)
 })
 
 // 动态计时器相关
 const now = ref(Date.now())
-let timerInterval: ReturnType<typeof setInterval> | null = null
 
 // 检查是否有活跃请求
 const hasActiveRecords = computed(() => {
   return props.records.some(r => r.status === 'pending' || r.status === 'streaming')
 })
 
-// 启动计时器
-function startTimer() {
-  if (timerInterval) return
-  timerInterval = setInterval(() => {
-    now.value = Date.now()
-  }, 100) // 每 100ms 更新一次
-}
-
-// 停止计时器
-function stopTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval)
-    timerInterval = null
-  }
-}
+// 使用 VueUse 的 useIntervalFn 管理计时器（自动清理）
+const { pause: stopTimer, resume: startTimer } = useIntervalFn(
+  () => { now.value = Date.now() },
+  100,
+  { immediate: false }
+)
 
 // 计算活跃请求的实时耗时
 function getElapsedTime(record: UsageRecord): string {
@@ -679,14 +696,7 @@ function handleRowClick(event: MouseEvent, id: string) {
   emit('showDetail', id)
 }
 
-// 组件卸载时清理
-onUnmounted(() => {
-  stopTimer()
-  if (searchDebounceTimer) {
-    clearTimeout(searchDebounceTimer)
-    searchDebounceTimer = null
-  }
-})
+// useIntervalFn 和 useDebounceFn 自动处理清理，无需 onUnmounted
 
 // 格式化 API 格式显示名称
 function formatApiFormat(format: string): string {

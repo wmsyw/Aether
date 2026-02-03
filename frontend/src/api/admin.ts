@@ -340,6 +340,102 @@ export interface AdminApiKeysResponse {
   skip: number
 }
 
+export interface LeaderboardItem {
+  rank: number
+  id: string
+  name: string
+  value: number
+  requests: number
+  tokens: number
+  cost: number
+}
+
+export interface LeaderboardResponse {
+  items: LeaderboardItem[]
+  total: number
+  metric: string
+  start_date?: string | null
+  end_date?: string | null
+}
+
+export interface CostForecastResponse {
+  history: Array<{ date: string; total_cost: number }>
+  forecast: Array<{ date: string; total_cost: number }>
+  slope: number
+  intercept: number
+  start_date: string
+  end_date: string
+}
+
+export interface CostSavingsResponse {
+  cache_read_tokens: number
+  cache_read_cost: number
+  cache_creation_cost: number
+  estimated_full_cost: number
+  cache_savings: number
+}
+
+export interface QuotaUsageProvider {
+  id: string
+  name: string
+  quota_usd: number
+  used_usd: number
+  remaining_usd: number
+  usage_percent: number
+  quota_expires_at?: string | null
+  estimated_exhaust_at?: string | null
+}
+
+export interface QuotaUsageResponse {
+  providers: QuotaUsageProvider[]
+}
+
+export interface PercentileItem {
+  date: string
+  p50_response_time_ms?: number | null
+  p90_response_time_ms?: number | null
+  p99_response_time_ms?: number | null
+  p50_first_byte_time_ms?: number | null
+  p90_first_byte_time_ms?: number | null
+  p99_first_byte_time_ms?: number | null
+}
+
+export interface ErrorDistributionItem {
+  category: string
+  count: number
+}
+
+export interface ErrorTrendItem {
+  date: string
+  total: number
+  categories: Record<string, number>
+}
+
+export interface ErrorDistributionResponse {
+  distribution: ErrorDistributionItem[]
+  trend: ErrorTrendItem[]
+}
+
+export interface ComparisonMetric {
+  total_requests: number
+  total_tokens: number
+  total_cost: number
+  actual_total_cost: number
+  avg_response_time_ms: number
+  error_requests: number
+}
+
+export interface ComparisonResponse {
+  current: ComparisonMetric
+  comparison: ComparisonMetric
+  change_percent: Record<string, number | null>
+  current_start: string
+  current_end: string
+  comparison_start: string
+  comparison_end: string
+}
+
+
 export interface ApiKeyToggleResponse {
   id: string // UUID
   is_active: boolean
@@ -617,4 +713,156 @@ export const adminApi = {
     const response = await apiClient.post<LdapTestResponse>('/api/admin/ldap/test', config)
     return response.data
   },
+
+  // Stats / Leaderboards
+  async getLeaderboardUsers(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    metric?: 'requests' | 'tokens' | 'cost'
+    order?: 'asc' | 'desc'
+    limit?: number
+    offset?: number
+    provider_name?: string
+    model?: string
+    include_inactive?: boolean
+    exclude_admin?: boolean
+  }): Promise<LeaderboardResponse> {
+    const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/users', {
+      params
+    })
+    return response.data
+  },
+
+  async getLeaderboardApiKeys(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    metric?: 'requests' | 'tokens' | 'cost'
+    order?: 'asc' | 'desc'
+    limit?: number
+    offset?: number
+    provider_name?: string
+    model?: string
+    include_inactive?: boolean
+    exclude_admin?: boolean
+  }): Promise<LeaderboardResponse> {
+    const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/api-keys', {
+      params
+    })
+    return response.data
+  },
+
+  async getLeaderboardModels(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    metric?: 'requests' | 'tokens' | 'cost'
+    order?: 'asc' | 'desc'
+    limit?: number
+    offset?: number
+    provider_name?: string
+    model?: string
+  }): Promise<LeaderboardResponse> {
+    const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/models', {
+      params
+    })
+    return response.data
+  },
+
+  async getCostForecast(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    days?: number
+    forecast_days?: number
+  }): Promise<CostForecastResponse> {
+    const response = await apiClient.get<CostForecastResponse>('/api/admin/stats/cost/forecast', {
+      params
+    })
+    return response.data
+  },
+
+  async getCostSavings(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    provider_name?: string
+    model?: string
+  }): Promise<CostSavingsResponse> {
+    const response = await apiClient.get<CostSavingsResponse>('/api/admin/stats/cost/savings', {
+      params
+    })
+    return response.data
+  },
+
+  async getQuotaUsage(): Promise<QuotaUsageResponse> {
+    const response = await apiClient.get<QuotaUsageResponse>('/api/admin/stats/providers/quota-usage')
+    return response.data
+  },
+
+  async getPercentiles(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+  }): Promise<PercentileItem[]> {
+    const response = await apiClient.get<PercentileItem[]>('/api/admin/stats/performance/percentiles', {
+      params
+    })
+    return response.data
+  },
+
+  async getErrorDistribution(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+  }): Promise<ErrorDistributionResponse> {
+    const response = await apiClient.get<ErrorDistributionResponse>('/api/admin/stats/errors/distribution', {
+      params
+    })
+    return response.data
+  },
+
+  async getComparison(params: {
+    current_start: string
+    current_end: string
+    comparison_type?: 'period' | 'year'
+    timezone?: string
+    tz_offset_minutes?: number
+  }): Promise<ComparisonResponse> {
+    const response = await apiClient.get<ComparisonResponse>('/api/admin/stats/comparison', {
+      params
+    })
+    return response.data
+  },
+
+  async getTimeSeries(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    granularity?: 'hour' | 'day' | 'week' | 'month'
+    timezone?: string
+    tz_offset_minutes?: number
+    user_id?: string
+    model?: string
+    provider_name?: string
+  }): Promise<any[]> {
+    const response = await apiClient.get<any[]>('/api/admin/stats/time-series', { params })
+    return response.data
+  },
+
 }

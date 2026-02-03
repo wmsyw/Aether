@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -33,12 +33,34 @@ from src.models.api import (
     UpdateProfileRequest,
 )
 from src.models.database import ApiKey, GlobalModel, Model, Provider, Usage, User
+from src.services.system.time_range import TimeRangeParams
 from src.services.usage.service import UsageService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.preference import PreferenceService
 
 router = APIRouter(prefix="/api/users/me", tags=["User Profile"])
 pipeline = ApiRequestPipeline()
+
+
+def _build_time_range_params(
+    start_date: date | None,
+    end_date: date | None,
+    preset: str | None,
+    timezone_name: str | None,
+    tz_offset_minutes: int | None,
+) -> TimeRangeParams | None:
+    if not preset and start_date is None and end_date is None:
+        return None
+    try:
+        return TimeRangeParams(
+            start_date=start_date,
+            end_date=end_date,
+            preset=preset,
+            timezone=timezone_name,
+            tz_offset_minutes=tz_offset_minutes or 0,
+        ).validate_and_resolve()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("")
@@ -176,8 +198,11 @@ async def toggle_my_api_key(key_id: str, request: Request, db: Session = Depends
 @router.get("/usage")
 async def get_my_usage(
     request: Request,
-    start_date: datetime | None = Query(None, description="开始时间（ISO 格式）"),
-    end_date: datetime | None = Query(None, description="结束时间（ISO 格式）"),
+    start_date: date | None = Query(None, description="开始日期（YYYY-MM-DD）"),
+    end_date: date | None = Query(None, description="结束日期（YYYY-MM-DD）"),
+    preset: str | None = Query(None, description="时间预设（today/last7days 等）"),
+    timezone_name: str | None = Query(None, alias="timezone"),
+    tz_offset_minutes: int | None = Query(None, description="时区偏移（分钟）"),
     search: str | None = Query(None, description="搜索关键词（密钥名、模型名）"),
     limit: int = Query(100, ge=1, le=200, description="每页记录数，默认100，最大200"),
     offset: int = Query(0, ge=0, le=2000, description="偏移量，用于分页，最大2000"),
@@ -197,9 +222,10 @@ async def get_my_usage(
     - `records`: 详细使用记录列表
     - `pagination`: 分页信息
     """
-    adapter = GetUsageAdapter(
-        start_date=start_date, end_date=end_date, search=search, limit=limit, offset=offset
+    time_range = _build_time_range_params(
+        start_date, end_date, preset, timezone_name, tz_offset_minutes
     )
+    adapter = GetUsageAdapter(time_range=time_range, search=search, limit=limit, offset=offset)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
@@ -728,8 +754,7 @@ class ToggleMyApiKeyAdapter(AuthenticatedApiAdapter):
 class GetUsageAdapter(AuthenticatedApiAdapter):
     """获取用户使用统计的适配器"""
 
-    start_date: datetime | None
-    end_date: datetime | None
+    time_range: TimeRangeParams | None
     search: str | None = None
     limit: int = 100
     offset: int = 0
@@ -743,11 +768,14 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
 
         db = context.db
         user = context.user
+        start_utc = end_utc = None
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
         summary_list = UsageService.get_usage_summary(
             db=db,
             user_id=user.id,
-            start_date=self.start_date,
-            end_date=self.end_date,
+            start_date=start_utc,
+            end_date=end_utc,
         )
 
         # 过滤掉 unknown/pending provider 的记录（请求未到达任何提供商）
@@ -858,10 +886,8 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             .outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
             .filter(Usage.user_id == user.id)
         )
-        if self.start_date:
-            query = query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            query = query.filter(Usage.created_at <= self.end_date)
+        if start_utc and end_utc:
+            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
 
         # 通用搜索：密钥名、模型名
         # 支持空格分隔的组合搜索，多个关键词之间是 AND 关系
@@ -925,10 +951,10 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             Usage.status_code == 200,
             Usage.response_time_ms.isnot(None),
         )
-        if self.start_date:
-            avg_resp_query = avg_resp_query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            avg_resp_query = avg_resp_query.filter(Usage.created_at <= self.end_date)
+        if start_utc and end_utc:
+            avg_resp_query = avg_resp_query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
         avg_response_ms = avg_resp_query.scalar() or 0
         avg_response_time = float(avg_response_ms) / 1000.0 if avg_response_ms else 0
 

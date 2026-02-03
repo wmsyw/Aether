@@ -78,6 +78,10 @@ export interface UsageFilters {
   model?: string
   start_date?: string
   end_date?: string
+  preset?: string
+  granularity?: 'hour' | 'day' | 'week' | 'month'
+  timezone?: string
+  tz_offset_minutes?: number
   page?: number
   page_size?: number
 }
@@ -164,11 +168,16 @@ export const usageApi = {
   async getAllUsageRecords(params?: {
     start_date?: string
     end_date?: string
+    preset?: string
+    granularity?: 'hour' | 'day' | 'week' | 'month'
+    timezone?: string
+    tz_offset_minutes?: number
     search?: string  // 通用搜索：用户名、密钥名、模型名、提供商名
     user_id?: string // UUID
     username?: string
     model?: string
     provider?: string
+    api_format?: string  // API 格式筛选（如 openai:chat, claude:chat）
     status?: string // 'stream' | 'standard' | 'error'
     limit?: number
     offset?: number

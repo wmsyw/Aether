@@ -393,6 +393,14 @@
       </div>
     </div>
 
+    <!-- 趋势图表筛选 -->
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        统计周期
+      </h3>
+      <TimeRangePicker v-model="dailyTimeRange" :allow-hourly="true" />
+    </div>
+
     <!-- 趋势图表区域 -->
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <!-- 每日使用趋势（折线图）- 普通用户可见 -->
@@ -784,6 +792,8 @@
 import { ref, onMounted, computed, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { dashboardApi, type DashboardStat, type DailyStat, type ProviderSummary } from '@/api/dashboard'
+import { getDateRangeFromPeriod } from '@/features/usage/composables'
+import type { DateRangeParams } from '@/features/usage/types'
 import { announcementApi, type Announcement } from '@/api/announcements'
 import {
   Card,
@@ -798,6 +808,7 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui'
+import { TimeRangePicker } from '@/components/common'
 import BarChart from '@/components/charts/BarChart.vue'
 import DoughnutChart from '@/components/charts/DoughnutChart.vue'
 import LineChart from '@/components/charts/LineChart.vue'
@@ -972,7 +983,8 @@ const tokenBreakdown = ref<{
 const activeUsers = ref(0)
 const dailyStats = ref<DailyStat[]>([])
 const providerSummary = ref<ProviderSummary[]>([])
-const selectedDays = ref(7)
+const dailyTimeRange = ref<DateRangeParams>(getDateRangeFromPeriod('last7days'))
+// 统计周期
 const loadingDaily = ref(false)
 const loading = ref(false)
 
@@ -1317,7 +1329,7 @@ async function loadDashboardData() {
 async function loadDailyStats() {
   loadingDaily.value = true
   try {
-    const response = await dashboardApi.getDailyStats(selectedDays.value)
+    const response = await dashboardApi.getDailyStats(dailyTimeRange.value)
     dailyStats.value = response.daily_stats
     providerSummary.value = response.provider_summary || []
   } catch {
@@ -1327,6 +1339,10 @@ async function loadDailyStats() {
     loadingDaily.value = false
   }
 }
+
+watch(dailyTimeRange, async () => {
+  await loadDailyStats()
+}, { deep: true })
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString)

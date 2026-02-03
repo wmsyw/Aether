@@ -100,6 +100,10 @@ export interface UsageRecord {
 export interface DateRangeParams {
   start_date?: string
   end_date?: string
+  preset?: string
+  granularity?: 'hour' | 'day' | 'week' | 'month'
+  timezone?: string
+  tz_offset_minutes?: number
 }
 
 // 时间段选项

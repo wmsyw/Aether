@@ -123,14 +123,24 @@ class MaintenanceScheduler:
 
         scheduler = get_scheduler()
 
-        # 注册定时任务（使用业务时区）
-        # 统计聚合任务 - 凌晨 1 点执行
+        # 注册定时任务
+        # 统计聚合任务 - UTC 00:05 执行
         scheduler.add_cron_job(
             self._scheduled_stats_aggregation,
-            hour=1,
-            minute=0,
+            hour=0,
+            minute=5,
             job_id="stats_aggregation",
             name="统计数据聚合",
+            timezone="UTC",
+        )
+        # 小时统计聚合任务 - 每小时 05 分执行（UTC）
+        scheduler.add_cron_job(
+            self._scheduled_hourly_stats_aggregation,
+            hour="*",
+            minute=5,
+            job_id="stats_hourly_aggregation",
+            name="统计小时数据聚合",
+            timezone="UTC",
         )
         # 统计聚合补偿任务 - 每 30 分钟检查缺失并回填
         scheduler.add_interval_job(
@@ -231,6 +241,10 @@ class MaintenanceScheduler:
         """统计聚合任务（定时调用）"""
         await self._perform_stats_aggregation(backfill=backfill)
 
+    async def _scheduled_hourly_stats_aggregation(self) -> None:
+        """小时统计聚合任务（定时调用）"""
+        await self._perform_hourly_stats_aggregation()
+
     async def _scheduled_cleanup(self) -> None:
         """清理任务（定时调用）"""
         await self._perform_cleanup()
@@ -282,17 +296,12 @@ class MaintenanceScheduler:
 
                 logger.info("开始执行统计数据聚合...")
 
-                from zoneinfo import ZoneInfo
-
                 from src.models.database import StatsDaily
                 from src.models.database import User as DBUser
-                from src.services.system.scheduler import APP_TIMEZONE
 
-                # 使用业务时区计算日期，确保与定时任务触发时间一致
-                # 定时任务在 Asia/Shanghai 凌晨 1 点触发，此时应聚合 Asia/Shanghai 的"昨天"
-                app_tz = ZoneInfo(APP_TIMEZONE)
-                now_local = datetime.now(app_tz)
-                today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+                # 使用 UTC 日期，定时任务在 UTC 00:05 触发，聚合 UTC 昨天
+                now_utc = datetime.now(timezone.utc)
+                today_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
                 if backfill:
                     # 启动时检查并回填缺失的日期
@@ -314,14 +323,15 @@ class MaintenanceScheduler:
                     # 非首次运行，检查最近是否有缺失的日期需要回填
                     from src.models.database import StatsDailyModel, StatsDailyProvider
 
-                    yesterday_business_date = today_local.date() - timedelta(days=1)
+                    yesterday_utc_date = today_utc.date() - timedelta(days=1)
                     max_backfill_days: int = (
                         SystemConfigService.get_config(db, "max_stats_backfill_days", 30) or 30
                     )
 
                     # 计算回填检查的起始日期
-                    check_start_date = yesterday_business_date - timedelta(
-                        days=max_backfill_days - 1
+                    check_start_date = yesterday_utc_date - timedelta(days=max_backfill_days - 1)
+                    check_start_dt = datetime.combine(
+                        check_start_date, datetime.min.time(), tzinfo=timezone.utc
                     )
 
                     # 获取 StatsDaily 和 StatsDailyModel 中已有数据的日期集合
@@ -330,41 +340,39 @@ class MaintenanceScheduler:
                     existing_provider_dates = set()
 
                     daily_stats = (
-                        db.query(StatsDaily.date)
-                        .filter(StatsDaily.date >= check_start_date.isoformat())
-                        .all()
+                        db.query(StatsDaily.date).filter(StatsDaily.date >= check_start_dt).all()
                     )
                     for (stat_date,) in daily_stats:
                         if stat_date.tzinfo is None:
                             stat_date = stat_date.replace(tzinfo=timezone.utc)
-                        existing_daily_dates.add(stat_date.astimezone(app_tz).date())
+                        existing_daily_dates.add(stat_date.date())
 
                     model_stats = (
                         db.query(StatsDailyModel.date)
-                        .filter(StatsDailyModel.date >= check_start_date.isoformat())
+                        .filter(StatsDailyModel.date >= check_start_dt)
                         .distinct()
                         .all()
                     )
                     for (stat_date,) in model_stats:
                         if stat_date.tzinfo is None:
                             stat_date = stat_date.replace(tzinfo=timezone.utc)
-                        existing_model_dates.add(stat_date.astimezone(app_tz).date())
+                        existing_model_dates.add(stat_date.date())
 
                     provider_stats = (
                         db.query(StatsDailyProvider.date)
-                        .filter(StatsDailyProvider.date >= check_start_date.isoformat())
+                        .filter(StatsDailyProvider.date >= check_start_dt)
                         .distinct()
                         .all()
                     )
                     for (stat_date,) in provider_stats:
                         if stat_date.tzinfo is None:
                             stat_date = stat_date.replace(tzinfo=timezone.utc)
-                        existing_provider_dates.add(stat_date.astimezone(app_tz).date())
+                        existing_provider_dates.add(stat_date.date())
 
                     # 找出需要回填的日期
                     all_dates = set()
                     current = check_start_date
-                    while current <= yesterday_business_date:
+                    while current <= yesterday_utc_date:
                         all_dates.add(current)
                         current += timedelta(days=1)
 
@@ -389,43 +397,17 @@ class MaintenanceScheduler:
                         )
 
                         users = db.query(DBUser.id).filter(DBUser.is_active.is_(True)).all()
+                        user_ids = [user_id for (user_id,) in users]
 
                         failed_dates = 0
-                        failed_users = 0
-
                         for current_date in sorted_dates:
                             try:
-                                current_date_local = datetime.combine(
-                                    current_date, datetime.min.time(), tzinfo=app_tz
+                                current_date_utc = datetime.combine(
+                                    current_date, datetime.min.time(), tzinfo=timezone.utc
                                 )
-                                # 只在缺失时才聚合对应的表
-                                if current_date in missing_daily_dates:
-                                    StatsAggregatorService.aggregate_daily_stats(
-                                        db, current_date_local
-                                    )
-                                if current_date in missing_model_dates:
-                                    StatsAggregatorService.aggregate_daily_model_stats(
-                                        db, current_date_local
-                                    )
-                                if current_date in missing_provider_dates:
-                                    StatsAggregatorService.aggregate_daily_provider_stats(
-                                        db, current_date_local
-                                    )
-                                # 用户统计在任一缺失时都回填
-                                for (user_id,) in users:
-                                    try:
-                                        StatsAggregatorService.aggregate_user_daily_stats(
-                                            db, user_id, current_date_local
-                                        )
-                                    except Exception as e:
-                                        failed_users += 1
-                                        logger.warning(
-                                            f"回填用户 {user_id} 日期 {current_date} 失败: {e}"
-                                        )
-                                        try:
-                                            db.rollback()
-                                        except Exception as rollback_err:
-                                            logger.error(f"回滚失败: {rollback_err}")
+                                StatsAggregatorService.aggregate_daily_stats_bundle(
+                                    db, current_date_utc, user_ids=user_ids
+                                )
                             except Exception as e:
                                 failed_dates += 1
                                 logger.warning(f"回填日期 {current_date} 失败: {e}")
@@ -436,10 +418,10 @@ class MaintenanceScheduler:
 
                         StatsAggregatorService.update_summary(db)
 
-                        if failed_dates > 0 or failed_users > 0:
+                        if failed_dates > 0:
                             logger.warning(
                                 f"回填完成，共处理 {len(dates_to_process)} 天，"
-                                f"失败: {failed_dates} 天, {failed_users} 个用户记录"
+                                f"失败: {failed_dates} 天"
                             )
                         else:
                             logger.info(f"缺失数据回填完成，共处理 {len(dates_to_process)} 天")
@@ -447,25 +429,14 @@ class MaintenanceScheduler:
                         logger.info("统计数据已是最新，无需回填")
                     return
 
-                # 定时任务：聚合昨天的数据
-                yesterday_local = today_local - timedelta(days=1)
-
-                StatsAggregatorService.aggregate_daily_stats(db, yesterday_local)
-                StatsAggregatorService.aggregate_daily_model_stats(db, yesterday_local)
-                StatsAggregatorService.aggregate_daily_provider_stats(db, yesterday_local)
-
+                # 定时任务：聚合昨天 (UTC) 的数据
+                yesterday_utc = today_utc - timedelta(days=1)
                 users = db.query(DBUser.id).filter(DBUser.is_active.is_(True)).all()
-                for (user_id,) in users:
-                    try:
-                        StatsAggregatorService.aggregate_user_daily_stats(
-                            db, user_id, yesterday_local
-                        )
-                    except Exception as e:
-                        logger.warning(f"聚合用户 {user_id} 统计数据失败: {e}")
-                        try:
-                            db.rollback()
-                        except Exception:
-                            pass
+                user_ids = [user_id for (user_id,) in users]
+
+                StatsAggregatorService.aggregate_daily_stats_bundle(
+                    db, yesterday_utc, user_ids=user_ids
+                )
 
                 StatsAggregatorService.update_summary(db)
 
@@ -479,6 +450,27 @@ class MaintenanceScheduler:
                     pass
             finally:
                 db.close()
+
+    async def _perform_hourly_stats_aggregation(self) -> None:
+        """执行小时统计聚合任务"""
+        db = create_session()
+        try:
+            if not SystemConfigService.get_config(db, "enable_stats_aggregation", True):
+                logger.info("统计聚合已禁用，跳过小时聚合任务")
+                return
+
+            now_utc = datetime.now(timezone.utc)
+            last_hour = now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+            StatsAggregatorService.aggregate_hourly_stats_bundle(db, last_hour)
+            logger.info(f"小时统计聚合完成: {last_hour.isoformat()}")
+        except Exception as e:
+            logger.exception(f"小时统计聚合任务执行失败: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            db.close()
 
     async def _perform_pending_cleanup(self) -> None:
         """执行 pending 状态清理"""

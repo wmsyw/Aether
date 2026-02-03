@@ -32,6 +32,9 @@ class CacheTTL:
     ADMIN_USAGE_AGGREGATION = 30  # 30秒
     ADMIN_USAGE_RECORDS = 10  # 10秒（列表页短缓存，避免轮询/重复刷新打爆 DB）
 
+    # Admin leaderboard (heavier, slower moving)
+    ADMIN_LEADERBOARD = 300  # 5分钟
+
     # 并发锁 TTL - 防止死锁
     CONCURRENCY_LOCK = 600  # 10分钟
 

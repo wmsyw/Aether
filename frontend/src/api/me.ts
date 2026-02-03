@@ -201,6 +201,9 @@ export const meApi = {
   async getUsage(params?: {
     start_date?: string
     end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
     search?: string  // 通用搜索：密钥名、模型名
     limit?: number
     offset?: number

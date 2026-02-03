@@ -37,17 +37,20 @@
               </div>
               <div class="flex items-center gap-1.5">
                 <!-- 格式转换按钮 -->
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7 mr-1"
-                  :class="endpoint.format_acceptance_config?.enabled ? 'text-primary' : ''"
-                  :title="endpoint.format_acceptance_config?.enabled ? '已启用格式转换（点击关闭）' : '启用格式转换'"
-                  :disabled="togglingFormatEndpointId === endpoint.id"
-                  @click="handleToggleFormatConversion(endpoint)"
+                <span
+                  class="mr-1"
+                  :title="isEndpointFormatConversionDisabled ? formatConversionDisabledTooltip : (endpoint.format_acceptance_config?.enabled ? '已启用格式转换（点击关闭）' : '启用格式转换')"
                 >
-                  <Shuffle class="w-3.5 h-3.5" />
-                </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    :class="`h-7 w-7 ${endpoint.format_acceptance_config?.enabled ? 'text-primary' : ''} ${isEndpointFormatConversionDisabled ? 'opacity-50' : ''}`"
+                    :disabled="togglingFormatEndpointId === endpoint.id || isEndpointFormatConversionDisabled"
+                    @click="handleToggleFormatConversion(endpoint)"
+                  >
+                    <Shuffle class="w-3.5 h-3.5" />
+                  </Button>
+                </span>
                 <!-- 启用/停用 -->
                 <Button
                   variant="ghost"
@@ -63,7 +66,7 @@
                 <Button
                   variant="ghost"
                   size="icon"
-                  class="h-7 w-7 text-destructive hover:text-destructive"
+                  class="h-7 w-7 hover:text-destructive"
                   title="删除"
                   :disabled="deletingEndpointId === endpoint.id"
                   @click="handleDeleteEndpoint(endpoint)"
@@ -369,54 +372,61 @@
       <!-- 添加新端点 -->
       <div
         v-if="availableFormats.length > 0"
-        class="rounded-lg border border-dashed p-3"
+        class="rounded-lg border border-dashed"
       >
-        <div class="flex items-end gap-3">
-          <div class="w-32 shrink-0 space-y-1">
-            <Label class="text-xs text-muted-foreground">API 格式</Label>
-            <Select
-              v-model="newEndpoint.api_format"
-              :open="formatSelectOpen"
-              @update:open="handleFormatSelectOpen"
-            >
-              <SelectTrigger class="h-8">
-                <SelectValue placeholder="选择格式" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="format in availableFormats"
-                  :key="format.value"
-                  :value="format.value"
-                >
-                  {{ format.label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div class="flex-1 min-w-0 space-y-1">
-            <Label class="text-xs text-muted-foreground">Base URL</Label>
-            <Input
-              v-model="newEndpoint.base_url"
-              size="sm"
-              :placeholder="provider?.website || 'https://api.example.com'"
-            />
-          </div>
-          <div class="w-36 shrink-0 space-y-1">
-            <Label class="text-xs text-muted-foreground">自定义路径</Label>
-            <Input
-              v-model="newEndpoint.custom_path"
-              size="sm"
-              :placeholder="newEndpointDefaultPath || '留空使用默认'"
-            />
-          </div>
+        <!-- 卡片头部：API 格式选择 + 添加按钮 -->
+        <div class="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b border-dashed">
+          <Select
+            v-model="newEndpoint.api_format"
+            :open="formatSelectOpen"
+            @update:open="handleFormatSelectOpen"
+          >
+            <SelectTrigger class="h-auto w-auto gap-1.5 !border-0 bg-transparent !shadow-none p-0 font-medium rounded-none flex-row-reverse !ring-0 !ring-offset-0 !outline-none [&>svg]:h-4 [&>svg]:w-4 [&>svg]:opacity-70">
+              <SelectValue placeholder="选择格式..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="format in availableFormats"
+                :key="format.value"
+                :value="format.value"
+              >
+                {{ format.label }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
           <Button
-            size="sm"
-            class="shrink-0 h-8"
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7 text-primary hover:text-primary"
+            title="添加"
             :disabled="!newEndpoint.api_format || (!newEndpoint.base_url?.trim() && !provider?.website?.trim()) || addingEndpoint"
             @click="handleAddEndpoint"
           >
-            {{ addingEndpoint ? '添加中...' : '添加' }}
+            <Plus class="w-3.5 h-3.5" />
           </Button>
+        </div>
+        <!-- 卡片内容：URL 配置 -->
+        <div class="p-4">
+          <div class="flex items-end gap-3">
+            <div class="flex-1 min-w-0 grid grid-cols-3 gap-3">
+              <div class="col-span-2 space-y-1.5">
+                <Label class="text-xs text-muted-foreground">Base URL</Label>
+                <Input
+                  v-model="newEndpoint.base_url"
+                  size="sm"
+                  :placeholder="provider?.website || 'https://api.example.com'"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label class="text-xs text-muted-foreground">自定义路径</Label>
+                <Input
+                  v-model="newEndpoint.custom_path"
+                  size="sm"
+                  :placeholder="newEndpointDefaultPath || '留空使用默认'"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -516,7 +526,25 @@ const props = defineProps<{
   modelValue: boolean
   provider: ProviderWithEndpointsSummary | null
   endpoints?: ProviderEndpoint[]
+  systemFormatConversionEnabled?: boolean
+  providerFormatConversionEnabled?: boolean
 }>()
+
+// 计算端点级格式转换是否应该被禁用
+const isEndpointFormatConversionDisabled = computed(() => {
+  return props.systemFormatConversionEnabled || props.providerFormatConversionEnabled
+})
+
+// 获取禁用提示
+const formatConversionDisabledTooltip = computed(() => {
+  if (props.systemFormatConversionEnabled) {
+    return '请先关闭系统级开关'
+  }
+  if (props.providerFormatConversionEnabled) {
+    return '请先关闭提供商级开关'
+  }
+  return ''
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]

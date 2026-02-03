@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -27,7 +27,12 @@ from src.models.database import (
     Usage,
 )
 from src.models.database import User as DBUser
-from src.services.system.stats_aggregator import StatsAggregatorService
+from src.services.system.stats_aggregator import (
+    StatsAggregatorService,
+    TimeSeriesFilter,
+    query_time_series,
+)
+from src.services.system.time_range import TimeRangeParams
 from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
@@ -53,6 +58,29 @@ def format_tokens(num: int) -> str:
         return f"{millions:.1f}M"
     else:
         return f"{millions:.2f}M"
+
+
+def _build_time_range_params(
+    start_date: date | None,
+    end_date: date | None,
+    preset: str | None,
+    timezone_name: str | None,
+    tz_offset_minutes: int | None,
+    granularity: str | None = None,
+) -> TimeRangeParams | None:
+    if not preset and start_date is None and end_date is None:
+        return None
+    try:
+        return TimeRangeParams(
+            start_date=start_date,
+            end_date=end_date,
+            preset=preset,
+            granularity=granularity or "day",
+            timezone=timezone_name,
+            tz_offset_minutes=tz_offset_minutes or 0,
+        ).validate_and_resolve()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/stats")
@@ -136,6 +164,12 @@ async def get_provider_status(request: Request, db: Session = Depends(get_db)) -
 async def get_daily_stats(
     request: Request,
     days: int = Query(7, ge=1, le=30),
+    start_date: date | None = Query(None, description="开始日期（YYYY-MM-DD）"),
+    end_date: date | None = Query(None, description="结束日期（YYYY-MM-DD）"),
+    preset: str | None = Query(None, description="时间预设（today/last7days 等）"),
+    granularity: str = Query("day", description="时间粒度: hour/day/week/month"),
+    timezone_name: str | None = Query(None, alias="timezone"),
+    tz_offset_minutes: int | None = Query(None, description="时区偏移（分钟）"),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -160,7 +194,30 @@ async def get_daily_stats(
     - `model_summary`: 模型使用汇总，按费用排序
     - `period`: 统计周期信息（start_date, end_date, days）
     """
-    adapter = DashboardDailyStatsAdapter(days=days)
+    time_range = _build_time_range_params(
+        start_date, end_date, preset, timezone_name, tz_offset_minutes, granularity
+    )
+    if time_range is None:
+        # fallback to days
+        tmp = TimeRangeParams(
+            start_date=None,
+            end_date=None,
+            preset="today",
+            granularity=granularity,
+            timezone=timezone_name,
+            tz_offset_minutes=tz_offset_minutes or 0,
+        )
+        user_today = tmp._get_user_today()
+        start = user_today - timedelta(days=days - 1)
+        time_range = TimeRangeParams(
+            start_date=start,
+            end_date=user_today,
+            granularity=granularity,
+            timezone=timezone_name,
+            tz_offset_minutes=tz_offset_minutes or 0,
+        ).validate_and_resolve()
+
+    adapter = DashboardDailyStatsAdapter(time_range=time_range, days=days)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
@@ -194,21 +251,12 @@ class AdminDashboardStatsAdapter(AdminApiAdapter):
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """管理员仪表盘统计 - 使用预聚合数据优化性能"""
-        from zoneinfo import ZoneInfo
-
-        from src.services.system.stats_aggregator import APP_TIMEZONE
-
         db = context.db
-        # 使用业务时区计算日期，与 stats_daily 表保持一致
-        app_tz = ZoneInfo(APP_TIMEZONE)
-        now_local = datetime.now(app_tz)
-        today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        # 转换为 UTC 用于与 stats_daily.date 比较（存储的是业务日期对应的 UTC 开始时间）
-        today = today_local.astimezone(timezone.utc)
-        yesterday = (today_local - timedelta(days=1)).astimezone(timezone.utc)
-        # 本月第一天（自然月）
-        month_start_local = today_local.replace(day=1)
-        month_start = month_start_local.astimezone(timezone.utc)
+        # 使用 UTC 日期，与 stats_daily.date 一致
+        now_utc = datetime.now(timezone.utc)
+        today = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = today - timedelta(days=1)
+        month_start = today.replace(day=1)
 
         # ==================== 使用预聚合数据 ====================
         # 今日实时数据只查询一次，避免重复扫描 Usage 表
@@ -887,20 +935,169 @@ class DashboardProviderStatusAdapter(DashboardAdapter):
 @dataclass
 class DashboardDailyStatsAdapter(DashboardAdapter):
     days: int
+    time_range: TimeRangeParams | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    preset: str | None = None
+    granularity: str | None = None
+    timezone: str | None = None
+    tz_offset_minutes: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.time_range:
+            self.start_date = self.time_range.start_date
+            self.end_date = self.time_range.end_date
+            self.preset = self.time_range.preset
+            self.granularity = self.time_range.granularity
+            self.timezone = self.time_range.timezone
+            self.tz_offset_minutes = self.time_range.tz_offset_minutes
 
     @cache_result(
-        key_prefix="dashboard:daily:stats", ttl=CacheTTL.DASHBOARD_DAILY, user_specific=True
+        key_prefix="dashboard:daily:stats",
+        ttl=CacheTTL.DASHBOARD_DAILY,
+        user_specific=True,
+        vary_by=[
+            "start_date",
+            "end_date",
+            "preset",
+            "granularity",
+            "timezone",
+            "tz_offset_minutes",
+        ],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        from zoneinfo import ZoneInfo
-
-        from src.services.system.stats_aggregator import APP_TIMEZONE
-
         db = context.db
         user = context.user
         is_admin = user.role == UserRole.ADMIN
 
+        if self.time_range:
+            try:
+                series = query_time_series(
+                    db,
+                    self.time_range,
+                    filters=TimeSeriesFilter(user_id=user.id) if not is_admin else None,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            formatted = []
+            for item in series:
+                total_tokens = (
+                    item["input_tokens"]
+                    + item["output_tokens"]
+                    + item.get("cache_creation_tokens", 0)
+                    + item.get("cache_read_tokens", 0)
+                )
+                formatted.append(
+                    {
+                        "date": item["date"],
+                        "requests": item["total_requests"],
+                        "tokens": total_tokens,
+                        "cost": item["total_cost"],
+                        "avg_response_time": (item.get("avg_response_time_ms", 0.0) / 1000.0),
+                        "unique_models": 0,
+                        "unique_providers": 0,
+                        "fallback_count": 0,
+                    }
+                )
+
+            # Model summary (use Usage directly for now)
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            model_query = db.query(
+                Usage.model,
+                func.count(Usage.id).label("requests"),
+                func.sum(Usage.total_tokens).label("tokens"),
+                func.sum(Usage.total_cost_usd).label("cost"),
+            ).filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+            if not is_admin:
+                model_query = model_query.filter(Usage.user_id == user.id)
+            model_stats = (
+                model_query.group_by(Usage.model)
+                .order_by(func.sum(Usage.total_cost_usd).desc())
+                .all()
+            )
+            model_summary = [
+                {
+                    "model": stat.model,
+                    "requests": stat.requests or 0,
+                    "tokens": int(stat.tokens or 0),
+                    "cost": float(stat.cost or 0),
+                    "avg_response_time": 0,
+                    "cost_per_request": float(stat.cost or 0) / max(stat.requests or 1, 1),
+                    "tokens_per_request": int(stat.tokens or 0) / max(stat.requests or 1, 1),
+                }
+                for stat in model_stats
+            ]
+
+            # Daily model breakdown (aligned to local days)
+            breakdown_map: dict[str, list[dict]] = {}
+            for local_date, day_start, day_end in self.time_range.get_local_day_hours():
+                day_query = db.query(
+                    Usage.model,
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("tokens"),
+                    func.sum(Usage.total_cost_usd).label("cost"),
+                ).filter(Usage.created_at >= day_start, Usage.created_at < day_end)
+                if not is_admin:
+                    day_query = day_query.filter(Usage.user_id == user.id)
+                day_stats = day_query.group_by(Usage.model).all()
+                breakdown_map[local_date.isoformat()] = [
+                    {
+                        "model": stat.model,
+                        "requests": stat.requests or 0,
+                        "tokens": int(stat.tokens or 0),
+                        "cost": float(stat.cost or 0),
+                    }
+                    for stat in day_stats
+                    if stat.model
+                ]
+
+            for item in formatted:
+                item["model_breakdown"] = breakdown_map.get(item["date"], [])
+
+            provider_summary = None
+            if is_admin:
+                provider_stats = (
+                    db.query(
+                        Usage.provider_name,
+                        func.count(Usage.id).label("requests"),
+                        func.sum(Usage.total_tokens).label("tokens"),
+                        func.sum(Usage.total_cost_usd).label("cost"),
+                    )
+                    .filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+                    .group_by(Usage.provider_name)
+                    .all()
+                )
+                provider_summary = [
+                    {
+                        "provider": stat.provider_name or "Unknown",
+                        "requests": stat.requests or 0,
+                        "tokens": int(stat.tokens or 0),
+                        "cost": float(stat.cost or 0),
+                    }
+                    for stat in provider_stats
+                    if (stat.provider_name or "").lower() != "unknown"
+                ]
+                provider_summary.sort(key=lambda x: x["cost"], reverse=True)
+
+            result = {
+                "daily_stats": formatted,
+                "model_summary": model_summary,
+                "period": {
+                    "start_date": self.time_range.start_date.isoformat(),
+                    "end_date": self.time_range.end_date.isoformat(),
+                    "days": (self.time_range.end_date - self.time_range.start_date).days + 1,
+                },
+            }
+            if is_admin and provider_summary is not None:
+                result["provider_summary"] = provider_summary
+            return result
+
         # 使用业务时区计算日期，确保每日统计与业务日期一致
+        from zoneinfo import ZoneInfo
+
+        from src.services.system.stats_aggregator import APP_TIMEZONE
+
         app_tz = ZoneInfo(APP_TIMEZONE)
         now_local = datetime.now(app_tz)
         today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)

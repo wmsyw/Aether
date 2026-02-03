@@ -27,6 +27,7 @@ from src.models.database import (
 )
 from src.services.model.cost import ModelCostService
 from src.services.system.config import SystemConfigService
+from src.services.usage.error_classifier import classify_error
 
 
 @dataclass
@@ -335,6 +336,10 @@ class UsageService:
             actual_request_cost = request_cost * actual_rate_multiplier
             actual_total_cost = total_cost * actual_rate_multiplier
 
+        error_category = None
+        if status_code >= 400 or error_message or status in {"failed", "cancelled"}:
+            error_category = classify_error(status_code, error_message, status).value
+
         return {
             "user_id": user.id if user else None,
             "api_key_id": api_key.id if api_key else None,
@@ -376,6 +381,7 @@ class UsageService:
             "is_stream": is_stream,
             "status_code": status_code,
             "error_message": error_message,
+            "error_category": error_category,
             "response_time_ms": response_time_ms,
             "first_byte_time_ms": first_byte_time_ms,
             "status": status,
@@ -586,6 +592,7 @@ class UsageService:
         existing_usage.status = usage_params["status"]
         existing_usage.status_code = usage_params["status_code"]
         existing_usage.error_message = usage_params["error_message"]
+        existing_usage.error_category = usage_params.get("error_category")
         existing_usage.response_time_ms = usage_params["response_time_ms"]
         existing_usage.first_byte_time_ms = usage_params["first_byte_time_ms"]
 
@@ -2068,7 +2075,7 @@ class UsageService:
         if start_date:
             query = query.filter(Usage.created_at >= start_date)
         if end_date:
-            query = query.filter(Usage.created_at <= end_date)
+            query = query.filter(Usage.created_at < end_date)
 
         # 使用跨数据库兼容的日期函数
         from src.utils.database_helpers import date_trunc_portable
@@ -2108,7 +2115,7 @@ class UsageService:
         if start_date:
             summary = summary.filter(Usage.created_at >= start_date)
         if end_date:
-            summary = summary.filter(Usage.created_at <= end_date)
+            summary = summary.filter(Usage.created_at < end_date)
 
         summary = summary.group_by(date_func, Usage.provider_name, Usage.model).all()
 

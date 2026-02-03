@@ -41,10 +41,11 @@ class TaskScheduler:
     def add_cron_job(
         self,
         func: Callable[..., Any],
-        hour: int,
+        hour: int | str,
         minute: int = 0,
         job_id: str | None = None,
         name: str | None = None,
+        timezone: str | None = None,
         **kwargs: Any,
     ) -> Any:
         """
@@ -58,7 +59,8 @@ class TaskScheduler:
             name: 任务名称（用于日志）
             **kwargs: 传递给任务函数的参数
         """
-        trigger = CronTrigger(hour=hour, minute=minute, timezone=APP_TIMEZONE)
+        trigger_timezone = timezone or APP_TIMEZONE
+        trigger = CronTrigger(hour=hour, minute=minute, timezone=trigger_timezone)
 
         job_id = job_id or func.__name__
         display_name = name or job_id
@@ -74,7 +76,7 @@ class TaskScheduler:
 
         logger.info(
             f"已注册定时任务: {display_name}, "
-            f"执行时间: {hour:02d}:{minute:02d} ({APP_TIMEZONE})"
+            f"执行时间: {hour}:{minute:02d} ({trigger_timezone})"
         )
 
     def add_interval_job(

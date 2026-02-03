@@ -92,7 +92,7 @@
             <Button
               variant="ghost"
               size="icon"
-              class="h-8 w-8 text-destructive hover:text-destructive"
+              class="h-8 w-8 hover:text-destructive"
               title="删除映射组"
               @click="deleteGroup(group)"
             >

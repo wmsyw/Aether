@@ -104,7 +104,7 @@
               type="button"
               variant="ghost"
               size="icon"
-              class="shrink-0 text-destructive hover:text-destructive h-8 w-8"
+              class="shrink-0 hover:text-destructive h-8 w-8"
               @click="removeAlias(index)"
             >
               <X class="w-4 h-4" />

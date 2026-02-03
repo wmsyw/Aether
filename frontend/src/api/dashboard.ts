@@ -250,10 +250,19 @@ export interface DailyStatsResponse {
   }
 }
 
+export interface TimeRangeParams {
+  start_date?: string
+  end_date?: string
+  preset?: string
+  granularity?: 'hour' | 'day' | 'week' | 'month'
+  timezone?: string
+  tz_offset_minutes?: number
+}
+
 export const dashboardApi = {
   // 获取仪表盘统计数据
-  async getStats(): Promise<DashboardStatsResponse> {
-    const response = await apiClient.get<DashboardStatsResponse>('/api/dashboard/stats')
+  async getStats(params?: TimeRangeParams): Promise<DashboardStatsResponse> {
+    const response = await apiClient.get<DashboardStatsResponse>('/api/dashboard/stats', { params })
     return response.data
   },
 
@@ -279,9 +288,9 @@ export const dashboardApi = {
   },
 
   // 获取每日统计数据
-  async getDailyStats(days: number = 7): Promise<DailyStatsResponse> {
+  async getDailyStats(params?: TimeRangeParams & { days?: number }): Promise<DailyStatsResponse> {
     const response = await apiClient.get<DailyStatsResponse>('/api/dashboard/daily-stats', {
-      params: { days }
+      params
     })
     return response.data
   }

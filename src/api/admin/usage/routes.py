@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -26,6 +26,8 @@ from src.models.database import (
     Usage,
     User,
 )
+from src.services.system.stats_aggregator import AggregatedStats, StatsFilter, query_stats_hybrid
+from src.services.system.time_range import TimeRangeParams
 from src.services.usage.service import UsageService
 from src.utils.cache_decorator import cache_result
 
@@ -34,22 +36,45 @@ pipeline = ApiRequestPipeline()
 
 
 def _apply_admin_default_range(
-    start_date: datetime | None, end_date: datetime | None
-) -> tuple[datetime | None, datetime | None]:
-    """
-    Apply a default time range for admin usage endpoints to protect DB from unbounded scans.
-
-    Enabled by setting ADMIN_USAGE_DEFAULT_DAYS>0.
-    """
-    if start_date is not None or end_date is not None:
-        return start_date, end_date
+    params: TimeRangeParams | None,
+) -> TimeRangeParams | None:
+    """Apply a default range to avoid unbounded scans."""
+    if params is not None:
+        return params
 
     days = int(getattr(config, "admin_usage_default_days", 0) or 0)
     if days <= 0:
-        return start_date, end_date
+        return None
 
-    now = datetime.now(timezone.utc)
-    return now - timedelta(days=days), now
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    return TimeRangeParams(
+        start_date=start_date,
+        end_date=today,
+        timezone="UTC",
+        tz_offset_minutes=0,
+    ).validate_and_resolve()
+
+
+def _build_time_range_params(
+    start_date: date | None,
+    end_date: date | None,
+    preset: str | None,
+    timezone_name: str | None,
+    tz_offset_minutes: int | None,
+) -> TimeRangeParams | None:
+    if not preset and start_date is None and end_date is None:
+        return None
+    try:
+        return TimeRangeParams(
+            start_date=start_date,
+            end_date=end_date,
+            preset=preset,
+            timezone=timezone_name,
+            tz_offset_minutes=tz_offset_minutes or 0,
+        ).validate_and_resolve()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ==================== RESTful Routes ====================
@@ -61,8 +86,11 @@ async def get_usage_aggregation(
     group_by: str = Query(
         ..., description="Aggregation dimension: model, user, provider, or api_format"
     ),
-    start_date: datetime | None = None,
-    end_date: datetime | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    preset: str | None = None,
+    timezone_name: str | None = Query(None, alias="timezone"),
+    tz_offset_minutes: int | None = None,
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> Any:
@@ -83,16 +111,18 @@ async def get_usage_aggregation(
     - 按提供商聚合时：provider_id, provider, request_count, total_tokens, total_cost, actual_cost, avg_response_time_ms, success_rate, error_count
     - 按 API 格式聚合时：api_format, request_count, total_tokens, total_cost, actual_cost, avg_response_time_ms
     """
+    time_range = _apply_admin_default_range(
+        _build_time_range_params(start_date, end_date, preset, timezone_name, tz_offset_minutes)
+    )
+
     if group_by == "model":
-        adapter = AdminUsageByModelAdapter(start_date=start_date, end_date=end_date, limit=limit)
+        adapter = AdminUsageByModelAdapter(time_range=time_range, limit=limit)
     elif group_by == "user":
-        adapter = AdminUsageByUserAdapter(start_date=start_date, end_date=end_date, limit=limit)
+        adapter = AdminUsageByUserAdapter(time_range=time_range, limit=limit)
     elif group_by == "provider":
-        adapter = AdminUsageByProviderAdapter(start_date=start_date, end_date=end_date, limit=limit)
+        adapter = AdminUsageByProviderAdapter(time_range=time_range, limit=limit)
     elif group_by == "api_format":
-        adapter = AdminUsageByApiFormatAdapter(
-            start_date=start_date, end_date=end_date, limit=limit
-        )
+        adapter = AdminUsageByApiFormatAdapter(time_range=time_range, limit=limit)
     else:
         raise HTTPException(
             status_code=400,
@@ -104,8 +134,11 @@ async def get_usage_aggregation(
 @router.get("/stats")
 async def get_usage_stats(
     request: Request,
-    start_date: datetime | None = None,
-    end_date: datetime | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    preset: str | None = None,
+    timezone_name: str | None = Query(None, alias="timezone"),
+    tz_offset_minutes: int | None = None,
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -127,7 +160,10 @@ async def get_usage_stats(
     - `error_rate`: 错误率（百分比）
     - `cache_stats`: 缓存统计信息（cache_creation_tokens, cache_read_tokens, cache_creation_cost, cache_read_cost）
     """
-    adapter = AdminUsageStatsAdapter(start_date=start_date, end_date=end_date)
+    time_range = _apply_admin_default_range(
+        _build_time_range_params(start_date, end_date, preset, timezone_name, tz_offset_minutes)
+    )
+    adapter = AdminUsageStatsAdapter(time_range=time_range)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
@@ -151,13 +187,17 @@ async def get_activity_heatmap(
 @router.get("/records")
 async def get_usage_records(
     request: Request,
-    start_date: datetime | None = None,
-    end_date: datetime | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    preset: str | None = None,
+    timezone_name: str | None = Query(None, alias="timezone"),
+    tz_offset_minutes: int | None = None,
     search: str | None = None,  # 通用搜索：用户名、密钥名、模型名、提供商名
     user_id: str | None = None,
     username: str | None = None,
     model: str | None = None,
     provider: str | None = None,
+    api_format: str | None = None,  # API 格式筛选（如 openai:chat, claude:chat）
     status: str | None = None,  # stream, standard, error
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -176,6 +216,7 @@ async def get_usage_records(
     - `username`: 可选，用户名模糊搜索
     - `model`: 可选，模型名模糊搜索
     - `provider`: 可选，提供商名称搜索
+    - `api_format`: 可选，API 格式筛选（如 openai:chat, claude:chat）
     - `status`: 可选，状态筛选（stream: 流式请求，standard: 标准请求，error: 错误请求，pending: 等待中，streaming: 流式中，completed: 已完成，failed: 失败，active: 活跃请求）
     - `limit`: 返回数量限制，默认 100，最大 500
     - `offset`: 分页偏移量，默认 0
@@ -190,14 +231,17 @@ async def get_usage_records(
     - `limit`: 当前分页限制
     - `offset`: 当前分页偏移量
     """
+    time_range = _apply_admin_default_range(
+        _build_time_range_params(start_date, end_date, preset, timezone_name, tz_offset_minutes)
+    )
     adapter = AdminUsageRecordsAdapter(
-        start_date=start_date,
-        end_date=end_date,
+        time_range=time_range,
         search=search,
         user_id=user_id,
         username=username,
         model=model,
         provider=provider,
+        api_format=api_format,
         status=status,
         limit=limit,
         offset=offset,
@@ -288,73 +332,87 @@ async def get_usage_detail(
 
 
 class AdminUsageStatsAdapter(AdminApiAdapter):
-    def __init__(self, start_date: datetime | None, end_date: datetime | None):
-        self.start_date, self.end_date = _apply_admin_default_range(start_date, end_date)
+    def __init__(self, time_range: TimeRangeParams | None):
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
 
     @cache_result(
         key_prefix="admin:usage:stats",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date"],
+        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes"],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        # Perf: use a single aggregate query (avoid 3 full scans).
-        from sqlalchemy import case
-
         db = context.db
-        query = db.query(Usage)
-        if self.start_date:
-            query = query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            query = query.filter(Usage.created_at <= self.end_date)
-
-        stats = query.with_entities(
-            func.count(Usage.id).label("total_requests"),
-            func.sum(Usage.total_tokens).label("total_tokens"),
-            func.sum(Usage.total_cost_usd).label("total_cost"),
-            func.sum(Usage.actual_total_cost_usd).label("total_actual_cost"),
-            func.avg(Usage.response_time_ms).label("avg_response_time_ms"),
-            func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
-            func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
-            func.sum(Usage.cache_creation_cost_usd).label("cache_creation_cost"),
-            func.sum(Usage.cache_read_cost_usd).label("cache_read_cost"),
-            func.sum(
-                case(
-                    (
-                        (Usage.status_code >= 400) | (Usage.error_message.isnot(None)),
-                        1,
-                    ),
-                    else_=0,
-                )
-            ).label("error_count"),
-        ).first()
+        if self.time_range:
+            stats = query_stats_hybrid(db, self.time_range, filters=StatsFilter())
+        else:
+            error_cond = (Usage.status_code >= 400) | (Usage.error_message.isnot(None))
+            row = db.query(
+                func.count(Usage.id).label("total_requests"),
+                func.sum(case((error_cond, 1), else_=0)).label("error_requests"),
+                func.sum(Usage.input_tokens).label("input_tokens"),
+                func.sum(Usage.output_tokens).label("output_tokens"),
+                func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
+                func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
+                func.sum(Usage.cache_creation_cost_usd).label("cache_creation_cost"),
+                func.sum(Usage.cache_read_cost_usd).label("cache_read_cost"),
+                func.sum(Usage.total_cost_usd).label("total_cost"),
+                func.sum(Usage.actual_total_cost_usd).label("actual_total_cost"),
+                func.sum(Usage.response_time_ms).label("total_response_time_ms"),
+            ).first()
+            total_requests = int(getattr(row, "total_requests", 0) or 0)
+            error_requests = int(getattr(row, "error_requests", 0) or 0)
+            stats = AggregatedStats(
+                total_requests=total_requests,
+                success_requests=total_requests - error_requests,
+                error_requests=error_requests,
+                input_tokens=int(getattr(row, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(row, "output_tokens", 0) or 0),
+                cache_creation_tokens=int(getattr(row, "cache_creation_tokens", 0) or 0),
+                cache_read_tokens=int(getattr(row, "cache_read_tokens", 0) or 0),
+                cache_creation_cost=float(getattr(row, "cache_creation_cost", 0) or 0.0),
+                cache_read_cost=float(getattr(row, "cache_read_cost", 0) or 0.0),
+                total_cost=float(getattr(row, "total_cost", 0) or 0.0),
+                actual_total_cost=float(getattr(row, "actual_total_cost", 0) or 0.0),
+                total_response_time_ms=float(getattr(row, "total_response_time_ms", 0) or 0.0),
+            )
 
         context.add_audit_metadata(
             action="usage_stats",
             start_date=self.start_date.isoformat() if self.start_date else None,
             end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
         )
-
-        total_requests = int(stats.total_requests or 0) if stats else 0
-        avg_response_time_ms = float(stats.avg_response_time_ms or 0) if stats else 0
-        avg_response_time = avg_response_time_ms / 1000.0
-        error_count = int(stats.error_count or 0) if stats else 0
+        total_requests = stats.total_requests
+        avg_response_time = stats.avg_response_time_ms / 1000.0
+        error_count = stats.error_requests
 
         return {
             "total_requests": total_requests,
-            "total_tokens": int(stats.total_tokens or 0) if stats else 0,
-            "total_cost": float(stats.total_cost or 0) if stats else 0,
-            "total_actual_cost": float(stats.total_actual_cost or 0) if stats else 0,
+            "total_tokens": int(
+                stats.input_tokens
+                + stats.output_tokens
+                + stats.cache_creation_tokens
+                + stats.cache_read_tokens
+            ),
+            "total_cost": float(stats.total_cost),
+            "total_actual_cost": float(stats.actual_total_cost),
             "avg_response_time": round(avg_response_time, 2),
             "error_count": error_count,
             "error_rate": (
                 round((error_count / total_requests) * 100, 2) if total_requests > 0 else 0
             ),
             "cache_stats": {
-                "cache_creation_tokens": (int(stats.cache_creation_tokens or 0) if stats else 0),
-                "cache_read_tokens": int(stats.cache_read_tokens or 0) if stats else 0,
-                "cache_creation_cost": (float(stats.cache_creation_cost or 0) if stats else 0),
-                "cache_read_cost": float(stats.cache_read_cost or 0) if stats else 0,
+                "cache_creation_tokens": int(stats.cache_creation_tokens),
+                "cache_read_tokens": int(stats.cache_read_tokens),
+                "cache_creation_cost": float(stats.cache_creation_cost),
+                "cache_read_cost": float(stats.cache_read_cost),
             },
         }
 
@@ -373,15 +431,20 @@ class AdminActivityHeatmapAdapter(AdminApiAdapter):
 
 
 class AdminUsageByModelAdapter(AdminApiAdapter):
-    def __init__(self, start_date: datetime | None, end_date: datetime | None, limit: int):
-        self.start_date, self.end_date = _apply_admin_default_range(start_date, end_date)
+    def __init__(self, time_range: TimeRangeParams | None, limit: int):
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:model",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "limit"],
+        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -397,10 +460,9 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
         # 过滤掉 unknown/pending provider_name（请求未到达任何提供商）
         query = query.filter(Usage.provider_name.notin_(["unknown", "pending"]))
 
-        if self.start_date:
-            query = query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            query = query.filter(Usage.created_at <= self.end_date)
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
 
         query = query.group_by(Usage.model).order_by(func.count(Usage.id).desc()).limit(self.limit)
         stats = query.all()
@@ -408,6 +470,8 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
             action="usage_by_model",
             start_date=self.start_date.isoformat() if self.start_date else None,
             end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
             limit=self.limit,
             result_count=len(stats),
         )
@@ -425,15 +489,20 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
 
 
 class AdminUsageByUserAdapter(AdminApiAdapter):
-    def __init__(self, start_date: datetime | None, end_date: datetime | None, limit: int):
-        self.start_date, self.end_date = _apply_admin_default_range(start_date, end_date)
+    def __init__(self, time_range: TimeRangeParams | None, limit: int):
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:user",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "limit"],
+        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -450,10 +519,9 @@ class AdminUsageByUserAdapter(AdminApiAdapter):
             .group_by(User.id, User.email, User.username)
         )
 
-        if self.start_date:
-            query = query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            query = query.filter(Usage.created_at <= self.end_date)
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
 
         query = query.order_by(func.count(Usage.id).desc()).limit(self.limit)
         stats = query.all()
@@ -462,6 +530,8 @@ class AdminUsageByUserAdapter(AdminApiAdapter):
             action="usage_by_user",
             start_date=self.start_date.isoformat() if self.start_date else None,
             end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
             limit=self.limit,
             result_count=len(stats),
         )
@@ -480,15 +550,20 @@ class AdminUsageByUserAdapter(AdminApiAdapter):
 
 
 class AdminUsageByProviderAdapter(AdminApiAdapter):
-    def __init__(self, start_date: datetime | None, end_date: datetime | None, limit: int):
-        self.start_date, self.end_date = _apply_admin_default_range(start_date, end_date)
+    def __init__(self, time_range: TimeRangeParams | None, limit: int):
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:provider",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "limit"],
+        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -511,10 +586,12 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
             RequestCandidate.status.in_(["success", "failed"]),
         )
 
-        if self.start_date:
-            attempt_query = attempt_query.filter(RequestCandidate.created_at >= self.start_date)
-        if self.end_date:
-            attempt_query = attempt_query.filter(RequestCandidate.created_at <= self.end_date)
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            attempt_query = attempt_query.filter(
+                RequestCandidate.created_at >= start_utc,
+                RequestCandidate.created_at < end_utc,
+            )
 
         attempt_stats = (
             attempt_query.group_by(RequestCandidate.provider_id)
@@ -537,10 +614,11 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
             Usage.status.notin_(["pending", "streaming"]),
         )
 
-        if self.start_date:
-            usage_query = usage_query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            usage_query = usage_query.filter(Usage.created_at <= self.end_date)
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            usage_query = usage_query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
 
         usage_stats = usage_query.group_by(Usage.provider_id).all()
         usage_map = {str(u.provider_id): u for u in usage_stats}
@@ -566,6 +644,8 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
             action="usage_by_provider",
             start_date=self.start_date.isoformat() if self.start_date else None,
             end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
             limit=self.limit,
             result_count=len(attempt_stats),
         )
@@ -599,15 +679,20 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
 
 
 class AdminUsageByApiFormatAdapter(AdminApiAdapter):
-    def __init__(self, start_date: datetime | None, end_date: datetime | None, limit: int):
-        self.start_date, self.end_date = _apply_admin_default_range(start_date, end_date)
+    def __init__(self, time_range: TimeRangeParams | None, limit: int):
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:api_format",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "limit"],
+        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -626,10 +711,9 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
         # 只统计有 api_format 的记录
         query = query.filter(Usage.api_format.isnot(None))
 
-        if self.start_date:
-            query = query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            query = query.filter(Usage.created_at <= self.end_date)
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
 
         query = (
             query.group_by(Usage.api_format).order_by(func.count(Usage.id).desc()).limit(self.limit)
@@ -640,6 +724,8 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
             action="usage_by_api_format",
             start_date=self.start_date.isoformat() if self.start_date else None,
             end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
             limit=self.limit,
             result_count=len(stats),
         )
@@ -660,23 +746,29 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
 class AdminUsageRecordsAdapter(AdminApiAdapter):
     def __init__(
         self,
-        start_date: datetime | None,
-        end_date: datetime | None,
+        time_range: TimeRangeParams | None,
         search: str | None,
         user_id: str | None,
         username: str | None,
         model: str | None,
         provider: str | None,
+        api_format: str | None,
         status: str | None,
         limit: int,
         offset: int,
     ):
-        self.start_date, self.end_date = _apply_admin_default_range(start_date, end_date)
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
         self.search = search
         self.user_id = user_id
         self.username = username
         self.model = model
         self.provider = provider
+        self.api_format = api_format
         self.status = status
         self.limit = limit
         self.offset = offset
@@ -688,11 +780,15 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         vary_by=[
             "start_date",
             "end_date",
+            "preset",
+            "timezone",
+            "tz_offset_minutes",
             "search",
             "user_id",
             "username",
             "model",
             "provider",
+            "api_format",
             "status",
             "limit",
             "offset",
@@ -748,6 +844,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             # 提供商筛选：前端为下拉框精确值，使用精确匹配以启用索引
             # 如需模糊搜索，请使用 search 参数。
             query = query.filter(Provider.name == self.provider)
+        if self.api_format:
+            # API 格式筛选：精确匹配（大小写不敏感）
+            query = query.filter(func.lower(Usage.api_format) == self.api_format.lower())
         if self.status:
             # 状态筛选
             # 旧的筛选值（基于 is_stream 和 status_code）：stream, standard, error
@@ -773,10 +872,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             elif self.status == "active":
                 # 活跃请求：pending 或 streaming 状态
                 query = query.filter(Usage.status.in_(["pending", "streaming"]))
-        if self.start_date:
-            query = query.filter(Usage.created_at >= self.start_date)
-        if self.end_date:
-            query = query.filter(Usage.created_at <= self.end_date)
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
 
         # Perf: avoid Query.count() building a subquery selecting many columns
         total = int(query.with_entities(func.count(Usage.id)).scalar() or 0)
@@ -875,6 +973,8 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             action="usage_records",
             start_date=self.start_date.isoformat() if self.start_date else None,
             end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
             search=self.search,
             user_id=self.user_id,
             username=self.username,

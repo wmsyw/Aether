@@ -27,6 +27,7 @@ export interface FilterParams {
   user_id?: string
   model?: string
   provider?: string
+  api_format?: string
   status?: string
 }
 
@@ -262,6 +263,9 @@ export function useUsageData(options: UseUsageDataOptions) {
         }
         if (filters?.provider) {
           params.provider = filters.provider
+        }
+        if (filters?.api_format) {
+          params.api_format = filters.api_format
         }
         if (filters?.status) {
           params.status = filters.status
