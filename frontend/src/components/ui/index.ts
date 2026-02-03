@@ -73,3 +73,6 @@ export { default as CollapsibleContent } from './collapsible-content.vue'
 
 // DropdownMenu 下拉菜单系列
 export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from './dropdown-menu'
+
+// Popover 弹出框系列
+export { Popover, PopoverTrigger, PopoverContent } from './popover'
