@@ -26,33 +26,28 @@
           <template v-else-if="provider">
             <!-- 头部:名称 + 快捷操作 -->
             <div class="sticky top-0 z-10 bg-background border-b px-4 sm:px-6 pt-4 sm:pt-6 pb-3 sm:pb-3">
-              <div class="flex items-start justify-between gap-3 sm:gap-4">
-                <div class="space-y-1 flex-1 min-w-0">
-                  <div class="flex items-center gap-2">
-                    <h2 class="text-lg sm:text-xl font-bold truncate">
-                      {{ provider.name }}
-                    </h2>
-                    <Badge
-                      :variant="provider.is_active ? 'default' : 'secondary'"
-                      class="text-xs shrink-0"
-                    >
-                      {{ provider.is_active ? '活跃' : '已停用' }}
-                    </Badge>
-                  </div>
-                  <!-- 网站链接 -->
-                  <div
+              <div class="flex items-center justify-between gap-x-3 sm:gap-x-4 flex-wrap">
+                <div class="flex items-center gap-2 min-w-0">
+                  <h2 class="text-lg sm:text-xl font-bold truncate">
+                    {{ provider.name }}
+                  </h2>
+                  <!-- 网站图标 -->
+                  <a
                     v-if="provider.website"
-                    class="flex items-center gap-2"
+                    :href="provider.website"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-muted-foreground hover:text-primary transition-colors shrink-0"
+                    :title="provider.website"
                   >
-                    <span class="text-muted-foreground">·</span>
-                    <a
-                      :href="provider.website"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="text-xs text-primary hover:underline truncate"
-                      title="访问官网"
-                    >{{ provider.website }}</a>
-                  </div>
+                    <ExternalLink class="w-4 h-4" />
+                  </a>
+                  <Badge
+                    :variant="provider.is_active ? 'default' : 'secondary'"
+                    class="text-xs shrink-0"
+                  >
+                    {{ provider.is_active ? '活跃' : '已停用' }}
+                  </Badge>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
                   <span :title="systemFormatConversionEnabled ? '请先关闭系统级开关' : (provider.enable_format_conversion ? '已启用格式转换（点击关闭）' : '启用格式转换')">
@@ -91,6 +86,25 @@
                     <X class="w-4 h-4" />
                   </Button>
                 </div>
+              </div>
+              <!-- 描述（独占整行，紧贴名称行下方） -->
+              <div class="-mt-0.5">
+                <span
+                  v-if="!editingDescription"
+                  class="text-xs text-muted-foreground truncate block cursor-pointer hover:text-foreground transition-colors"
+                  :title="provider.description || '点击添加描述'"
+                  @click="startEditDescription"
+                >{{ provider.description || '添加描述...' }}</span>
+                <input
+                  v-else
+                  ref="descriptionInputRef"
+                  v-model="editingDescriptionValue"
+                  type="text"
+                  class="text-xs px-1.5 py-0.5 border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary w-full"
+                  placeholder="输入描述..."
+                  @keydown="handleDescriptionKeydown"
+                  @blur="saveDescription"
+                >
               </div>
               <!-- 端点 API 格式 -->
               <div class="flex items-center gap-1.5 flex-wrap mt-3">
@@ -396,13 +410,13 @@
                             />
                           </div>
                           <div class="text-[9px] text-muted-foreground/70 mt-0.5">
-                          <template v-if="key.upstream_metadata.secondary_reset_seconds">
-                            {{ formatResetTime(key.upstream_metadata.secondary_reset_seconds) }}后重置
-                          </template>
-                          <template v-else>
-                            已重置
-                          </template>
-                        </div>
+                            <template v-if="key.upstream_metadata.secondary_reset_seconds">
+                              {{ formatResetTime(key.upstream_metadata.secondary_reset_seconds) }}后重置
+                            </template>
+                            <template v-else>
+                              已重置
+                            </template>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -622,7 +636,8 @@ import {
   GripVertical,
   Copy,
   Shield,
-  Shuffle
+  Shuffle,
+  ExternalLink
 } from 'lucide-vue-next'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import Button from '@/components/ui/button.vue'
@@ -729,6 +744,11 @@ const prioritySaving = ref(false)
 
 // OAuth 刷新状态
 const refreshingOAuthKeyId = ref<string | null>(null)
+
+// 描述编辑状态
+const editingDescription = ref(false)
+const editingDescriptionValue = ref('')
+const descriptionInputRef = ref<HTMLInputElement | null>(null)
 
 // 点击编辑倍率相关状态
 const editingMultiplierKey = ref<string | null>(null)
@@ -845,6 +865,44 @@ async function toggleFormatConversion() {
     emit('refresh')
   } catch {
     showError('切换格式转换失败')
+  }
+}
+
+// ===== 描述编辑 =====
+function startEditDescription() {
+  editingDescription.value = true
+  editingDescriptionValue.value = provider.value?.description || ''
+  nextTick(() => {
+    descriptionInputRef.value?.focus()
+    descriptionInputRef.value?.select()
+  })
+}
+
+function handleDescriptionKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    saveDescription()
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    editingDescription.value = false
+  }
+}
+
+async function saveDescription() {
+  if (!editingDescription.value || !provider.value) return
+  editingDescription.value = false
+
+  const newDescription = editingDescriptionValue.value.trim()
+  // 如果没有变化，直接返回
+  if (newDescription === (provider.value.description || '')) return
+
+  try {
+    await updateProvider(provider.value.id, { description: newDescription || null })
+    provider.value.description = newDescription || null
+    showSuccess('描述已更新')
+    emit('refresh')
+  } catch {
+    showError('更新描述失败')
   }
 }
 

@@ -17,6 +17,15 @@
           基本信息
         </h3>
 
+        <div class="space-y-1.5">
+          <Label for="name">名称 *</Label>
+          <Input
+            id="name"
+            v-model="form.name"
+            placeholder="例如: OpenAI 主账号"
+          />
+        </div>
+
         <div class="grid grid-cols-2 gap-4">
           <div class="space-y-1.5">
             <Label>提供商类型</Label>
@@ -52,25 +61,6 @@
             >
               反代使用固定端点且不可修改
             </p>
-          </div>
-          <div class="space-y-1.5">
-            <Label for="name">名称 *</Label>
-            <Input
-              id="name"
-              v-model="form.name"
-              placeholder="例如: OpenAI 主账号"
-            />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div class="space-y-1.5">
-            <Label for="description">描述</Label>
-            <Input
-              id="description"
-              v-model="form.description"
-              placeholder="提供商描述（可选）"
-            />
           </div>
           <div class="space-y-1.5">
             <Label for="website">主站链接</Label>
