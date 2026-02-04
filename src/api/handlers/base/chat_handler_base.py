@@ -68,6 +68,7 @@ from src.models.database import (
     User,
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
+from src.services.provider.codex import maybe_patch_request_for_codex
 from src.services.provider.transport import (
     build_provider_url,
     get_vertex_ai_effective_format,
@@ -779,6 +780,13 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
             request_body = self.prepare_provider_request_body(request_body)
 
+        # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
+        request_body = maybe_patch_request_for_codex(
+            provider_type=str(getattr(provider, "provider_type", "") or ""),
+            provider_api_format=str(provider_api_format),
+            request_body=request_body,
+        )
+
         # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
         provider_payload, provider_headers = self._request_builder.build(
             request_body,
@@ -1104,6 +1112,13 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             else:
                 # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
                 request_body = self.prepare_provider_request_body(request_body)
+
+            # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
+            request_body = maybe_patch_request_for_codex(
+                provider_type=str(getattr(provider, "provider_type", "") or ""),
+                provider_api_format=str(provider_api_format),
+                request_body=request_body,
+            )
 
             # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
             provider_payload, provider_hdrs = self._request_builder.build(

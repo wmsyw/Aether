@@ -72,6 +72,7 @@ from src.models.database import (
     User,
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
+from src.services.provider.codex import maybe_patch_request_for_codex
 from src.services.provider.transport import build_provider_url
 from src.services.system.config import SystemConfigService
 from src.utils.sse_parser import SSEEventParser
@@ -745,6 +746,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
             url_model = (
                 self.get_model_for_url(request_body, mapped_model) or mapped_model or ctx.model
             )
+
+        # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
+        request_body = maybe_patch_request_for_codex(
+            provider_type=str(getattr(provider, "provider_type", "") or ""),
+            provider_api_format=str(provider_api_format),
+            request_body=request_body,
+        )
 
         # 获取认证信息（处理 Service Account 等异步认证场景）
         auth_info = await get_provider_auth(endpoint, key)
@@ -2293,6 +2301,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 url_model = (
                     self.get_model_for_url(request_body, mapped_model) or mapped_model or model
                 )
+
+            # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
+            request_body = maybe_patch_request_for_codex(
+                provider_type=str(getattr(provider, "provider_type", "") or ""),
+                provider_api_format=str(provider_api_format),
+                request_body=request_body,
+            )
 
             # 获取认证信息（处理 Service Account 等异步认证场景）
             auth_info = await get_provider_auth(endpoint, key)
