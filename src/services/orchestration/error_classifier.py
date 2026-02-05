@@ -176,6 +176,9 @@ class ErrorClassifier:
         "expected `thinking`, found",  # 带反引号变体
         "expected redacted_thinking, found",
         "expected `redacted_thinking`, found",
+        # Antigravity / Gemini-internal: thought signature validation
+        "thoughtsignature",
+        "thought_signature",
     )
 
     def _parse_error_response(self, error_text: str | None) -> dict[str, Any]:

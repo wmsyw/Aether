@@ -549,6 +549,8 @@ class TaskService:
         self,
         *,
         converted_error: Any,
+        provider_type: str | None,
+        model_name: str | None,
         request_id: str | None,
         candidate_record_id: str,
         elapsed_ms: int,
@@ -585,32 +587,77 @@ class TaskService:
             )
             raise converted_error
 
-        if request_body_ref.get("_rectified", False):
+        provider_type_norm = str(provider_type or "").lower()
+
+        # Rectification may have multiple stages (Antigravity only).
+        stage_raw = request_body_ref.get("_rectify_stage", 0)
+        try:
+            stage = int(stage_raw or 0)
+        except Exception:
+            stage = 0
+        if stage <= 0 and request_body_ref.get("_rectified", False):
+            stage = 1
+
+        if stage >= 2 or (stage >= 1 and provider_type_norm != "antigravity"):
             logger.warning("  [{}] Thinking 错误：已整流仍失败，终止重试", request_id)
             self._mark_thinking_error_failed(
                 candidate_record_id,
                 converted_error,
                 elapsed_ms,
                 captured_key_concurrent,
-                {**serializable_extra_data, "rectified": True},
+                {**serializable_extra_data, "rectified": True, "rectify_stage": stage},
             )
             raise converted_error
 
         request_body = request_body_ref.get("body", {})
-        rectified_body, modified = ThinkingRectifier.rectify(request_body)
+
+        stage_label = "thinking_only"
+        next_stage = 1
+        if stage == 0:
+            rectified_body, modified = ThinkingRectifier.rectify(request_body)
+            stage_label = "thinking_only"
+            next_stage = 1
+        else:
+            # Stage 2 only applies to Antigravity.
+            rectified_body, modified = ThinkingRectifier.rectify_signature_sensitive_blocks(
+                request_body
+            )
+            stage_label = "thinking_and_tools"
+            next_stage = 2
 
         if modified:
             request_body_ref["body"] = rectified_body
             request_body_ref["_rectified"] = True
             request_body_ref["_rectified_this_turn"] = True
+            request_body_ref["_rectify_stage"] = next_stage
 
-            logger.info("  [{}] 请求已整流，在当前候选上重试", request_id)
+            if provider_type_norm == "antigravity":
+                try:
+                    from src.core.metrics import antigravity_degradation_total
+
+                    antigravity_degradation_total.labels(
+                        stage=stage_label,
+                        model=str(model_name or "unknown"),
+                    ).inc()
+                except Exception:
+                    pass
+
+            logger.info(
+                "  [{}] 请求已整流(stage={})，在当前候选上重试",
+                request_id,
+                next_stage,
+            )
             self._mark_thinking_error_failed(
                 candidate_record_id,
                 converted_error,
                 elapsed_ms,
                 captured_key_concurrent,
-                {**serializable_extra_data, "rectified": True},
+                {
+                    **serializable_extra_data,
+                    "rectified": True,
+                    "rectify_stage": next_stage,
+                    "rectify_stage_label": stage_label,
+                },
             )
             return "continue"
 
@@ -770,6 +817,8 @@ class TaskService:
             if isinstance(converted_error, ThinkingSignatureException):
                 action = self._handle_thinking_signature_error(
                     converted_error=converted_error,
+                    provider_type=str(getattr(provider, "provider_type", "") or "").lower(),
+                    model_name=str(global_model_id or ""),
                     request_id=request_id,
                     candidate_record_id=candidate_record_id,
                     elapsed_ms=elapsed_ms,

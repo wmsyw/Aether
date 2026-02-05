@@ -197,6 +197,15 @@ class GeminiNormalizer(FormatNormalizer):
     ) -> dict[str, Any]:
         system_text = internal.system or self._join_instructions(internal.instructions)
 
+        target_variant_norm = str(target_variant or "").strip().lower()
+        is_antigravity = target_variant_norm == "antigravity"
+        allow_dummy_thought = bool(
+            is_antigravity and str(internal.model or "").startswith("gemini-")
+        )
+        thinking_enabled = (
+            self._is_antigravity_thinking_enabled(internal) if is_antigravity else False
+        )
+
         # tools/tool_choice
         tools = None
         if internal.tools:
@@ -278,8 +287,45 @@ class GeminiNormalizer(FormatNormalizer):
                     generation_config["thinkingConfig"] = orig_gc["thinking_config"]
 
         contents: list[dict[str, Any]] = []
-        for msg in internal.messages:
-            contents.append(self._internal_message_to_content(msg))
+        last_idx = len(internal.messages) - 1
+        for idx, msg in enumerate(internal.messages):
+            content = self._internal_message_to_content(
+                msg,
+                target_variant=target_variant_norm,
+                model=internal.model,
+            )
+
+            # Antigravity: Gemini models allow a dummy thought signature as a workaround
+            # for strict thought signature validation. Only apply to the last assistant
+            # turn (prefill scenario) when thinking is enabled and no thought part exists.
+            if (
+                allow_dummy_thought
+                and thinking_enabled
+                and idx == last_idx
+                and content.get("role") == "model"
+            ):
+                parts = content.get("parts")
+                if isinstance(parts, list) and parts:
+                    has_thought = any(
+                        isinstance(p, dict) and p.get("thought") is True for p in parts
+                    )
+                    if not has_thought:
+                        try:
+                            from src.services.antigravity.constants import DUMMY_THOUGHT_SIGNATURE
+
+                            dummy_sig = DUMMY_THOUGHT_SIGNATURE
+                        except Exception:
+                            dummy_sig = "skip_thought_signature_validator"
+
+                        dummy_part: dict[str, Any] = {
+                            "text": "Thinking...",
+                            "thought": True,
+                            "thoughtSignature": dummy_sig,
+                        }
+                        content = dict(content)
+                        content["parts"] = [dummy_part, *parts]
+
+            contents.append(content)
 
         result: dict[str, Any] = {
             "contents": contents,
@@ -1120,12 +1166,22 @@ class GeminiNormalizer(FormatNormalizer):
 
         return blocks, dropped
 
-    def _internal_message_to_content(self, msg: InternalMessage) -> dict[str, Any]:
+    def _internal_message_to_content(
+        self,
+        msg: InternalMessage,
+        *,
+        target_variant: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         role = "model" if msg.role == Role.ASSISTANT else "user"
 
         parts: list[dict[str, Any]] = []
         for b in msg.content:
             if isinstance(b, UnknownBlock):
+                if str(target_variant or "").strip().lower() == "antigravity":
+                    part = self._unknown_block_to_antigravity_part(b, model=str(model or ""))
+                    if part is not None:
+                        parts.append(part)
                 continue
 
             if isinstance(b, TextBlock):
@@ -1165,6 +1221,94 @@ class GeminiNormalizer(FormatNormalizer):
                 continue
 
         return {"role": role, "parts": parts}
+
+    def _is_antigravity_thinking_enabled(self, internal: InternalRequest) -> bool:
+        """Best-effort detection of Claude-style `thinking` flag for Antigravity conversions."""
+        try:
+            extra = internal.extra if isinstance(internal.extra, dict) else {}
+            claude_extra = extra.get("claude")
+            if not isinstance(claude_extra, dict):
+                return False
+
+            thinking = claude_extra.get("thinking")
+            if thinking is True:
+                return True
+
+            if isinstance(thinking, dict):
+                ttype = thinking.get("type")
+                if isinstance(ttype, str) and ttype.strip().lower() == "enabled":
+                    return True
+                enabled = thinking.get("enabled")
+                if enabled is True:
+                    return True
+
+            return False
+        except Exception:
+            return False
+
+    def _unknown_block_to_antigravity_part(
+        self,
+        block: UnknownBlock,
+        *,
+        model: str,
+    ) -> dict[str, Any] | None:
+        """Translate Claude thinking blocks into Gemini thought parts for Antigravity.
+
+        The internal representation stores Claude `thinking`/`redacted_thinking` as UnknownBlock.
+        Antigravity expects them as Gemini parts with `thought=true` and `thoughtSignature`.
+        """
+        raw_type = str(getattr(block, "raw_type", "") or "").strip().lower()
+        if raw_type not in {"thinking", "redacted_thinking"}:
+            return None
+
+        payload = block.payload if isinstance(block.payload, dict) else {}
+
+        # Claude: thinking -> {type:"thinking", thinking:"...", signature?: "..."}
+        # Claude: redacted_thinking -> {type:"redacted_thinking", data:"..."}
+        if raw_type == "thinking":
+            text_val = payload.get("thinking")
+        else:
+            text_val = payload.get("data")
+        if text_val is None:
+            text_val = payload.get("text")
+
+        if not isinstance(text_val, str) or not text_val:
+            return None
+
+        payload_sig = (
+            payload.get("signature")
+            or payload.get("thoughtSignature")
+            or payload.get("thought_signature")
+        )
+        if not isinstance(payload_sig, str) or not payload_sig:
+            payload_sig = None
+
+        signature: str | None = None
+        try:
+            from src.services.antigravity.constants import DUMMY_THOUGHT_SIGNATURE
+            from src.services.antigravity.signature_cache import signature_cache
+
+            cached_or_dummy = signature_cache.get_or_dummy(model, text_val)
+
+            # Prefer cached real signature > client-provided signature > dummy signature.
+            if (
+                isinstance(cached_or_dummy, str)
+                and cached_or_dummy
+                and cached_or_dummy != DUMMY_THOUGHT_SIGNATURE
+            ):
+                signature = cached_or_dummy
+            elif payload_sig:
+                signature = payload_sig
+            elif isinstance(cached_or_dummy, str) and cached_or_dummy:
+                signature = cached_or_dummy
+        except Exception:
+            signature = payload_sig
+
+        # For non-gemini models, missing signature is likely to fail upstream validation.
+        if not signature:
+            return None
+
+        return {"text": text_val, "thought": True, "thoughtSignature": signature}
 
     def _collapse_system_instruction(
         self, system_instruction: Any

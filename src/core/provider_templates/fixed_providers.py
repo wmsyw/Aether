@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.core.provider_templates.types import ProviderType
+from src.services.antigravity.constants import PROD_BASE_URL as ANTIGRAVITY_PROD_URL
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +103,7 @@ FIXED_PROVIDERS: dict[ProviderType, FixedProviderTemplate] = {
     ProviderType.ANTIGRAVITY: FixedProviderTemplate(
         provider_type=ProviderType.ANTIGRAVITY,
         display_name="Antigravity",
-        api_base_url="https://cloudcode-pa.googleapis.com",
+        api_base_url=ANTIGRAVITY_PROD_URL,
         endpoint_signatures=["gemini:cli"],
         oauth=FixedProviderOAuth(
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
@@ -117,7 +118,7 @@ FIXED_PROVIDERS: dict[ProviderType, FixedProviderTemplate] = {
                 "https://www.googleapis.com/auth/experimentsandconfigs",
             ],
             redirect_uri="http://localhost:51121/oauth2callback",
-            use_pkce=False,
+            use_pkce=True,
         ),
     ),
 }

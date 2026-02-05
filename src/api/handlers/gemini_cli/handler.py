@@ -96,7 +96,12 @@ class GeminiCliMessageHandler(CliMessageHandlerBase):
         # 优先使用映射后的模型名，否则使用请求体中的
         return mapped_model or request_body.get("model")
 
-    def _extract_usage_from_event(self, event: dict[str, Any]) -> dict[str, int]:
+    def _extract_usage_from_event(
+        self,
+        event: dict[str, Any],
+        *,
+        provider_type: str | None = None,
+    ) -> dict[str, int]:
         """
         从 Gemini 事件中提取 token 使用情况
 
@@ -104,10 +109,14 @@ class GeminiCliMessageHandler(CliMessageHandlerBase):
 
         Args:
             event: Gemini 流式响应事件
+            provider_type: Provider 类型（用于 Antigravity 特判）
 
         Returns:
             包含 input_tokens, output_tokens, cached_tokens 的字典
         """
+        if str(provider_type or "").lower() == "antigravity":
+            return self._extract_antigravity_usage(event)
+
         from src.api.handlers.gemini.stream_parser import GeminiStreamParser
 
         usage = GeminiStreamParser().extract_usage(event)
@@ -123,6 +132,35 @@ class GeminiCliMessageHandler(CliMessageHandlerBase):
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
             "cached_tokens": usage.get("cached_tokens", 0),
+        }
+
+    def _extract_antigravity_usage(self, event: dict[str, Any]) -> dict[str, int]:
+        """Antigravity 专用 usage 提取（宽松 + 边界保护）。
+
+        Antigravity 的 usageMetadata 可能缺少 totalTokenCount，因此不能依赖
+        GeminiStreamParser.extract_usage 的“totalTokenCount 必须存在”的严格判断。
+        """
+        usage_metadata = event.get("usageMetadata", {})
+        if not isinstance(usage_metadata, dict) or not usage_metadata:
+            return {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
+
+        def _as_int(v: Any) -> int:
+            try:
+                return int(v or 0)
+            except Exception:
+                return 0
+
+        prompt = _as_int(usage_metadata.get("promptTokenCount"))
+        cached = _as_int(usage_metadata.get("cachedContentTokenCount"))
+        candidates = _as_int(usage_metadata.get("candidatesTokenCount"))
+        thoughts = _as_int(usage_metadata.get("thoughtsTokenCount"))
+
+        return {
+            # 注意：计费层会根据 api_family(GEMINI) 扣除 cache_read_tokens，
+            # 因此这里保持 Gemini 口径：input_tokens=promptTokenCount（含缓存）。
+            "input_tokens": max(0, prompt),
+            "output_tokens": max(0, candidates + thoughts),
+            "cached_tokens": max(0, cached),
         }
 
     def _process_event_data(
@@ -172,7 +210,7 @@ class GeminiCliMessageHandler(CliMessageHandlerBase):
                 ctx.final_response = data
 
         # 提取使用量信息（复用 GeminiStreamParser.extract_usage）
-        usage = self._extract_usage_from_event(data)
+        usage = self._extract_usage_from_event(data, provider_type=ctx.provider_type)
         if usage["input_tokens"] > 0 or usage["output_tokens"] > 0:
             ctx.input_tokens = usage["input_tokens"]
             ctx.output_tokens = usage["output_tokens"]

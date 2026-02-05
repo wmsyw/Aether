@@ -40,6 +40,8 @@ class StreamContext:
     provider_name: str | None = None
     provider_id: str | None = None
     provider_type: str | None = None  # Provider 类型（如 codex），用于元数据采集
+    # Transport 层选中的 base_url（用于 URL 可用性更新/故障转移等场景）
+    selected_base_url: str | None = None
     endpoint_id: str | None = None
     key_id: str | None = None
     attempt_id: str | None = None
@@ -130,6 +132,7 @@ class StreamContext:
         self.final_response = None
         self.stream_conversion_state = None
         self.needs_conversion = False
+        self.selected_base_url = None
 
     @property
     def collected_text(self) -> str:

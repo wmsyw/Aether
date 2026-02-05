@@ -13,6 +13,7 @@ Thinking 整流器（Rectifier）
 """
 
 import copy
+import json
 from typing import Any
 
 from src.core.logger import logger
@@ -64,6 +65,103 @@ class ThinkingRectifier:
                 del rectified_body["thinking"]
                 modified = True
                 logger.info("ThinkingRectifier: 已移除顶层 thinking 参数")
+
+        return rectified_body, modified
+
+    @staticmethod
+    def rectify_signature_sensitive_blocks(
+        request_body: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Second-stage rectification for signature-related failures.
+
+        This is a more aggressive fallback than `rectify()`:
+        - Removes all thinking/redacted_thinking blocks
+        - Removes signature fields on remaining blocks
+        - Degrades tool_use/tool_result blocks into plain text blocks
+        - Disables top-level `thinking` when enabled
+        """
+        if not request_body:
+            return request_body, False
+
+        rectified_body = copy.deepcopy(request_body)
+        modified = False
+
+        messages = rectified_body.get("messages", [])
+        if isinstance(messages, list) and messages:
+            new_messages: list[Any] = []
+            for message in messages:
+                if not isinstance(message, dict):
+                    new_messages.append(message)
+                    continue
+
+                new_message = dict(message)
+                content = message.get("content")
+                if isinstance(content, list):
+                    new_content: list[Any] = []
+                    for block in content:
+                        if not isinstance(block, dict):
+                            new_content.append(block)
+                            continue
+
+                        block_type = block.get("type")
+
+                        if block_type in ("thinking", "redacted_thinking"):
+                            modified = True
+                            continue
+
+                        if block_type == "tool_use":
+                            # Degrade into text to avoid strict structure/signature validation.
+                            name = block.get("name")
+                            inp = block.get("input")
+                            try:
+                                inp_text = json.dumps(inp, ensure_ascii=False)
+                            except Exception:
+                                inp_text = str(inp)
+                            new_content.append(
+                                {
+                                    "type": "text",
+                                    "text": f"[tool_use] name={name} input={inp_text}",
+                                }
+                            )
+                            modified = True
+                            continue
+
+                        if block_type == "tool_result":
+                            raw = block.get("content")
+                            try:
+                                raw_text = json.dumps(raw, ensure_ascii=False)
+                            except Exception:
+                                raw_text = str(raw)
+                            new_content.append(
+                                {
+                                    "type": "text",
+                                    "text": f"[tool_result] {raw_text}",
+                                }
+                            )
+                            modified = True
+                            continue
+
+                        # Remove signature field (for any non-thinking block).
+                        if "signature" in block:
+                            new_block = {k: v for k, v in block.items() if k != "signature"}
+                            new_content.append(new_block)
+                            modified = True
+                            continue
+
+                        new_content.append(block)
+
+                    new_message["content"] = new_content
+
+                new_messages.append(new_message)
+
+            rectified_body["messages"] = new_messages
+
+        # Stage-2: disable top-level thinking unconditionally when enabled.
+        thinking_param = rectified_body.get("thinking")
+        if isinstance(thinking_param, dict) and thinking_param.get("type") == "enabled":
+            del rectified_body["thinking"]
+            modified = True
+            logger.info("ThinkingRectifier(stage2): 已移除顶层 thinking 参数")
 
         return rectified_body, modified
 

@@ -81,7 +81,7 @@
             <div class="p-4 space-y-4">
               <!-- URL 配置区 -->
               <div class="flex items-end gap-3">
-                <div class="flex-1 min-w-0 grid grid-cols-3 gap-3">
+                <div class="flex-1 min-w-0 grid grid-cols-4 gap-3">
                   <div class="col-span-2 space-y-1.5">
                     <Label class="text-xs text-muted-foreground">Base URL</Label>
                     <Input
@@ -100,10 +100,32 @@
                       @update:model-value="(v) => updateEndpointField(endpoint.id, 'path', v)"
                     />
                   </div>
+                  <div class="space-y-1.5">
+                    <Label class="text-xs text-muted-foreground">上游流式</Label>
+                    <Select
+                      :model-value="getEndpointEditState(endpoint.id)?.upstreamStreamPolicy ?? getEndpointUpstreamStreamPolicy(endpoint)"
+                      @update:model-value="(v) => updateEndpointStreamPolicy(endpoint.id, v as string)"
+                    >
+                      <SelectTrigger class="h-9 text-xs">
+                        <SelectValue placeholder="跟随客户端" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">
+                          跟随客户端
+                        </SelectItem>
+                        <SelectItem value="force_stream">
+                          强制流式
+                        </SelectItem>
+                        <SelectItem value="force_non_stream">
+                          强制非流式
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <!-- 保存/撤销按钮（URL/路径有修改时显示） -->
                 <div
-                  v-if="!isFixedProvider && hasUrlChanges(endpoint)"
+                  v-if="hasUrlChanges(endpoint)"
                   class="flex items-center gap-1 shrink-0"
                 >
                   <Button
@@ -521,6 +543,7 @@ interface EditableBodyRule {
 interface EndpointEditState {
   url: string
   path: string
+  upstreamStreamPolicy: string
   rules: EditableRule[]
   bodyRules: EditableBodyRule[]
 }
@@ -689,6 +712,19 @@ function isCodexUrl(baseUrl: string): boolean {
   return url.includes('/backend-api/codex') || url.endsWith('/codex')
 }
 
+// 读取端点的上游流式策略（endpoint.config.upstream_stream_policy）
+function getEndpointUpstreamStreamPolicy(endpoint: ProviderEndpoint): string {
+  const cfg = endpoint.config || {}
+  const raw = (cfg.upstream_stream_policy ?? cfg.upstreamStreamPolicy ?? cfg.upstream_stream) as any
+  if (raw === null || raw === undefined) return 'auto'
+  if (typeof raw === 'boolean') return raw ? 'force_stream' : 'force_non_stream'
+  const s = String(raw).trim().toLowerCase()
+  if (!s || s === 'auto' || s === 'follow' || s === 'client' || s === 'default') return 'auto'
+  if (s === 'force_stream' || s === 'stream' || s === 'sse' || s === 'true' || s === '1') return 'force_stream'
+  if (s === 'force_non_stream' || s === 'force_sync' || s === 'non_stream' || s === 'sync' || s === 'false' || s === '0') return 'force_non_stream'
+  return 'auto'
+}
+
 // 初始化端点的编辑状态
 function initEndpointEditState(endpoint: ProviderEndpoint): EndpointEditState {
   const rules: EditableRule[] = []
@@ -720,6 +756,7 @@ function initEndpointEditState(endpoint: ProviderEndpoint): EndpointEditState {
   return {
     url: endpoint.base_url,
     path: endpoint.custom_path || '',
+    upstreamStreamPolicy: getEndpointUpstreamStreamPolicy(endpoint),
     rules,
     bodyRules,
   }
@@ -740,6 +777,18 @@ function updateEndpointField(endpointId: string, field: 'url' | 'path', value: s
   }
   if (endpointEditStates.value[endpointId]) {
     endpointEditStates.value[endpointId][field] = value
+  }
+}
+
+function updateEndpointStreamPolicy(endpointId: string, value: string) {
+  if (!endpointEditStates.value[endpointId]) {
+    const endpoint = localEndpoints.value.find(e => e.id === endpointId)
+    if (endpoint) {
+      endpointEditStates.value[endpointId] = initEndpointEditState(endpoint)
+    }
+  }
+  if (endpointEditStates.value[endpointId]) {
+    endpointEditStates.value[endpointId].upstreamStreamPolicy = value
   }
 }
 
@@ -1118,6 +1167,7 @@ function hasUrlChanges(endpoint: ProviderEndpoint): boolean {
   if (!state) return false
   if (state.url !== endpoint.base_url) return true
   if (state.path !== (endpoint.custom_path || '')) return true
+  if (state.upstreamStreamPolicy !== getEndpointUpstreamStreamPolicy(endpoint)) return true
   return false
 }
 
@@ -1264,12 +1314,34 @@ async function saveEndpoint(endpoint: ProviderEndpoint) {
 
   savingEndpointId.value = endpoint.id
   try {
-    await updateEndpoint(endpoint.id, {
-      base_url: state.url,
-      custom_path: state.path || null,
-      header_rules: rulesToHeaderRules(state.rules),
-      body_rules: rulesToBodyRules(state.bodyRules),
-    })
+    // 仅提交变更字段，避免 fixed provider 因 base_url/custom_path 被锁定而更新失败
+    const payload: Record<string, any> = {}
+
+    if (!isFixedProvider.value) {
+      if (state.url !== endpoint.base_url) payload.base_url = state.url
+      if (state.path !== (endpoint.custom_path || '')) payload.custom_path = state.path || null
+    }
+
+    if (hasRulesChanges(endpoint)) payload.header_rules = rulesToHeaderRules(state.rules)
+    if (hasBodyRulesChanges(endpoint)) payload.body_rules = rulesToBodyRules(state.bodyRules)
+
+    // endpoint.config.upstream_stream_policy
+    if (state.upstreamStreamPolicy !== getEndpointUpstreamStreamPolicy(endpoint)) {
+      const merged: Record<string, any> = { ...(endpoint.config || {}) }
+      // Normalize config keys: keep only canonical `upstream_stream_policy`
+      delete merged.upstream_stream_policy
+      delete merged.upstreamStreamPolicy
+      delete merged.upstream_stream
+
+      if (state.upstreamStreamPolicy !== 'auto') {
+        merged.upstream_stream_policy = state.upstreamStreamPolicy
+      }
+      payload.config = Object.keys(merged).length > 0 ? merged : null
+    }
+
+    if (Object.keys(payload).length === 0) return
+
+    await updateEndpoint(endpoint.id, payload)
     success('端点已更新')
     emit('endpointUpdated')
   } catch (error: any) {

@@ -348,6 +348,25 @@ async def enrich_auth_config(
             )
             if email:
                 auth_config["email"] = email
+
+        # Antigravity: project_id 需要通过 /v1internal:loadCodeAssist 获取
+        if provider_type == "antigravity":
+            if not auth_config.get("project_id"):
+                try:
+                    from src.services.antigravity.client import load_code_assist
+
+                    code_assist = await load_code_assist(access_token, proxy_config=proxy_config)
+                    project_id = code_assist.get("cloudaicompanionProject")
+                    if isinstance(project_id, str) and project_id:
+                        auth_config["project_id"] = project_id
+
+                    tier_obj = code_assist.get("currentTier")
+                    if isinstance(tier_obj, dict):
+                        tier_type = tier_obj.get("tierType")
+                        if isinstance(tier_type, str) and tier_type:
+                            auth_config["tier"] = tier_type
+                except Exception as e:
+                    logger.warning(f"Failed to load code assist: {e}")
         return auth_config
 
     return auth_config

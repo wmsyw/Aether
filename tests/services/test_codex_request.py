@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from src.services.provider.codex import maybe_patch_request_for_codex, patch_openai_cli_request_for_codex
+from src.services.provider.codex import (
+    maybe_patch_request_for_codex,
+    patch_openai_cli_request_for_codex,
+)
 
 
 def test_patch_openai_cli_request_for_codex_sets_store_and_instructions() -> None:
@@ -101,3 +104,13 @@ def test_maybe_patch_request_for_codex_patches_for_codex_openai_cli() -> None:
     assert out["store"] is False
     assert "instructions" in out
 
+
+def test_codex_envelope_extra_headers_includes_sse_accept_and_session() -> None:
+    from src.services.codex.envelope import codex_oauth_envelope
+
+    headers = codex_oauth_envelope.extra_headers() or {}
+    assert headers.get("Accept") == "text/event-stream"
+    assert headers.get("x-oai-web-search-eligible") == "true"
+    assert headers.get("originator") == "codex_cli_rs"
+    assert isinstance(headers.get("session_id"), str)
+    assert headers.get("session_id")

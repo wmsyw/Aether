@@ -44,6 +44,9 @@ from src.api.handlers.base.response_parser import (
     ResponseParser,
 )
 from src.api.handlers.base.stream_context import StreamContext
+from src.api.handlers.base.upstream_stream_bridge import (
+    aggregate_upstream_stream_to_internal_response,
+)
 from src.api.handlers.base.utils import (
     build_sse_headers,
     check_html_response,
@@ -53,6 +56,9 @@ from src.api.handlers.base.utils import (
 )
 from src.config.constants import StreamDefaults
 from src.config.settings import config
+from src.core.api_format.conversion.stream_bridge import (
+    iter_internal_response_as_stream_events,
+)
 from src.core.error_utils import extract_client_error_message
 from src.core.exceptions import (
     EmbeddedErrorException,
@@ -72,6 +78,12 @@ from src.models.database import (
     User,
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
+from src.services.provider.behavior import get_provider_behavior
+from src.services.provider.stream_policy import (
+    enforce_stream_mode_for_upstream,
+    get_upstream_stream_policy,
+    resolve_upstream_is_stream,
+)
 from src.services.provider.transport import build_provider_url
 from src.services.system.config import SystemConfigService
 from src.utils.sse_parser import SSEEventParser
@@ -702,6 +714,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         ctx.final_response = None
         ctx.response_id = None
         ctx.response_metadata = {}  # 重置 Provider 响应元数据
+        ctx.selected_base_url = None  # 重置本次请求选用的 base_url（重试时避免污染）
 
         # 记录 Provider 信息
         ctx.provider_name = str(provider.name)
@@ -740,9 +753,26 @@ class CliMessageHandlerBase(BaseMessageHandler):
         )
         ctx.needs_conversion = needs_conversion
 
-        # 确定目标变体（用于 Codex 等需要特殊处理的上游）
         provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-        target_variant = provider_type if provider_type == "codex" else None
+        behavior = get_provider_behavior(
+            provider_type=provider_type,
+            endpoint_sig=provider_api_format,
+        )
+        envelope = behavior.envelope
+        target_variant = behavior.same_format_variant
+        # 跨格式转换也允许变体（Antigravity 需要保留/翻译 Claude thinking 块）
+        conversion_variant = behavior.cross_format_variant
+
+        # Upstream streaming policy (per-endpoint): may force upstream to sync/stream mode.
+        upstream_policy = get_upstream_stream_policy(
+            endpoint,
+            provider_type=provider_type,
+            endpoint_sig=provider_api_format,
+        )
+        upstream_is_stream = resolve_upstream_is_stream(
+            client_is_stream=True,
+            policy=upstream_policy,
+        )
 
         # 跨格式：先做请求体转换（失败触发 failover）
         if needs_conversion and provider_api_format:
@@ -752,8 +782,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 provider_api_format,
                 mapped_model,
                 ctx.model,
-                is_stream=True,
-                target_variant=target_variant,
+                is_stream=upstream_is_stream,
+                target_variant=conversion_variant,
             )
         else:
             # 同格式：按原逻辑做轻量清理（子类可覆盖）
@@ -762,7 +792,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 self.get_model_for_url(request_body, mapped_model) or mapped_model or ctx.model
             )
             # 同格式时也需要应用 target_variant 转换（如 Codex）
-            if target_variant:
+            if target_variant and provider_api_format:
                 registry = get_format_converter_registry()
                 request_body = registry.convert_request(
                     request_body,
@@ -771,8 +801,30 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     target_variant=target_variant,
                 )
 
+        # Force upstream stream/sync mode in request body (best-effort).
+        if provider_api_format:
+            enforce_stream_mode_for_upstream(
+                request_body,
+                provider_api_format=provider_api_format,
+                upstream_is_stream=upstream_is_stream,
+            )
+
         # 获取认证信息（处理 Service Account 等异步认证场景）
         auth_info = await get_provider_auth(endpoint, key)
+
+        # Provider envelope: wrap request after auth is available and before RequestBuilder.build().
+        if envelope:
+            request_body, url_model = envelope.wrap_request(
+                request_body,
+                model=url_model or ctx.model or "",
+                url_model=url_model,
+                decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+            )
+
+        # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
+        extra_headers: dict[str, str] = {}
+        if envelope:
+            extra_headers.update(envelope.extra_headers() or {})
 
         # 使用 RequestBuilder 构建请求体和请求头
         # 注意：mapped_model 已经应用到 request_body，这里不再传递
@@ -782,9 +834,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
             original_headers,
             endpoint,
             key,
-            is_stream=True,
+            is_stream=upstream_is_stream,
+            extra_headers=extra_headers if extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
         )
+        if upstream_is_stream:
+            # Ensure upstream returns SSE payload when in streaming mode.
+            provider_headers["Accept"] = "text/event-stream"
 
         # 保存发送给 Provider 的请求信息（用于调试和统计）
         ctx.provider_request_headers = provider_headers
@@ -794,10 +850,146 @@ class CliMessageHandlerBase(BaseMessageHandler):
             endpoint,
             query_params=query_params,
             path_params={"model": url_model},
-            is_stream=True,  # CLI handler 处理流式请求
+            is_stream=upstream_is_stream,
             key=key,
             decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
         )
+        # Capture the selected base_url from transport (used by some envelopes for failover).
+        ctx.selected_base_url = envelope.capture_selected_base_url() if envelope else None
+
+        # If upstream is forced to non-stream mode, we execute a sync request and then
+        # simulate streaming to the client (sync -> stream bridge).
+        if not upstream_is_stream:
+            from src.clients.http_client import HTTPClientPool
+
+            request_timeout_sync = provider.request_timeout or config.http_request_timeout
+            http_client = await HTTPClientPool.get_proxy_client(
+                proxy_config=provider.proxy,
+            )
+
+            try:
+                resp = await http_client.post(
+                    url,
+                    json=provider_payload,
+                    headers=provider_headers,
+                    timeout=httpx.Timeout(request_timeout_sync),
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                if envelope:
+                    envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
+                    if ctx.selected_base_url:
+                        logger.warning(
+                            f"[{envelope.name}] Connection error: {ctx.selected_base_url} ({e})"
+                        )
+                raise
+
+            ctx.status_code = resp.status_code
+            ctx.response_headers = dict(resp.headers)
+            if envelope:
+                envelope.on_http_status(base_url=ctx.selected_base_url, status_code=ctx.status_code)
+
+            # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_body = ""
+                try:
+                    error_body = resp.text[:4000] if resp.text else ""
+                except Exception:
+                    error_body = ""
+                e.upstream_response = error_body  # type: ignore[attr-defined]
+                raise
+
+            # Safe JSON parsing.
+            try:
+                response_json = resp.json()
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                raw_content = ""
+                try:
+                    raw_content = resp.text[:500] if resp.text else "(empty)"
+                except Exception:
+                    raw_content = "(unable to read)"
+                raise ProviderNotAvailableException(
+                    "上游服务返回了无效的响应",
+                    provider_name=str(provider.name),
+                    upstream_status=resp.status_code,
+                    upstream_response=f"json_decode_error={type(e).__name__}: {raw_content}",
+                )
+
+            if envelope:
+                response_json = envelope.unwrap_response(response_json)
+                envelope.postprocess_unwrapped_response(model=ctx.model, data=response_json)
+
+            # Embedded error detection (HTTP 200 but error body).
+            if isinstance(response_json, dict) and provider_api_format:
+                parser = get_parser_for_format(provider_api_format)
+                if parser.is_error_response(response_json):
+                    parsed = parser.parse_response(response_json, 200)
+                    raise EmbeddedErrorException(
+                        provider_name=str(provider.name),
+                        error_code=parsed.embedded_status_code,
+                        error_message=parsed.error_message,
+                        error_status=parsed.error_type,
+                    )
+
+            # Extract Provider response metadata (best-effort).
+            if isinstance(response_json, dict):
+                ctx.response_metadata = self._extract_response_metadata(response_json)
+
+            # Convert sync JSON -> InternalResponse, then InternalResponse -> client stream events.
+            registry = get_format_converter_registry()
+            src_norm = registry.get_normalizer(provider_api_format) if provider_api_format else None
+            if src_norm is None:
+                raise RuntimeError(f"未注册 Normalizer: {provider_api_format}")
+
+            internal_resp = src_norm.response_to_internal(
+                response_json if isinstance(response_json, dict) else {}
+            )
+            internal_resp.model = str(ctx.model or internal_resp.model or "")
+            if internal_resp.id:
+                ctx.response_id = internal_resp.id
+
+            if internal_resp.usage:
+                ctx.input_tokens = int(internal_resp.usage.input_tokens or 0)
+                ctx.output_tokens = int(internal_resp.usage.output_tokens or 0)
+                ctx.cached_tokens = int(internal_resp.usage.cache_read_tokens or 0)
+                ctx.cache_creation_tokens = int(internal_resp.usage.cache_write_tokens or 0)
+
+            from src.core.api_format.conversion.stream_state import StreamState
+
+            tgt_norm = registry.get_normalizer(client_api_format) if client_api_format else None
+            if tgt_norm is None:
+                raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+            state = StreamState(
+                model=str(ctx.model or ""),
+                message_id=str(ctx.response_id or ctx.request_id or self.request_id or ""),
+            )
+            output_state = {"first_yield": True, "streaming_updated": False}
+
+            async def _streamified() -> AsyncGenerator[bytes]:
+                for ev in iter_internal_response_as_stream_events(internal_resp):
+                    converted_events = tgt_norm.stream_event_from_internal(ev, state)
+                    if not converted_events:
+                        continue
+                    self._record_converted_chunks(ctx, converted_events)
+                    for sse_line in _format_converted_events_to_sse(
+                        converted_events, client_api_format
+                    ):
+                        if not sse_line:
+                            continue
+                        ctx.chunk_count += 1
+                        self._mark_first_output(ctx, output_state)
+                        yield (sse_line + "\n").encode("utf-8")
+
+                # OpenAI chat clients expect a final [DONE] marker.
+                if str(client_api_format or "").strip().lower() == "openai:chat":
+                    ctx.chunk_count += 1
+                    self._mark_first_output(ctx, output_state)
+                    yield b"data: [DONE]\n\n"
+                    ctx.has_completion = True
+
+            return _streamified()
 
         # 配置 HTTP 超时
         # 注意：read timeout 用于检测连接断开，不是整体请求超时
@@ -847,6 +1039,12 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             logger.debug(f"  └─ 收到响应: status={stream_response.status_code}")
 
+            if envelope:
+                envelope.on_http_status(
+                    base_url=ctx.selected_base_url,
+                    status_code=ctx.status_code,
+                )
+
             stream_response.raise_for_status()
 
             # 使用字节流迭代器（避免 aiter_lines 的性能问题, aiter_bytes 会自动解压 gzip/deflate）
@@ -871,7 +1069,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             else:
                 await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
 
-        except TimeoutError:
+        except TimeoutError as e:
             # 整体请求超时（建立连接 + 获取首字节）
             # 清理可能已建立的连接上下文
             if response_ctx is not None:
@@ -879,6 +1077,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     await response_ctx.__aexit__(None, None, None)
                 except Exception:
                     pass
+            if envelope:
+                envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
             await http_client.aclose()
             logger.warning(
                 f"  [{self.request_id}] 请求超时: Provider={provider.name}, timeout={request_timeout}s"
@@ -899,6 +1099,16 @@ class CliMessageHandlerBase(BaseMessageHandler):
             logger.warning(f"  [{self.request_id}] 客户端在等待首字节时断开连接")
             ctx.status_code = 499
             ctx.error_message = "client_disconnected_during_prefetch"
+            raise
+
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+            if envelope:
+                envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
+                if ctx.selected_base_url:
+                    logger.warning(
+                        f"[{envelope.name}] Connection error: {ctx.selected_base_url} ({e})"
+                    )
+            await http_client.aclose()
             raise
 
         except httpx.HTTPStatusError as e:
@@ -958,6 +1168,14 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 使用已设置的 ctx.needs_conversion（由候选筛选阶段根据端点配置判断）
             # 不再调用 _needs_format_conversion，它只检查格式差异，不检查端点配置
             needs_conversion = ctx.needs_conversion
+            behavior = get_provider_behavior(
+                provider_type=ctx.provider_type,
+                endpoint_sig=ctx.provider_api_format,
+            )
+            envelope = behavior.envelope
+            if envelope and envelope.force_stream_rewrite():
+                needs_conversion = True
+                ctx.needs_conversion = True
 
             async for chunk in stream_response.aiter_bytes():
                 buffer += chunk
@@ -1321,6 +1539,14 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 使用已设置的 ctx.needs_conversion（由候选筛选阶段根据端点配置判断）
             # 不再调用 _needs_format_conversion，它只检查格式差异，不检查端点配置
             needs_conversion = ctx.needs_conversion
+            behavior = get_provider_behavior(
+                provider_type=ctx.provider_type,
+                endpoint_sig=ctx.provider_api_format,
+            )
+            envelope = behavior.envelope
+            if envelope and envelope.force_stream_rewrite():
+                needs_conversion = True
+                ctx.needs_conversion = True
 
             # 先处理预读的字节块
             for chunk in prefetched_chunks:
@@ -1568,17 +1794,30 @@ class CliMessageHandlerBase(BaseMessageHandler):
         except json.JSONDecodeError:
             return
 
+        if not isinstance(data, dict):
+            return
+
+        behavior = get_provider_behavior(
+            provider_type=ctx.provider_type,
+            endpoint_sig=ctx.provider_api_format,
+        )
+        envelope = behavior.envelope
+        if envelope:
+            data = envelope.unwrap_response(data)
+            if not isinstance(data, dict):
+                return
+
         # 当不需要格式转换时，更新 data_count；需要记录时再写入 parsed_chunks。
         # 当需要格式转换时（record_chunk=False），data_count 由 _record_converted_chunks 更新
-        if record_chunk and isinstance(data, dict):
+        if record_chunk:
             ctx.data_count += 1
             if ctx.record_parsed_chunks:
                 ctx.parsed_chunks.append(data)
 
-        if not isinstance(data, dict):
-            return
-
         event_type = event_name or data.get("type", "")
+
+        if envelope:
+            envelope.postprocess_unwrapped_response(model=ctx.model, data=data)
 
         # 调用格式特定的处理逻辑
         # 注意：跨格式转换时，_process_event_data 会自动选择正确的 Provider 解析器
@@ -1927,6 +2166,17 @@ class CliMessageHandlerBase(BaseMessageHandler):
             if not ctx.provider_name:
                 logger.warning(f"[{ctx.request_id}] 流式请求失败，未选中提供商")
                 return
+
+            behavior = get_provider_behavior(
+                provider_type=ctx.provider_type,
+                endpoint_sig=ctx.provider_api_format,
+            )
+            envelope = behavior.envelope
+            if envelope:
+                envelope.on_http_status(
+                    base_url=ctx.selected_base_url,
+                    status_code=ctx.status_code,
+                )
 
             # 获取新的 DB session
             db_gen = get_db()
@@ -2326,9 +2576,26 @@ class CliMessageHandlerBase(BaseMessageHandler):
             )
             needs_conversion = bool(getattr(candidate, "needs_conversion", False))
 
-            # 确定目标变体（用于 Codex 等需要特殊处理的上游）
             provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-            target_variant = provider_type if provider_type == "codex" else None
+            behavior = get_provider_behavior(
+                provider_type=provider_type,
+                endpoint_sig=provider_api_format,
+            )
+            envelope = behavior.envelope
+            target_variant = behavior.same_format_variant
+            # 跨格式转换也允许变体（Antigravity 需要保留/翻译 Claude thinking 块）
+            conversion_variant = behavior.cross_format_variant
+
+            # Upstream streaming policy (per-endpoint).
+            upstream_policy = get_upstream_stream_policy(
+                endpoint,
+                provider_type=provider_type,
+                endpoint_sig=provider_api_format,
+            )
+            upstream_is_stream = resolve_upstream_is_stream(
+                client_is_stream=False,
+                policy=upstream_policy,
+            )
 
             # 跨格式：先做请求体转换（失败触发 failover）
             if needs_conversion and provider_api_format:
@@ -2338,8 +2605,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     provider_api_format,
                     mapped_model,
                     model,
-                    is_stream=False,
-                    target_variant=target_variant,
+                    is_stream=upstream_is_stream,
+                    target_variant=conversion_variant,
                 )
             else:
                 # 同格式：按原逻辑做轻量清理（子类可覆盖）
@@ -2348,7 +2615,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     self.get_model_for_url(request_body, mapped_model) or mapped_model or model
                 )
                 # 同格式时也需要应用 target_variant 转换（如 Codex）
-                if target_variant:
+                if target_variant and provider_api_format:
                     registry = get_format_converter_registry()
                     request_body = registry.convert_request(
                         request_body,
@@ -2357,8 +2624,30 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         target_variant=target_variant,
                     )
 
+            # Force upstream stream/sync mode in request body (best-effort).
+            if provider_api_format:
+                enforce_stream_mode_for_upstream(
+                    request_body,
+                    provider_api_format=provider_api_format,
+                    upstream_is_stream=upstream_is_stream,
+                )
+
             # 获取认证信息（处理 Service Account 等异步认证场景）
             auth_info = await get_provider_auth(endpoint, key)
+
+            # Provider envelope: wrap request after auth is available and before RequestBuilder.build().
+            if envelope:
+                request_body, url_model = envelope.wrap_request(
+                    request_body,
+                    model=url_model or model or "",
+                    url_model=url_model,
+                    decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+                )
+
+            # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
+            extra_headers: dict[str, str] = {}
+            if envelope:
+                extra_headers.update(envelope.extra_headers() or {})
 
             # 使用 RequestBuilder 构建请求体和请求头
             # 注意：mapped_model 已经应用到 request_body，这里不再传递
@@ -2368,9 +2657,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 original_headers,
                 endpoint,
                 key,
-                is_stream=False,
+                is_stream=upstream_is_stream,
+                extra_headers=extra_headers if extra_headers else None,
                 pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             )
+            if upstream_is_stream:
+                # Ensure upstream returns SSE payload when forced to streaming mode.
+                provider_headers["Accept"] = "text/event-stream"
 
             # 保存发送给 Provider 的请求信息（用于调试和统计）
             provider_request_headers = provider_headers
@@ -2380,13 +2673,15 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 endpoint,
                 query_params=query_params,
                 path_params={"model": url_model},
-                is_stream=False,  # 非流式请求
+                is_stream=upstream_is_stream,  # sync handler may still force upstream streaming
                 key=key,
                 decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
             )
+            # 非流式：必须在 build_provider_url 调用后立即缓存（避免 contextvar 被后续调用覆盖）
+            selected_base_url_cached = envelope.capture_selected_base_url() if envelope else None
 
             logger.info(
-                f"  └─ [{self.request_id}] 发送非流式请求: "
+                f"  └─ [{self.request_id}] 发送{'上游流式(聚合)' if upstream_is_stream else '非流式'}请求: "
                 f"Provider={provider.name}, Endpoint={endpoint.id[:8] if endpoint.id else 'N/A'}..., "
                 f"Key=***{key.api_key[-4:] if key.api_key else 'N/A'}, "
                 f"原始模型={model}, 映射后={mapped_model or '无映射'}, URL模型={url_model}"
@@ -2405,49 +2700,106 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             # 注意：不使用 async with，因为复用的客户端不应该被关闭
             # 超时通过 timeout 参数控制
-            resp = await http_client.post(
-                url,
-                json=provider_payload,
-                headers=provider_headers,
-                timeout=httpx.Timeout(request_timeout),
-            )
+            resp: httpx.Response | None = None
+            if not upstream_is_stream:
+                try:
+                    resp = await http_client.post(
+                        url,
+                        json=provider_payload,
+                        headers=provider_headers,
+                        timeout=httpx.Timeout(request_timeout),
+                    )
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                    if envelope:
+                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
+                        if selected_base_url_cached:
+                            logger.warning(
+                                f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
+                            )
+                    raise
+            else:
+                # Forced upstream streaming: aggregate SSE to a sync JSON response.
+                registry = get_format_converter_registry()
+                provider_parser = (
+                    get_parser_for_format(provider_api_format) if provider_api_format else None
+                )
+
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        url,
+                        json=provider_payload,
+                        headers=provider_headers,
+                        timeout=httpx.Timeout(request_timeout),
+                    ) as stream_resp:
+                        resp = stream_resp
+
+                        status_code = stream_resp.status_code
+                        response_headers = dict(stream_resp.headers)
+
+                        if envelope:
+                            envelope.on_http_status(
+                                base_url=selected_base_url_cached,
+                                status_code=status_code,
+                            )
+
+                        stream_resp.raise_for_status()
+
+                        internal_resp = await aggregate_upstream_stream_to_internal_response(
+                            stream_resp.aiter_bytes(),
+                            provider_api_format=provider_api_format,
+                            provider_name=str(provider.name),
+                            model=str(model or ""),
+                            request_id=str(self.request_id or ""),
+                            envelope=envelope,
+                            provider_parser=provider_parser,
+                        )
+
+                        tgt_norm = (
+                            registry.get_normalizer(client_api_format)
+                            if client_api_format
+                            else None
+                        )
+                        if tgt_norm is None:
+                            raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+                        response_json = tgt_norm.response_from_internal(
+                            internal_resp,
+                            requested_model=model,
+                        )
+                        response_json = response_json if isinstance(response_json, dict) else {}
+
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                    if envelope:
+                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
+                        if selected_base_url_cached:
+                            logger.warning(
+                                f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
+                            )
+                    raise
 
             status_code = resp.status_code
             response_headers = dict(resp.headers)
 
-            if resp.status_code == 401:
-                raise ProviderAuthException(str(provider.name))
-            elif resp.status_code == 429:
-                raise ProviderRateLimitException(
-                    "请求过于频繁，请稍后重试",
-                    provider_name=str(provider.name),
-                    response_headers=response_headers,
-                    retry_after=int(resp.headers.get("retry-after", 0)) or None,
-                )
-            elif resp.status_code >= 500:
-                error_text = resp.text
-                raise ProviderNotAvailableException(
-                    f"上游服务暂时不可用 (HTTP {resp.status_code})",
-                    provider_name=str(provider.name),
-                    upstream_status=resp.status_code,
-                    upstream_response=error_text,
-                )
-            elif 300 <= resp.status_code < 400:
-                redirect_url = resp.headers.get("location", "unknown")
-                raise ProviderNotAvailableException(
-                    "上游服务返回重定向响应",
-                    provider_name=str(provider.name),
-                    upstream_status=resp.status_code,
-                    upstream_response=f"重定向 {resp.status_code} -> {redirect_url}",
-                )
-            elif resp.status_code != 200:
-                error_text = resp.text
-                raise ProviderNotAvailableException(
-                    f"上游服务返回错误 (HTTP {resp.status_code})",
-                    provider_name=str(provider.name),
-                    upstream_status=resp.status_code,
-                    upstream_response=error_text,
-                )
+            if envelope:
+                envelope.on_http_status(base_url=selected_base_url_cached, status_code=status_code)
+
+            # Forced upstream streaming already built response_json via aggregator.
+            if upstream_is_stream:
+                response_metadata_result = self._extract_response_metadata(response_json or {})
+                return response_json if isinstance(response_json, dict) else {}
+
+            # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_body = ""
+                try:
+                    error_body = resp.text[:4000] if resp.text else ""
+                except Exception:
+                    error_body = ""
+                e.upstream_response = error_body  # type: ignore[attr-defined]
+                raise
 
             # 安全解析 JSON 响应，处理可能的编码错误
             try:
@@ -2482,6 +2834,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     upstream_status=resp.status_code,
                     upstream_response=raw_content,
                 )
+
+            if envelope:
+                response_json = envelope.unwrap_response(response_json)
+                envelope.postprocess_unwrapped_response(model=model, data=response_json)
 
             # 提取 Provider 响应元数据（子类可覆盖）
             response_metadata_result = self._extract_response_metadata(response_json)
@@ -2531,12 +2887,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
             if response_json is None:
                 response_json = {}
 
-            # 检查是否需要格式转换（同族格式无需转换，如 CLAUDE 和 CLAUDE_CLI）
-            from src.core.api_format.utils import get_base_format
-
-            provider_base = get_base_format(provider_api_format) if provider_api_format else None
-            client_base = get_base_format(api_format) if api_format else None
-            if provider_base and client_base and provider_base != client_base:
+            # 跨格式：响应转换回 client_format（失败不触发 failover，保守回退为原始响应）
+            if (
+                needs_conversion
+                and provider_api_format
+                and api_format
+                and isinstance(response_json, dict)
+            ):
                 try:
                     registry = get_format_converter_registry()
                     response_json = registry.convert_response(
@@ -2834,6 +3191,15 @@ class CliMessageHandlerBase(BaseMessageHandler):
             return [], []
         if status == "invalid" or status == "passthrough":
             return [line], []
+
+        behavior = get_provider_behavior(
+            provider_type=ctx.provider_type,
+            endpoint_sig=ctx.provider_api_format,
+        )
+        envelope = behavior.envelope
+        if envelope:
+            data_obj = envelope.unwrap_response(data_obj)
+            envelope.postprocess_unwrapped_response(model=ctx.model, data=data_obj)
 
         # 初始化流式转换状态
         if ctx.stream_conversion_state is None:

@@ -44,6 +44,7 @@ from src.core.exceptions import (
 )
 from src.core.logger import logger
 from src.models.database import Provider, ProviderEndpoint
+from src.services.provider.behavior import get_provider_behavior
 from src.utils.perf import PerfRecorder
 from src.utils.sse_parser import SSEEventParser
 from src.utils.timeout import read_first_chunk_with_ttfb_timeout
@@ -213,6 +214,11 @@ class StreamProcessor:
         """
         prefetched_chunks: list = []
         parser = self.get_parser_for_provider(ctx)
+        behavior = get_provider_behavior(
+            provider_type=str(getattr(ctx, "provider_type", "") or ""),
+            endpoint_sig=str(getattr(ctx, "provider_api_format", "") or ""),
+        )
+        envelope = behavior.envelope
         buffer = b""
         line_count = 0
         should_stop = False
@@ -290,6 +296,14 @@ class StreamProcessor:
                         if line_count >= max_prefetch_lines:
                             break
                         continue
+
+                    # Provider envelope: unwrap SSE data chunk before error detection / trial conversion.
+                    if envelope and isinstance(data, dict):
+                        data = envelope.unwrap_response(data)
+                        envelope.postprocess_unwrapped_response(
+                            model=str(ctx.model or ""),
+                            data=data,
+                        )
 
                     # 使用解析器检查是否为错误响应
                     if isinstance(data, dict) and parser.is_error_response(data):
@@ -431,6 +445,14 @@ class StreamProcessor:
             ) or "unknown"
             # 使用 handler 层预计算的 needs_conversion（由 candidate 决定）
             needs_conversion = ctx.needs_conversion
+            behavior = get_provider_behavior(
+                provider_type=str(getattr(ctx, "provider_type", "") or ""),
+                endpoint_sig=str(getattr(ctx, "provider_api_format", "") or ""),
+            )
+            envelope = behavior.envelope
+            if envelope and envelope.force_stream_rewrite():
+                needs_conversion = True
+                ctx.needs_conversion = True
 
             # 安全检查：needs_conversion 为 True 时，provider_format 必须有值
             if needs_conversion and not provider_format:

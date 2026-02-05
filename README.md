@@ -22,6 +22,15 @@
 
 Aether 是一个自托管的 AI API 网关，为团队和个人提供多租户管理、智能负载均衡、成本配额控制和健康监控能力。通过统一的 API 入口，可以无缝对接 Claude、OpenAI、Gemini 等主流 AI 服务及其 CLI 工具。
 
+### 内置反代 Provider
+
+- ClaudeCode（`provider_type=claude_code`）
+- Codex（`provider_type=codex`）
+- GeminiCli（`provider_type=gemini_cli`）
+- Antigravity（`provider_type=antigravity`）
+
+实现细节与差异说明见：[`docs/provider-quirks.md`](docs/provider-quirks.md)
+
 ### 页面预览
 
 | 首页 | 仪表盘 |
@@ -167,5 +176,4 @@ cd frontend && npm install && npm run dev
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=fawney19/Aether&type=Date)](https://star-history.com/#fawney19/Aether&Date)
-
 

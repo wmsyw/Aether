@@ -19,7 +19,16 @@ from src.core.api_format import (
     make_signature_key,
 )
 from src.core.logger import logger
+from src.services.antigravity.constants import PROVIDER_TYPE as ANTIGRAVITY_PROVIDER_TYPE
+from src.services.antigravity.constants import (
+    V1INTERNAL_PATH_TEMPLATE,
+)
+from src.services.antigravity.url_availability import url_availability
 from src.services.provider.format import normalize_endpoint_signature
+from src.services.provider.request_context import (
+    get_selected_base_url,
+    set_selected_base_url,
+)
 from src.utils.url_utils import is_codex_url
 
 if TYPE_CHECKING:
@@ -72,6 +81,35 @@ def _normalize_base_url(base_url: str, path: str) -> str:
     return base
 
 
+def get_antigravity_base_url() -> str | None:
+    """Backward-compat alias for `get_selected_base_url()`."""
+    return get_selected_base_url()
+
+
+def _get_provider_type(endpoint: Any, key: "ProviderAPIKey" | None = None) -> str | None:
+    """尽力获取 Provider.provider_type（用于 Antigravity 等 Provider 特判）。"""
+    try:
+        provider = getattr(endpoint, "provider", None)
+        if provider is not None:
+            pt = getattr(provider, "provider_type", None)
+            if pt:
+                return str(pt).lower()
+    except Exception:
+        pass
+
+    try:
+        if key is not None:
+            provider = getattr(key, "provider", None)
+            if provider is not None:
+                pt = getattr(provider, "provider_type", None)
+                if pt:
+                    return str(pt).lower()
+    except Exception:
+        pass
+
+    return None
+
+
 def build_provider_url(
     endpoint: ProviderEndpoint,
     *,
@@ -97,6 +135,9 @@ def build_provider_url(
         key: Provider API Key（用于 Vertex AI 等需要从密钥配置读取信息的场景）
         decrypted_auth_config: 已解密的认证配置（避免重复解密，由 get_provider_auth 提供）
     """
+    # 默认清理，避免上一次请求的 selected_base_url 泄漏到其他请求
+    set_selected_base_url(None)
+
     # 检查是否为 Vertex AI 认证类型
     auth_type = getattr(key, "auth_type", "api_key") if key else "api_key"
     if auth_type == "vertex_ai":
@@ -122,6 +163,55 @@ def build_provider_url(
 
     # endpoint_sig 为空时保持为空（更安全：默认路径回退到 "/"，避免误判为 claude:chat）
     endpoint_sig = normalize_endpoint_signature(endpoint_sig) if endpoint_sig else ""
+
+    provider_type = _get_provider_type(endpoint, key)
+
+    # 合并查询参数（部分逻辑需要先拿到 query_params）
+    effective_query_params = dict(query_params) if query_params else {}
+
+    # Gemini family 下清除可能存在的 key 参数（避免客户端传入的认证信息泄露到上游）
+    # 上游认证始终使用 header 方式，不使用 URL 参数
+    if endpoint_sig.startswith("gemini:"):
+        effective_query_params.pop("key", None)
+
+    # Antigravity 特殊处理：复用 gemini:cli endpoint signature，但走 v1internal 端点
+    if provider_type == ANTIGRAVITY_PROVIDER_TYPE and endpoint_sig == "gemini:cli":
+        ordered_urls = url_availability.get_ordered_urls(prefer_daily=True)
+        base_url = ordered_urls[0] if ordered_urls else endpoint.base_url  # type: ignore[arg-type]
+
+        # 存入 contextvars（供后续 Handler 层获取）
+        set_selected_base_url(str(base_url) if base_url is not None else None)
+
+        action = "streamGenerateContent" if is_stream else "generateContent"
+        path = V1INTERNAL_PATH_TEMPLATE.format(action=action)
+
+        # v1internal 流式请求同样支持 `?alt=sse`
+        if is_stream:
+            effective_query_params.setdefault("alt", "sse")
+
+        url = f"{str(base_url).rstrip('/')}{path}"
+        if effective_query_params:
+            query_string = urlencode(effective_query_params, doseq=True)
+            if query_string:
+                url = f"{url}?{query_string}"
+
+        return url
+
+    # Codex OAuth upstream (chatgpt.com/backend-api/codex) uses `/responses` instead of `/v1/responses`.
+    # We special-case this at transport layer so fixed providers work without requiring custom_path.
+    if provider_type == "codex" and endpoint_sig == "openai:cli" and not endpoint.custom_path:
+        base = str(endpoint.base_url).rstrip("/")
+        path = "/responses"
+        # If user already included the final path in base_url, don't duplicate it.
+        url = base if base.endswith(path) else f"{base}{path}"
+        if effective_query_params:
+            query_string = urlencode(effective_query_params, doseq=True)
+            if query_string:
+                url = f"{url}?{query_string}"
+        return url
+
+    # 非 Antigravity：清除 contextvar，避免跨请求污染
+    set_selected_base_url(None)
 
     # 准备路径参数（Gemini chat/cli 需要 action）
     effective_path_params = dict(path_params) if path_params else {}
@@ -166,17 +256,10 @@ def build_provider_url(
     base = _normalize_base_url(endpoint.base_url, path)  # type: ignore[arg-type]
     url = f"{base}{path}"
 
-    # 合并查询参数
-    effective_query_params = dict(query_params) if query_params else {}
-
-    # Gemini family 下清除可能存在的 key 参数（避免客户端传入的认证信息泄露到上游）
-    # 上游认证始终使用 header 方式，不使用 URL 参数
-    if endpoint_sig.startswith("gemini:"):
-        effective_query_params.pop("key", None)
-        # Gemini streamGenerateContent 官方支持 `?alt=sse` 返回 SSE（data: {...}）。
-        # 网关侧统一使用 SSE 输出，优先向上游请求 SSE 以减少解析分支；同时保留 JSON-array 兜底解析。
-        if is_stream:
-            effective_query_params.setdefault("alt", "sse")
+    # Gemini streamGenerateContent 官方支持 `?alt=sse` 返回 SSE（data: {...}）。
+    # 网关侧统一使用 SSE 输出，优先向上游请求 SSE 以减少解析分支；同时保留 JSON-array 兜底解析。
+    if endpoint_sig.startswith("gemini:") and is_stream:
+        effective_query_params.setdefault("alt", "sse")
 
     # 添加查询参数
     if effective_query_params:

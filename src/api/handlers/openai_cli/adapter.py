@@ -6,7 +6,6 @@ OpenAI CLI Adapter - 基于通用 CLI Adapter 基类的简化实现
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 import httpx
@@ -126,10 +125,10 @@ class OpenAICliAdapter(CliAdapterBase):
 
         # 仅 Codex 端点添加特定头部
         if base_url and is_codex_url(base_url):
-            headers["x-oai-web-search-eligible"] = "true"
-            headers["session_id"] = str(uuid.uuid4())
-            headers["accept"] = "text/event-stream"
-            headers["originator"] = "codex_cli_rs"
+            # 与运行时路径保持一致：使用 Codex envelope 的 best-effort headers。
+            from src.services.codex.envelope import codex_oauth_envelope
+
+            headers.update(codex_oauth_envelope.extra_headers() or {})
 
         return headers
 

@@ -43,12 +43,18 @@ from src.api.handlers.base.response_parser import ResponseParser
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.stream_processor import StreamProcessor
 from src.api.handlers.base.stream_telemetry import StreamTelemetryRecorder
+from src.api.handlers.base.upstream_stream_bridge import (
+    aggregate_upstream_stream_to_internal_response,
+)
 from src.api.handlers.base.utils import (
     build_sse_headers,
     filter_proxy_response_headers,
     get_format_converter_registry,
 )
 from src.config.settings import config
+from src.core.api_format.conversion.stream_bridge import (
+    iter_internal_response_as_stream_events,
+)
 from src.core.error_utils import extract_client_error_message
 from src.core.exceptions import (
     EmbeddedErrorException,
@@ -68,6 +74,12 @@ from src.models.database import (
     User,
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
+from src.services.provider.behavior import get_provider_behavior
+from src.services.provider.stream_policy import (
+    enforce_stream_mode_for_upstream,
+    get_upstream_stream_policy,
+    resolve_upstream_is_stream,
+)
 from src.services.provider.transport import (
     build_provider_url,
     get_vertex_ai_effective_format,
@@ -760,9 +772,25 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         else:
             request_body = dict(original_request_body)
 
-        # 确定目标变体（用于 Codex 等需要特殊处理的上游）
         provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-        target_variant = provider_type if provider_type == "codex" else None
+        behavior = get_provider_behavior(
+            provider_type=provider_type,
+            endpoint_sig=provider_api_format,
+        )
+        envelope = behavior.envelope
+        same_format_variant = behavior.same_format_variant
+        cross_format_variant = behavior.cross_format_variant
+
+        # Upstream streaming policy (per-endpoint): may force upstream to sync/stream mode.
+        upstream_policy = get_upstream_stream_policy(
+            endpoint,
+            provider_type=provider_type,
+            endpoint_sig=str(provider_api_format),
+        )
+        upstream_is_stream = resolve_upstream_is_stream(
+            client_is_stream=True,
+            policy=upstream_policy,
+        )
 
         # 跨格式：先做请求体转换（失败触发 failover）
         registry = get_format_converter_registry()
@@ -771,7 +799,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 request_body,
                 str(client_api_format),
                 str(provider_api_format),
-                target_variant=target_variant,
+                target_variant=cross_format_variant,
             )
             # 格式转换后，为需要 model 字段的格式设置模型名
             self._set_model_after_conversion(
@@ -785,19 +813,44 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 request_body,
                 str(client_api_format),
                 str(provider_api_format),
-                is_stream=True,
+                is_stream=upstream_is_stream,
             )
         else:
             # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
             request_body = self.prepare_provider_request_body(request_body)
             # 同格式时也需要应用 target_variant 转换（如 Codex）
-            if target_variant:
+            if same_format_variant:
                 request_body = registry.convert_request(
                     request_body,
                     str(provider_api_format),
                     str(provider_api_format),
-                    target_variant=target_variant,
+                    target_variant=same_format_variant,
                 )
+
+        # Force upstream stream/sync mode in request body (best-effort).
+        if provider_api_format:
+            enforce_stream_mode_for_upstream(
+                request_body,
+                provider_api_format=str(provider_api_format),
+                upstream_is_stream=upstream_is_stream,
+            )
+
+        # 获取 URL 模型名
+        url_model = self.get_model_for_url(request_body, mapped_model) or ctx.model
+
+        # Provider envelope: wrap request after auth is available and before RequestBuilder.build().
+        if envelope:
+            request_body, url_model = envelope.wrap_request(
+                request_body,
+                model=url_model or ctx.model or "",
+                url_model=url_model,
+                decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+            )
+
+        # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
+        extra_headers: dict[str, str] = {}
+        if envelope:
+            extra_headers.update(envelope.extra_headers() or {})
 
         # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
         provider_payload, provider_headers = self._request_builder.build(
@@ -805,29 +858,177 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             original_headers,
             endpoint,
             key,
-            is_stream=True,
+            is_stream=upstream_is_stream,
+            extra_headers=extra_headers if extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
         )
+        if upstream_is_stream:
+            # Ensure upstream returns SSE payload when in streaming mode.
+            provider_headers["Accept"] = "text/event-stream"
 
         ctx.provider_request_headers = provider_headers
         ctx.provider_request_body = provider_payload
-
-        # 获取 URL 模型名
-        url_model = self.get_model_for_url(request_body, mapped_model) or ctx.model
 
         url = build_provider_url(
             endpoint,
             query_params=query_params,
             path_params={"model": url_model},
-            is_stream=True,
+            is_stream=upstream_is_stream,
             key=key,
             decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
         )
+        # Capture the selected base_url from transport (used by some envelopes for failover).
+        ctx.selected_base_url = envelope.capture_selected_base_url() if envelope else None
 
         logger.debug(
             f"  [{self.request_id}] 发送流式请求: Provider={provider.name}, "
             f"模型={ctx.model} -> {mapped_model or '无映射'}"
         )
+
+        # If upstream is forced to non-stream mode, we execute a sync request and then
+        # simulate streaming to the client (sync -> stream bridge).
+        if not upstream_is_stream:
+            from src.clients.http_client import HTTPClientPool
+
+            request_timeout_sync = provider.request_timeout or config.http_request_timeout
+            http_client = await HTTPClientPool.get_proxy_client(
+                proxy_config=provider.proxy,
+            )
+
+            try:
+                resp = await http_client.post(
+                    url,
+                    json=provider_payload,
+                    headers=provider_headers,
+                    timeout=httpx.Timeout(request_timeout_sync),
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                if envelope:
+                    envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
+                    if ctx.selected_base_url:
+                        logger.warning(
+                            f"[{envelope.name}] Connection error: {ctx.selected_base_url} ({e})"
+                        )
+                raise
+
+            ctx.status_code = resp.status_code
+            ctx.response_headers = dict(resp.headers)
+            if envelope:
+                envelope.on_http_status(base_url=ctx.selected_base_url, status_code=ctx.status_code)
+
+            # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_body = ""
+                try:
+                    error_body = resp.text[:4000] if resp.text else ""
+                except Exception:
+                    error_body = ""
+                e.upstream_response = error_body  # type: ignore[attr-defined]
+                raise
+
+            # Safe JSON parsing.
+            try:
+                response_json = resp.json()
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                raw_content = ""
+                try:
+                    raw_content = resp.text[:500] if resp.text else "(empty)"
+                except Exception:
+                    try:
+                        raw_content = repr(resp.content[:500]) if resp.content else "(empty)"
+                    except Exception:
+                        raw_content = "(unable to read)"
+                raise ProviderNotAvailableException(
+                    "上游服务返回了无效的响应",
+                    provider_name=str(provider.name),
+                    upstream_status=resp.status_code,
+                    upstream_response=f"json_decode_error={type(e).__name__}: {raw_content}",
+                )
+
+            if envelope:
+                response_json = envelope.unwrap_response(response_json)
+                envelope.postprocess_unwrapped_response(model=ctx.model, data=response_json)
+
+            # Embedded error detection (HTTP 200 but error body).
+            if isinstance(response_json, dict):
+                parser = get_parser_for_format(provider_api_format)
+                if parser.is_error_response(response_json):
+                    parsed = parser.parse_response(response_json, 200)
+                    raise EmbeddedErrorException(
+                        provider_name=str(provider.name),
+                        error_code=parsed.embedded_status_code,
+                        error_message=parsed.error_message,
+                        error_status=parsed.error_type,
+                    )
+
+            # Convert sync JSON -> InternalResponse, then InternalResponse -> client stream events.
+            src_norm = (
+                registry.get_normalizer(str(provider_api_format)) if provider_api_format else None
+            )
+            if src_norm is None:
+                raise RuntimeError(f"未注册 Normalizer: {provider_api_format}")
+
+            internal_resp = src_norm.response_to_internal(
+                response_json if isinstance(response_json, dict) else {}
+            )
+            internal_resp.model = str(ctx.model or internal_resp.model or "")
+            if internal_resp.id:
+                ctx.response_id = internal_resp.id
+
+            if internal_resp.usage:
+                ctx.input_tokens = int(internal_resp.usage.input_tokens or 0)
+                ctx.output_tokens = int(internal_resp.usage.output_tokens or 0)
+                ctx.cached_tokens = int(internal_resp.usage.cache_read_tokens or 0)
+                ctx.cache_creation_tokens = int(internal_resp.usage.cache_write_tokens or 0)
+
+            from src.core.api_format.conversion.stream_state import StreamState
+
+            tgt_norm = (
+                registry.get_normalizer(str(client_api_format)) if client_api_format else None
+            )
+            if tgt_norm is None:
+                raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+            state = StreamState(
+                model=str(ctx.model or ""),
+                message_id=str(ctx.response_id or ctx.request_id or self.request_id or ""),
+            )
+
+            output_state = {"started": False}
+
+            async def _streamified() -> AsyncGenerator[bytes]:
+                for ev in iter_internal_response_as_stream_events(internal_resp):
+                    converted_events = tgt_norm.stream_event_from_internal(ev, state)
+                    if not converted_events:
+                        continue
+                    for evt in converted_events:
+                        if isinstance(evt, dict):
+                            ctx.data_count += 1
+                            if ctx.record_parsed_chunks:
+                                ctx.parsed_chunks.append(evt)
+                        payload = json.dumps(evt, ensure_ascii=False)
+                        ctx.chunk_count += 1
+                        if not output_state["started"]:
+                            ctx.record_first_byte_time(self.start_time)
+                            if stream_processor.on_streaming_start:
+                                stream_processor.on_streaming_start()
+                            output_state["started"] = True
+                        yield f"data: {payload}\n\n".encode("utf-8")
+
+                # OpenAI chat clients expect a final [DONE] marker.
+                if str(client_api_format or "").strip().lower() == "openai:chat":
+                    if not output_state["started"]:
+                        ctx.record_first_byte_time(self.start_time)
+                        if stream_processor.on_streaming_start:
+                            stream_processor.on_streaming_start()
+                        output_state["started"] = True
+                    ctx.chunk_count += 1
+                    yield b"data: [DONE]\n\n"
+                    ctx.has_completion = True
+
+            return _streamified()
 
         # 配置 HTTP 超时
         # 注意：read timeout 用于检测连接断开，不是整体请求超时
@@ -866,6 +1067,11 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             ctx.status_code = stream_response.status_code
             ctx.response_headers = dict(stream_response.headers)
+            if envelope:
+                envelope.on_http_status(
+                    base_url=ctx.selected_base_url,
+                    status_code=ctx.status_code,
+                )
 
             stream_response.raise_for_status()
 
@@ -924,6 +1130,22 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 provider_name=str(provider.name),
                 timeout=int(request_timeout),
             )
+
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+            # 连接/读写超时：清理可能已建立的连接上下文
+            if response_ctx is not None:
+                try:
+                    await response_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            await http_client.aclose()
+            if envelope:
+                envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
+                if ctx.selected_base_url:
+                    logger.warning(
+                        f"[{envelope.name}] Connection error: {ctx.selected_base_url} ({e})"
+                    )
+            raise
 
         except httpx.HTTPStatusError as e:
             error_text = await self._extract_error_text(e)
@@ -1099,9 +1321,25 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             else:
                 request_body = dict(request_body_ref["body"])
 
-            # 确定目标变体（用于 Codex 等需要特殊处理的上游）
             provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-            target_variant = provider_type if provider_type == "codex" else None
+            behavior = get_provider_behavior(
+                provider_type=provider_type,
+                endpoint_sig=provider_api_format,
+            )
+            envelope = behavior.envelope
+            same_format_variant = behavior.same_format_variant
+            cross_format_variant = behavior.cross_format_variant
+
+            # Upstream streaming policy (per-endpoint).
+            upstream_policy = get_upstream_stream_policy(
+                endpoint,
+                provider_type=provider_type,
+                endpoint_sig=str(provider_api_format),
+            )
+            upstream_is_stream = resolve_upstream_is_stream(
+                client_is_stream=False,
+                policy=upstream_policy,
+            )
 
             # 跨格式：先做请求体转换（失败触发 failover）
             registry = get_format_converter_registry()
@@ -1110,7 +1348,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     request_body,
                     client_api_format,
                     provider_api_format,
-                    target_variant=target_variant,
+                    target_variant=cross_format_variant,
                 )
                 # 格式转换后，为需要 model 字段的格式设置模型名
                 self._set_model_after_conversion(
@@ -1124,19 +1362,44 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     request_body,
                     client_api_format,
                     provider_api_format,
-                    is_stream=False,
+                    is_stream=upstream_is_stream,
                 )
             else:
                 # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
                 request_body = self.prepare_provider_request_body(request_body)
                 # 同格式时也需要应用 target_variant 转换（如 Codex）
-                if target_variant:
+                if same_format_variant:
                     request_body = registry.convert_request(
                         request_body,
                         provider_api_format,
                         provider_api_format,
-                        target_variant=target_variant,
+                        target_variant=same_format_variant,
                     )
+
+            # Force upstream stream/sync mode in request body (best-effort).
+            if provider_api_format:
+                enforce_stream_mode_for_upstream(
+                    request_body,
+                    provider_api_format=str(provider_api_format),
+                    upstream_is_stream=upstream_is_stream,
+                )
+
+            # 获取 URL 模型名（兜底使用外层的 model，确保 Gemini 等格式能正确构建 URL）
+            url_model = self.get_model_for_url(request_body, mapped_model) or model
+
+            # Provider envelope: wrap request after auth is available and before RequestBuilder.build().
+            if envelope:
+                request_body, url_model = envelope.wrap_request(
+                    request_body,
+                    model=url_model or model or "",
+                    url_model=url_model,
+                    decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+                )
+
+            # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
+            extra_headers: dict[str, str] = {}
+            if envelope:
+                extra_headers.update(envelope.extra_headers() or {})
 
             # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
             provider_payload, provider_hdrs = self._request_builder.build(
@@ -1144,28 +1407,31 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 original_headers,
                 endpoint,
                 key,
-                is_stream=False,
+                is_stream=upstream_is_stream,
+                extra_headers=extra_headers if extra_headers else None,
                 pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             )
+            if upstream_is_stream:
+                # Ensure upstream returns SSE payload when forced to streaming mode.
+                provider_hdrs["Accept"] = "text/event-stream"
 
             provider_request_headers = provider_hdrs
             provider_request_body = provider_payload
-
-            # 获取 URL 模型名（兜底使用外层的 model，确保 Gemini 等格式能正确构建 URL）
-            url_model = self.get_model_for_url(request_body, mapped_model) or model
 
             url = build_provider_url(
                 endpoint,
                 query_params=query_params,
                 path_params={"model": url_model},
-                is_stream=False,
+                is_stream=upstream_is_stream,  # sync handler may still force upstream streaming
                 key=key,
                 decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
             )
+            # 非流式：必须在 build_provider_url 调用后立即缓存（避免 contextvar 被后续调用覆盖）
+            selected_base_url_cached = envelope.capture_selected_base_url() if envelope else None
 
             logger.info(
-                f"  [{self.request_id}] 发送非流式请求: Provider={provider.name}, "
-                f"模型={model} -> {mapped_model or '无映射'}"
+                f"  [{self.request_id}] 发送{'上游流式(聚合)' if upstream_is_stream else '非流式'}请求: "
+                f"Provider={provider.name}, 模型={model} -> {mapped_model or '无映射'}"
             )
             logger.debug(f"  [{self.request_id}] 请求URL: {redact_url_for_log(url)}")
 
@@ -1182,15 +1448,92 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             # 注意：不使用 async with，因为复用的客户端不应该被关闭
             # 超时通过 timeout 参数控制
-            resp = await http_client.post(
-                url,
-                json=provider_payload,
-                headers=provider_hdrs,
-                timeout=httpx.Timeout(request_timeout),
-            )
+            resp: httpx.Response | None = None
+            if not upstream_is_stream:
+                try:
+                    resp = await http_client.post(
+                        url,
+                        json=provider_payload,
+                        headers=provider_hdrs,
+                        timeout=httpx.Timeout(request_timeout),
+                    )
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                    if envelope:
+                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
+                        if selected_base_url_cached:
+                            logger.warning(
+                                f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
+                            )
+                    raise
+            else:
+                # Forced upstream streaming: aggregate SSE to a sync JSON response.
+                provider_parser = (
+                    get_parser_for_format(provider_api_format) if provider_api_format else None
+                )
+
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        url,
+                        json=provider_payload,
+                        headers=provider_hdrs,
+                        timeout=httpx.Timeout(request_timeout),
+                    ) as stream_resp:
+                        resp = stream_resp
+
+                        status_code = stream_resp.status_code
+                        response_headers = dict(stream_resp.headers)
+
+                        if envelope:
+                            envelope.on_http_status(
+                                base_url=selected_base_url_cached,
+                                status_code=status_code,
+                            )
+
+                        stream_resp.raise_for_status()
+
+                        internal_resp = await aggregate_upstream_stream_to_internal_response(
+                            stream_resp.aiter_bytes(),
+                            provider_api_format=provider_api_format,
+                            provider_name=str(provider.name),
+                            model=str(model or ""),
+                            request_id=str(self.request_id or ""),
+                            envelope=envelope,
+                            provider_parser=provider_parser,
+                        )
+
+                        tgt_norm = (
+                            registry.get_normalizer(client_api_format)
+                            if client_api_format
+                            else None
+                        )
+                        if tgt_norm is None:
+                            raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+                        response_json = tgt_norm.response_from_internal(
+                            internal_resp,
+                            requested_model=model,
+                        )
+                        response_json = response_json if isinstance(response_json, dict) else {}
+
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                    if envelope:
+                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
+                        if selected_base_url_cached:
+                            logger.warning(
+                                f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
+                            )
+                    raise
 
             status_code = resp.status_code
             response_headers = dict(resp.headers)
+
+            if envelope:
+                envelope.on_http_status(base_url=selected_base_url_cached, status_code=status_code)
+
+            # Forced upstream streaming already built response_json via aggregator.
+            if upstream_is_stream:
+                return response_json if isinstance(response_json, dict) else {}
 
             # 统一使用 HTTPStatusError，让 TaskService/error_classifier 负责分类（客户端错误/兼容性错误/限流等）
             try:
@@ -1232,6 +1575,10 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     upstream_status=resp.status_code,
                     upstream_response=raw_content,
                 )
+
+            if envelope:
+                response_json = envelope.unwrap_response(response_json)
+                envelope.postprocess_unwrapped_response(model=model, data=response_json)
 
             # 检查响应体中的嵌套错误（HTTP 200 但响应体包含错误）
             if isinstance(response_json, dict):

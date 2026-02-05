@@ -586,7 +586,16 @@ async def get_provider_auth(
                 pass
 
         decrypted_key = crypto_service.decrypt(key.api_key)
-        return ProviderAuthInfo(auth_header="Authorization", auth_value=f"Bearer {decrypted_key}")
+
+        decrypted_auth_config: dict[str, Any] | None = None
+        if isinstance(token_meta, dict) and token_meta:
+            decrypted_auth_config = token_meta
+
+        return ProviderAuthInfo(
+            auth_header="Authorization",
+            auth_value=f"Bearer {decrypted_key}",
+            decrypted_auth_config=decrypted_auth_config,
+        )
 
     if auth_type == "vertex_ai":
         from src.core.vertex_auth import VertexAuthError, VertexAuthService

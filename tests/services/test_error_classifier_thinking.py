@@ -48,6 +48,14 @@ class TestThinkingErrorPatterns:
         error = '{"error": {"message": "signature verification failed"}}'
         assert classifier._is_thinking_error(error) is True
 
+    def test_detect_thought_signature_patterns(self, classifier: ErrorClassifier) -> None:
+        """检测 Antigravity/Gemini thoughtSignature 相关错误"""
+        error = '{"error": {"message": "invalid thoughtSignature in thought part"}}'
+        assert classifier._is_thinking_error(error) is True
+
+        error2 = '{"error": {"message": "thought_signature verification failed"}}'
+        assert classifier._is_thinking_error(error2) is True
+
     # === 结构错误测试 ===
 
     def test_detect_must_start_with_thinking_block(self, classifier: ErrorClassifier) -> None:
