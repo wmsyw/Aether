@@ -869,6 +869,9 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
 
 # ========== Codex Quota Refresh API ==========
 
+# Codex 限额刷新测试请求使用的模型（选择最小/最便宜的模型）
+CODEX_QUOTA_REFRESH_MODEL = "gpt-5.1-codex-mini"
+
 
 @router.post("/providers/{provider_id}/refresh-quota")
 async def refresh_provider_quota(
@@ -906,7 +909,10 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
         import httpx
 
         from src.api.handlers.base.request_builder import get_provider_auth
-        from src.services.provider.metadata_collectors import MetadataCollectorRegistry, ensure_collectors_registered
+        from src.services.provider.metadata_collectors import (
+            MetadataCollectorRegistry,
+            ensure_collectors_registered,
+        )
         from src.services.provider.transport import build_provider_url
         from src.utils.ssl_utils import get_ssl_context
 
@@ -933,7 +939,13 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
         )
 
         if not keys:
-            return {"success": 0, "failed": 0, "total": 0, "results": [], "message": "没有活跃的 Key"}
+            return {
+                "success": 0,
+                "failed": 0,
+                "total": 0,
+                "results": [],
+                "message": "没有活跃的 Key",
+            }
 
         # 获取 openai:cli 端点
         endpoint = None
@@ -948,6 +960,9 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
         results: list[dict] = []
         success_count = 0
         failed_count = 0
+
+        # 用于收集需要更新的 key 元数据（避免在并发任务中直接操作 db session）
+        metadata_updates: dict[str, dict] = {}  # key_id -> metadata
 
         # 单个 Key 刷新函数
         async def refresh_single_key(key: ProviderAPIKey) -> dict:
@@ -972,7 +987,7 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
 
                 # 发送最小的测试请求，使用 Codex Responses API 格式
                 test_body = {
-                    "model": "gpt-5.1-codex-mini",
+                    "model": CODEX_QUOTA_REFRESH_MODEL,
                     "input": [
                         {
                             "type": "message",
@@ -985,9 +1000,7 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
                     "store": False,
                 }
 
-                async with httpx.AsyncClient(
-                    timeout=30.0, verify=get_ssl_context()
-                ) as client:
+                async with httpx.AsyncClient(timeout=30.0, verify=get_ssl_context()) as client:
                     response = await client.post(url, json=test_body, headers=headers)
 
                 # 解析响应头中的限额信息
@@ -995,9 +1008,8 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
                 metadata = MetadataCollectorRegistry.collect("codex", response_headers)
 
                 if metadata:
-                    # 更新数据库中的元数据
-                    key.upstream_metadata = metadata
-                    db.add(key)
+                    # 收集元数据，稍后统一更新数据库
+                    metadata_updates[key.id] = metadata
                     return {
                         "key_id": key.id,
                         "key_name": key.name,
@@ -1015,7 +1027,7 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
                     }
 
             except Exception as e:
-                logger.error(f"刷新 Key {key.id} 限额失败: {e}")
+                logger.error("刷新 Key {} 限额失败: {}", key.id, e)
                 return {
                     "key_id": key.id,
                     "key_name": key.name,
@@ -1038,12 +1050,22 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
                 else:
                     failed_count += 1
 
+        # 统一更新数据库（避免在并发任务中操作 session）
+        if metadata_updates:
+            for key in keys:
+                if key.id in metadata_updates:
+                    key.upstream_metadata = metadata_updates[key.id]
+                    db.add(key)
+
         # 提交数据库更改
         db.commit()
 
         logger.info(
-            f"[QUOTA_REFRESH] Provider {self.provider_id}: "
-            f"成功 {success_count}/{len(keys)}, 失败 {failed_count}"
+            "[QUOTA_REFRESH] Provider {}: 成功 {}/{}, 失败 {}",
+            self.provider_id,
+            success_count,
+            len(keys),
+            failed_count,
         )
 
         return {

@@ -663,6 +663,7 @@ import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
 import Card from '@/components/ui/card.vue'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useClipboard } from '@/composables/useClipboard'
 import { useCountdownTimer, formatCountdown, getOAuthExpiresCountdown } from '@/composables/useCountdownTimer'
 import { getProvider, getProviderEndpoints, updateProvider } from '@/api/endpoints'
@@ -715,6 +716,7 @@ const emit = defineEmits<{
 }>()
 
 const { error: showError, success: showSuccess } = useToast()
+const { confirm } = useConfirm()
 const { copyToClipboard } = useClipboard()
 const { tick: countdownTick, start: startCountdownTimer, stop: stopCountdownTimer } = useCountdownTimer()
 
@@ -1066,6 +1068,16 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
 // 刷新 Codex 所有账号限额
 async function handleRefreshQuota() {
   if (refreshingQuota.value || !props.providerId) return
+
+  // 确认对话框
+  const confirmed = await confirm({
+    title: '获取限额',
+    message: '这将使用每个账号发送测试请求以获取最新限额信息，会产生少量 API 调用费用。是否继续？',
+    confirmText: '继续',
+    variant: 'info'
+  })
+  if (!confirmed) return
+
   refreshingQuota.value = true
   try {
     const result = await refreshProviderQuota(props.providerId)
