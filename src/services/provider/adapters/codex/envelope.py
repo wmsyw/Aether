@@ -46,10 +46,11 @@ class CodexOAuthEnvelope:
         if ua:
             headers["User-Agent"] = ua
 
-        # Add chatgpt-account-id from context (set by wrap_request)
+        # Add chatgpt-account-id from context (set by wrap_request), then clear.
         ctx = get_codex_request_context()
         if ctx and ctx.account_id:
             headers["chatgpt-account-id"] = ctx.account_id
+        set_codex_request_context(None)
 
         return headers
 
@@ -63,11 +64,9 @@ class CodexOAuthEnvelope:
     ) -> tuple[dict[str, Any], str | None]:
         # Extract account_id from auth_config and set context for extra_headers()
         account_id = (decrypted_auth_config or {}).get("account_id")
-        user_id = (decrypted_auth_config or {}).get("user_id")
         set_codex_request_context(
             CodexRequestContext(
                 account_id=str(account_id) if account_id else None,
-                user_id=str(user_id) if user_id else None,
             )
         )
         # No wire envelope for Codex; keep request body as-is.

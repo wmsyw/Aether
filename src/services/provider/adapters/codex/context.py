@@ -20,7 +20,6 @@ class CodexRequestContext:
     """
 
     account_id: str | None = None
-    user_id: str | None = None
 
 
 _codex_request_context: contextvars.ContextVar[CodexRequestContext | None] = contextvars.ContextVar(
