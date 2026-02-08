@@ -104,7 +104,7 @@ def _build_test_proxy_url(node: ProxyNode) -> str:
         return proxy_url
     else:
         # aether-proxy: 使用 HMAC 认证构建代理 URL
-        return build_hmac_proxy_url(node.ip, node.port, node.id, tls_enabled=bool(node.tls_enabled))
+        return build_hmac_proxy_url(node.ip, node.port, tls_enabled=bool(node.tls_enabled))
 
 
 # ---------------------------------------------------------------------------
