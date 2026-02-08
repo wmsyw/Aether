@@ -22,12 +22,122 @@ HeaderRule = dict[str, Any]
 
 
 # ========== Body Rule 类型定义 ==========
-# 请求体规则支持三种操作：
+# 请求体规则支持六种操作：
 # - set: 设置/覆盖字段 {"action": "set", "path": "metadata", "value": {"custom": "val"}}
 # - drop: 删除字段 {"action": "drop", "path": "unwanted_field"}
 # - rename: 重命名字段 {"action": "rename", "from": "old_key", "to": "new_key"}
-# 实际验证在 request_builder.py 的 apply_body_rules 中处理
+# - append: 向数组追加元素 {"action": "append", "path": "messages", "value": {...}}
+# - insert: 在数组指定位置插入 {"action": "insert", "path": "messages", "index": 0, "value": {...}}
+# - regex_replace: 正则替换字符串值 {"action": "regex_replace", "path": "...", "pattern": "...", "replacement": "..."}
+# 路径语法支持数组索引：messages[0].content, data[-1], matrix[0][1]
+# 运行时处理在 request_builder.py 的 apply_body_rules 中；结构校验见 _validate_body_rules
 BodyRule = dict[str, Any]
+
+# body_rules 允许的 action 集合
+_BODY_RULE_ACTIONS: frozenset[str] = frozenset(
+    {"set", "drop", "rename", "append", "insert", "regex_replace"}
+)
+
+# regex_replace 允许的 flags 字符
+_REGEX_FLAG_CHARS: frozenset[str] = frozenset({"i", "m", "s"})
+
+
+def parse_re_flags(flags_str: str) -> int:
+    """将 flags 字符串（i/m/s）转换为 re 标志位。
+
+    供 endpoint_models 校验和 request_builder 运行时共用。
+    """
+    result = 0
+    for f in flags_str:
+        if f == "i":
+            result |= re.IGNORECASE
+        elif f == "m":
+            result |= re.MULTILINE
+        elif f == "s":
+            result |= re.DOTALL
+    return result
+
+
+def _validate_body_rules(rules: list[BodyRule]) -> list[BodyRule]:
+    """校验 body_rules 列表的结构和正则合法性。
+
+    校验项：
+    - 每条规则必须是 dict 且包含合法 action
+    - 需要 path 的 action（set/drop/append/insert/regex_replace）必须提供非空 path 字符串
+    - rename 必须提供非空 from / to 字符串
+    - insert 的 index 必须为整数
+    - regex_replace 的 pattern 必须能通过 re.compile 编译，flags 仅允许 i/m/s
+    """
+    for idx, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise ValueError(f"body_rules[{idx}]: 规则必须是 JSON 对象")
+
+        action = rule.get("action")
+        if not isinstance(action, str) or action.strip().lower() not in _BODY_RULE_ACTIONS:
+            raise ValueError(
+                f"body_rules[{idx}]: action 必须是 {sorted(_BODY_RULE_ACTIONS)} 之一，"
+                f"当前值: {action!r}"
+            )
+        action = action.strip().lower()
+
+        # ---------- path 校验 ----------
+        if action in {"set", "drop", "append", "insert", "regex_replace"}:
+            path = rule.get("path")
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError(f"body_rules[{idx}]: action={action!r} 必须提供非空 path")
+
+        # ---------- rename 校验 ----------
+        if action == "rename":
+            from_val = rule.get("from")
+            to_val = rule.get("to")
+            if not isinstance(from_val, str) or not from_val.strip():
+                raise ValueError(f"body_rules[{idx}]: rename 必须提供非空 from")
+            if not isinstance(to_val, str) or not to_val.strip():
+                raise ValueError(f"body_rules[{idx}]: rename 必须提供非空 to")
+
+        # ---------- insert 校验 ----------
+        if action == "insert":
+            index = rule.get("index")
+            if not isinstance(index, int) or isinstance(index, bool):
+                raise ValueError(f"body_rules[{idx}]: insert 的 index 必须为整数")
+
+        # ---------- regex_replace 校验 ----------
+        if action == "regex_replace":
+            pattern = rule.get("pattern")
+            if not isinstance(pattern, str) or not pattern:
+                raise ValueError(f"body_rules[{idx}]: regex_replace 必须提供非空 pattern 字符串")
+
+            replacement = rule.get("replacement", "")
+            if not isinstance(replacement, str):
+                raise ValueError(f"body_rules[{idx}]: regex_replace 的 replacement 必须为字符串")
+
+            # 校验 flags
+            flags_str = rule.get("flags", "")
+            re_flags = 0
+            if isinstance(flags_str, str) and flags_str:
+                invalid_flags = set(flags_str) - _REGEX_FLAG_CHARS
+                if invalid_flags:
+                    raise ValueError(
+                        f"body_rules[{idx}]: regex_replace 的 flags 仅允许 "
+                        f"{''.join(sorted(_REGEX_FLAG_CHARS))}，"
+                        f"非法字符: {''.join(sorted(invalid_flags))}"
+                    )
+                re_flags = parse_re_flags(flags_str)
+
+            # 尝试编译正则，捕获语法错误
+            try:
+                re.compile(pattern, re_flags)
+            except re.error as e:
+                raise ValueError(
+                    f"body_rules[{idx}]: regex_replace 的 pattern 不是合法正则表达式: {e}"
+                )
+
+            # 校验 count
+            count = rule.get("count", 0)
+            if not isinstance(count, int) or count < 0:
+                raise ValueError(f"body_rules[{idx}]: regex_replace 的 count 必须为非负整数")
+
+    return rules
 
 
 # ========== ProviderEndpoint CRUD ==========
@@ -55,7 +165,7 @@ class ProviderEndpointCreate(BaseModel):
     # 请求体配置
     body_rules: list[BodyRule] | None = Field(
         default=None,
-        description="请求体规则列表，支持 set/drop/rename 操作",
+        description="请求体规则列表，支持 set/drop/rename/append/insert/regex_replace 操作",
     )
 
     max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
@@ -93,6 +203,14 @@ class ProviderEndpointCreate(BaseModel):
 
         return v.rstrip("/")  # 移除末尾斜杠
 
+    @field_validator("body_rules")
+    @classmethod
+    def validate_body_rules(cls, v: list[BodyRule] | None) -> list[BodyRule] | None:
+        """校验 body_rules 结构和正则合法性"""
+        if v is None:
+            return v
+        return _validate_body_rules(v)
+
 
 class ProviderEndpointUpdate(BaseModel):
     """更新 Endpoint 请求"""
@@ -111,7 +229,7 @@ class ProviderEndpointUpdate(BaseModel):
     # 请求体配置
     body_rules: list[BodyRule] | None = Field(
         default=None,
-        description="请求体规则列表，支持 set/drop/rename 操作",
+        description="请求体规则列表，支持 set/drop/rename/append/insert/regex_replace 操作",
     )
 
     max_retries: int | None = Field(default=None, ge=0, le=10, description="最大重试次数")
@@ -136,6 +254,14 @@ class ProviderEndpointUpdate(BaseModel):
             raise ValueError("URL 必须以 http:// 或 https:// 开头")
 
         return v.rstrip("/")  # 移除末尾斜杠
+
+    @field_validator("body_rules")
+    @classmethod
+    def validate_body_rules(cls, v: list[BodyRule] | None) -> list[BodyRule] | None:
+        """校验 body_rules 结构和正则合法性"""
+        if v is None:
+            return v
+        return _validate_body_rules(v)
 
 
 class ProviderEndpointResponse(BaseModel):

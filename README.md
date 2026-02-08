@@ -198,6 +198,8 @@ docker compose up -d app
 
 <p align="center">
   <img src="docs/author/qq_qrcode.jpg" width="200" alt="QQ二维码">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/author/qrcode_1770574997172.jpg" width="200" alt="QQ群二维码">
 </p>
 
 ## Star History

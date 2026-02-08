@@ -41,6 +41,90 @@ const headerRuleTypes = [
   { type: 'remove', name: '删除', description: '删除指定的请求头' }
 ]
 
+// 请求体规则类型
+const bodyRuleTypes = [
+  { action: 'set', name: '覆写', description: '设置或覆盖指定路径的字段值' },
+  { action: 'drop', name: '删除', description: '删除指定路径的字段' },
+  { action: 'rename', name: '重命名', description: '将字段从一个路径移动到另一个路径' },
+  { action: 'insert', name: '插入', description: '在数组的指定位置插入元素，位置留空则追加到末尾' },
+  { action: 'regex_replace', name: '正则替换', description: '对字符串字段执行正则表达式替换' },
+]
+
+// 请求体规则示例
+const bodyRuleExamples = [
+  {
+    title: '注入系统提示词',
+    description: '在 messages 数组开头插入一条 system 消息（index: 0）',
+    rule: `{
+  "action": "insert",
+  "path": "messages",
+  "index": 0,
+  "value": {
+    "role": "system",
+    "content": "你是一个专业助手"
+  }
+}`,
+  },
+  {
+    title: '追加消息到末尾',
+    description: '不指定 index，自动追加到数组末尾',
+    rule: `{
+  "action": "insert",
+  "path": "messages",
+  "value": {
+    "role": "user",
+    "content": "请用中文回答"
+  }
+}`,
+  },
+  {
+    title: '设置自定义元数据',
+    description: '覆写嵌套字段，不存在时自动创建中间层级',
+    rule: `{
+  "action": "set",
+  "path": "metadata.source",
+  "value": "internal-app"
+}`,
+  },
+  {
+    title: '删除不需要的字段',
+    description: '移除请求体中的敏感或多余字段',
+    rule: `{
+  "action": "drop",
+  "path": "user_info.ip_address"
+}`,
+  },
+  {
+    title: '内容脱敏',
+    description: '用正则替换 messages 中的手机号',
+    rule: `{
+  "action": "regex_replace",
+  "path": "messages[-1].content",
+  "pattern": "1[3-9]\\\\d{9}",
+  "replacement": "[手机号已隐藏]",
+  "flags": ""
+}`,
+  },
+  {
+    title: '重命名字段',
+    description: '将字段从旧路径移动到新路径',
+    rule: `{
+  "action": "rename",
+  "from": "extra.custom_id",
+  "to": "metadata.trace_id"
+}`,
+  },
+]
+
+// 路径语法示例
+const pathSyntaxExamples = [
+  { path: 'metadata.user', desc: '嵌套 dict 字段' },
+  { path: 'messages[0].content', desc: '数组第一个元素的 content 字段' },
+  { path: 'messages[-1]', desc: '数组最后一个元素' },
+  { path: 'matrix[0][1]', desc: '多维数组访问' },
+  { path: 'config\\.v1.enabled', desc: '\\. 转义为字面量点号 → key "config.v1"' },
+]
+
 // 系统设置分类
 const systemSettings = [
   {
@@ -267,6 +351,271 @@ const systemSettings = [
               <li>• 添加额外的认证信息（如 API 版本号）</li>
               <li>• 添加跟踪标记（如请求 ID、来源标识）</li>
               <li>• 删除敏感信息（如用户原始 IP）</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 请求体规则 -->
+    <section class="space-y-4">
+      <h2 class="text-xl font-semibold text-[#262624] dark:text-[#f1ead8]">
+        请求体规则
+      </h2>
+
+      <!-- 概述 -->
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2 rounded-lg bg-orange-500/10">
+            <FileCode class="h-5 w-5 text-orange-500" />
+          </div>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            什么是请求体规则？
+          </h3>
+        </div>
+
+        <p class="text-sm text-[#666663] dark:text-[#a3a094] mb-4">
+          请求体规则允许你在转发请求时修改请求体（JSON Body）的内容。可以覆写字段、删除字段、向数组追加/插入元素，甚至用正则替换字符串值。
+          规则按顺序依次执行，受保护的顶层字段（<code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">model</code>、<code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">stream</code>）不可修改。
+        </p>
+
+        <!-- 操作类型表格 -->
+        <div
+          class="overflow-hidden"
+          :class="[panelClasses.section]"
+        >
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    操作
+                  </th>
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    说明
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="rule in bodyRuleTypes"
+                  :key="rule.action"
+                  class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)] last:border-0"
+                >
+                  <td class="px-4 py-3 font-medium text-[#262624] dark:text-[#f1ead8]">
+                    <span :class="panelClasses.badge">{{ rule.name }}</span>
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    {{ rule.description }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 路径语法 -->
+      <div
+        class="p-5 space-y-4"
+        :class="[panelClasses.section]"
+      >
+        <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+          路径语法
+        </h3>
+        <p class="text-sm text-[#666663] dark:text-[#a3a094]">
+          使用点号（<code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">.</code>）分隔层级，方括号（<code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">[N]</code>）访问数组元素。
+        </p>
+
+        <div
+          class="overflow-hidden"
+          :class="[panelClasses.section]"
+        >
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    路径
+                  </th>
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    说明
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="ex in pathSyntaxExamples"
+                  :key="ex.path"
+                  class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)] last:border-0"
+                >
+                  <td class="px-4 py-3 font-mono text-xs text-[#262624] dark:text-[#f1ead8]">
+                    {{ ex.path }}
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    {{ ex.desc }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 实战示例 -->
+      <div
+        class="p-5 space-y-4"
+        :class="[panelClasses.section]"
+      >
+        <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+          实战示例
+        </h3>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div
+            v-for="example in bodyRuleExamples"
+            :key="example.title"
+            class="rounded-lg border border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)] overflow-hidden"
+          >
+            <div class="px-4 py-2.5 border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
+              <p class="font-medium text-sm text-[#262624] dark:text-[#f1ead8]">
+                {{ example.title }}
+              </p>
+              <p class="text-xs text-[#666663] dark:text-[#a3a094] mt-0.5">
+                {{ example.description }}
+              </p>
+            </div>
+            <pre class="p-4 text-xs font-mono text-[#262624] dark:text-[#f1ead8] overflow-x-auto bg-[#fafaf7]/30 dark:bg-[#1a1816]/30"><code>{{ example.rule }}</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- 正则替换说明 -->
+      <div
+        class="p-5 space-y-4"
+        :class="[panelClasses.section]"
+      >
+        <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+          正则替换详解
+        </h3>
+
+        <p class="text-sm text-[#666663] dark:text-[#a3a094]">
+          <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">regex_replace</code> 对指定路径的字符串值执行正则表达式替换。
+        </p>
+
+        <div
+          class="overflow-hidden"
+          :class="[panelClasses.section]"
+        >
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    参数
+                  </th>
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    必填
+                  </th>
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    说明
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)]">
+                  <td class="px-4 py-3 font-mono text-xs text-[#262624] dark:text-[#f1ead8]">
+                    path
+                  </td>
+                  <td class="px-4 py-3">
+                    <Check class="h-4 w-4 text-green-500" />
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    目标字符串字段的路径
+                  </td>
+                </tr>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)]">
+                  <td class="px-4 py-3 font-mono text-xs text-[#262624] dark:text-[#f1ead8]">
+                    pattern
+                  </td>
+                  <td class="px-4 py-3">
+                    <Check class="h-4 w-4 text-green-500" />
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    正则表达式（Python re 语法），保存时会校验合法性
+                  </td>
+                </tr>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)]">
+                  <td class="px-4 py-3 font-mono text-xs text-[#262624] dark:text-[#f1ead8]">
+                    replacement
+                  </td>
+                  <td class="px-4 py-3">
+                    <Check class="h-4 w-4 text-green-500" />
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    替换字符串，留空则删除匹配内容
+                  </td>
+                </tr>
+                <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.08)]">
+                  <td class="px-4 py-3 font-mono text-xs text-[#262624] dark:text-[#f1ead8]">
+                    flags
+                  </td>
+                  <td class="px-4 py-3 text-xs text-[#999]">
+                    可选
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1 py-0.5 rounded">i</code> 忽略大小写 /
+                    <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1 py-0.5 rounded">m</code> 多行模式 /
+                    <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1 py-0.5 rounded">s</code> dotall（. 匹配换行）
+                  </td>
+                </tr>
+                <tr class="last:border-0">
+                  <td class="px-4 py-3 font-mono text-xs text-[#262624] dark:text-[#f1ead8]">
+                    count
+                  </td>
+                  <td class="px-4 py-3 text-xs text-[#999]">
+                    可选
+                  </td>
+                  <td class="px-4 py-3 text-[#666663] dark:text-[#a3a094]">
+                    替换次数，默认 0 = 全部替换
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 使用场景 -->
+      <div
+        class="p-4"
+        :class="[panelClasses.section]"
+      >
+        <div class="flex items-start gap-3">
+          <Info class="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+          <div class="text-sm text-[#666663] dark:text-[#a3a094]">
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              典型使用场景
+            </p>
+            <ul class="mt-1 space-y-1">
+              <li>
+                <span class="font-medium text-[#262624] dark:text-[#f1ead8]">注入 System Prompt</span> — 在所有请求前插入统一的系统提示词
+              </li>
+              <li>
+                <span class="font-medium text-[#262624] dark:text-[#f1ead8]">请求增强</span> — 自动追加上下文、metadata 等字段
+              </li>
+              <li>
+                <span class="font-medium text-[#262624] dark:text-[#f1ead8]">内容过滤</span> — 用正则替换脱敏敏感信息（手机号、邮箱等）
+              </li>
+              <li>
+                <span class="font-medium text-[#262624] dark:text-[#f1ead8]">字段清理</span> — 删除不需要的自定义字段，避免上游报错
+              </li>
+              <li>
+                <span class="font-medium text-[#262624] dark:text-[#f1ead8]">字段适配</span> — 将客户端的字段名重命名为上游期望的格式
+              </li>
             </ul>
           </div>
         </div>

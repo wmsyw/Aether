@@ -206,23 +206,24 @@
                 <!-- 密钥列表 -->
                 <div
                   v-if="allKeys.length > 0"
+                  ref="keysListRef"
                   class="divide-y divide-border/40"
                 >
                   <div
-                    v-for="({ key, endpoint }, index) in allKeys"
+                    v-for="({ key, endpoint }, localIdx) in paginatedKeys"
                     :key="key.id"
                     class="px-4 py-2.5 hover:bg-muted/30 transition-colors group/item"
                     :class="{
-                      'opacity-50': keyDragState.isDragging && keyDragState.draggedIndex === index,
-                      'bg-primary/5 border-l-2 border-l-primary': keyDragState.targetIndex === index && keyDragState.isDragging,
+                      'opacity-50': keyDragState.isDragging && keyDragState.draggedIndex === getGlobalKeyIndex(localIdx),
+                      'bg-primary/5 border-l-2 border-l-primary': keyDragState.targetIndex === getGlobalKeyIndex(localIdx) && keyDragState.isDragging,
                       'opacity-40 bg-muted/20': !key.is_active
                     }"
                     draggable="true"
-                    @dragstart="handleKeyDragStart($event, index)"
+                    @dragstart="handleKeyDragStart($event, getGlobalKeyIndex(localIdx))"
                     @dragend="handleKeyDragEnd"
-                    @dragover="handleKeyDragOver($event, index)"
+                    @dragover="handleKeyDragOver($event, getGlobalKeyIndex(localIdx))"
                     @dragleave="handleKeyDragLeave"
-                    @drop="handleKeyDrop($event, index)"
+                    @drop="handleKeyDrop($event, getGlobalKeyIndex(localIdx))"
                   >
                     <!-- 第一行：名称 + 状态 + 操作按钮 -->
                     <div class="flex items-center justify-between gap-2">
@@ -760,6 +761,34 @@
                       </template>
                     </div>
                   </div>
+                  <!-- 分页控制 -->
+                  <div
+                    v-if="shouldPaginateKeys"
+                    class="px-4 py-2 flex items-center justify-between text-xs text-muted-foreground"
+                  >
+                    <span>共 {{ allKeys.length }} 个{{ provider.provider_type === 'custom' ? '密钥' : '账号' }}</span>
+                    <div class="flex items-center gap-1.5">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 px-2 text-xs"
+                        :disabled="currentKeyPage <= 1"
+                        @click="currentKeyPage--"
+                      >
+                        ‹
+                      </Button>
+                      <span class="tabular-nums">{{ currentKeyPage }} / {{ totalKeyPages }}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 px-2 text-xs"
+                        :disabled="currentKeyPage >= totalKeyPages"
+                        @click="currentKeyPage++"
+                      >
+                        ›
+                      </Button>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- 空状态 -->
@@ -900,6 +929,7 @@
 
 <script setup lang="ts">
 import { ref, watch, computed, nextTick } from 'vue'
+import { useSmartPagination } from '@/composables/useSmartPagination'
 import {
   Plus,
   Key,
@@ -1104,6 +1134,17 @@ const allKeys = computed(() => {
   return result
 })
 
+// ===== 账号列表智能分页 =====
+const keysListRef = ref<HTMLElement | null>(null)
+const {
+  currentPage: currentKeyPage,
+  totalPages: totalKeyPages,
+  shouldPaginate: shouldPaginateKeys,
+  paginatedItems: paginatedKeys,
+  getGlobalIndex: getGlobalKeyIndex,
+  reset: resetKeysPagination,
+} = useSmartPagination(allKeys, keysListRef)
+
 // 合并监听 providerId 和 open，避免同一 tick 内两个 watcher 都触发导致重复请求
 watch(
   [() => props.providerId, () => props.open],
@@ -1125,6 +1166,9 @@ watch(
       provider.value = null
       endpoints.value = []
       providerKeys.value = []  // 清空 Provider 级别的 keys
+
+      // 重置分页状态
+      resetKeysPagination()
 
       // 重置所有对话框状态
       endpointDialogOpen.value = false

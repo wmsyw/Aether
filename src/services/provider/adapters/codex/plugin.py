@@ -88,8 +88,8 @@ def build_codex_url(
 async def enrich_codex(
     auth_config: dict[str, Any],
     token_response: dict[str, Any],
-    access_token: str,
-    proxy_config: dict[str, Any] | None,
+    access_token: str,  # noqa: ARG001
+    proxy_config: dict[str, Any] | None,  # noqa: ARG001
 ) -> dict[str, Any]:
     """Codex auth_config enrichment: parse id_token -> email/account_id/plan_type/user_id."""
     from src.core.provider_oauth_utils import parse_codex_id_token
@@ -100,17 +100,11 @@ async def enrich_codex(
         bool(id_token),
         list(token_response.keys()),
     )
-    codex_info = parse_codex_id_token(str(id_token) if id_token else None)
+    # parse_codex_id_token 仅返回非空有效字段，直接 update 即可
+    codex_info = parse_codex_id_token(id_token)
     if codex_info:
         logger.debug("Codex parsed id_token fields: {}", list(codex_info.keys()))
-    if codex_info.get("email"):
-        auth_config["email"] = codex_info["email"]
-    if codex_info.get("account_id"):
-        auth_config["account_id"] = codex_info["account_id"]
-    if codex_info.get("plan_type"):
-        auth_config["plan_type"] = codex_info["plan_type"]
-    if codex_info.get("user_id"):
-        auth_config["user_id"] = codex_info["user_id"]
+        auth_config.update(codex_info)
     return auth_config
 
 

@@ -10,6 +10,7 @@ export interface ProviderOAuthStartResponse {
 export interface ProviderOAuthCompleteRequest {
   callback_url: string
   name?: string
+  proxy_node_id?: string
 }
 
 export interface ProviderOAuthCompleteResponse {
@@ -49,7 +50,7 @@ export async function completeProviderLevelOAuth(
 
 export async function importProviderRefreshToken(
   providerId: string,
-  data: { refresh_token: string; name?: string }
+  data: { refresh_token: string; name?: string; proxy_node_id?: string }
 ): Promise<ProviderOAuthCompleteResponseWithKey> {
   const resp = await client.post(`/api/admin/provider-oauth/providers/${providerId}/import-refresh-token`, data)
   return resp.data

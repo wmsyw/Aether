@@ -296,7 +296,7 @@
                       v-if="getEndpointEditBodyRules(endpoint.id).length > 0"
                       class="text-xs text-muted-foreground px-2"
                     >
-                      用 <code class="bg-muted px-1 rounded">.</code> 访问嵌套字段；值为 JSON 格式，字符串需加引号如 <code class="bg-muted px-1 rounded">"text"</code>
+                      <code class="bg-muted px-1 rounded">.</code> 嵌套字段 / <code class="bg-muted px-1 rounded">[N]</code> 数组索引；值为 JSON 格式
                     </div>
 
                     <!-- 请求体规则列表 - 次要色边框 -->
@@ -312,10 +312,10 @@
                       <Select
                         :model-value="rule.action"
                         :open="bodyRuleSelectOpen[`${endpoint.id}-${index}`]"
-                        @update:model-value="(v) => updateEndpointBodyRuleAction(endpoint.id, index, v as 'set' | 'drop' | 'rename')"
+                        @update:model-value="(v: string) => updateEndpointBodyRuleAction(endpoint.id, index, v as BodyRuleAction)"
                         @update:open="(v) => handleBodyRuleSelectOpen(endpoint.id, index, v)"
                       >
-                        <SelectTrigger class="w-[88px] h-7 text-xs shrink-0">
+                        <SelectTrigger class="w-[96px] h-7 text-xs shrink-0">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -327,6 +327,12 @@
                           </SelectItem>
                           <SelectItem value="rename">
                             重命名
+                          </SelectItem>
+                          <SelectItem value="insert">
+                            插入
+                          </SelectItem>
+                          <SelectItem value="regex_replace">
+                            正则替换
                           </SelectItem>
                         </SelectContent>
                       </Select>
@@ -376,6 +382,72 @@
                           size="sm"
                           class="flex-1 min-w-0 h-7 text-xs"
                           @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'to', v)"
+                        />
+                      </template>
+                      <template v-else-if="rule.action === 'insert' || rule.action === 'append'">
+                        <Input
+                          :model-value="rule.path"
+                          placeholder="数组路径（如 messages）"
+                          size="sm"
+                          class="flex-[2] min-w-0 h-7 text-xs"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'path', v)"
+                        />
+                        <Input
+                          :model-value="rule.index"
+                          placeholder="末尾"
+                          size="sm"
+                          class="w-14 h-7 text-xs shrink-0"
+                          title="插入位置（留空=追加到末尾）"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'index', v)"
+                        />
+                        <Input
+                          :model-value="rule.value"
+                          placeholder="值 (JSON)"
+                          size="sm"
+                          class="flex-[3] min-w-0 h-7 text-xs"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'value', v)"
+                        />
+                        <CheckCircle
+                          class="w-4 h-4 shrink-0"
+                          :class="getBodySetValueValidation(rule) === true ? 'text-green-600' : getBodySetValueValidation(rule) === false ? 'text-destructive' : 'text-muted-foreground/40'"
+                          :title="getBodySetValueValidationTip(rule)"
+                        />
+                      </template>
+                      <template v-else-if="rule.action === 'regex_replace'">
+                        <Input
+                          :model-value="rule.path"
+                          placeholder="字段路径"
+                          size="sm"
+                          class="flex-[2] min-w-0 h-7 text-xs"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'path', v)"
+                        />
+                        <Input
+                          :model-value="rule.pattern"
+                          placeholder="正则"
+                          size="sm"
+                          class="flex-[2] min-w-0 h-7 text-xs font-mono"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'pattern', v)"
+                        />
+                        <span class="text-muted-foreground text-xs">→</span>
+                        <Input
+                          :model-value="rule.replacement"
+                          placeholder="替换为"
+                          size="sm"
+                          class="flex-[2] min-w-0 h-7 text-xs"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'replacement', v)"
+                        />
+                        <Input
+                          :model-value="rule.flags"
+                          placeholder="ims"
+                          size="sm"
+                          class="w-12 h-7 text-xs shrink-0 font-mono"
+                          title="正则标志：i=忽略大小写 m=多行 s=dotall"
+                          @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'flags', v)"
+                        />
+                        <CheckCircle
+                          class="w-4 h-4 shrink-0"
+                          :class="getRegexPatternValidation(rule) === true ? 'text-green-600' : getRegexPatternValidation(rule) === false ? 'text-destructive' : 'text-muted-foreground/40'"
+                          :title="getRegexPatternValidationTip(rule)"
                         />
                       </template>
                       <Button
@@ -519,6 +591,7 @@ import {
   type ProviderWithEndpointsSummary,
   type HeaderRule,
   type BodyRule,
+  type BodyRuleRegexReplace,
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
 
@@ -532,12 +605,18 @@ interface EditableRule {
 }
 
 // 编辑用的请求体规则类型
+type BodyRuleAction = 'set' | 'drop' | 'rename' | 'append' | 'insert' | 'regex_replace'
+
 interface EditableBodyRule {
-  action: 'set' | 'drop' | 'rename'
-  path: string     // set/drop 用
-  value: string    // set 用（JSON 格式）
+  action: BodyRuleAction
+  path: string     // set/drop/append/insert/regex_replace 用
+  value: string    // set/append/insert 用（JSON 格式）
   from: string     // rename 用
   to: string       // rename 用
+  index: string    // insert 用（字符串输入，保存时解析为 int）
+  pattern: string  // regex_replace 用
+  replacement: string // regex_replace 用
+  flags: string    // regex_replace 用（i/m/s）
 }
 
 // 端点编辑状态（仅 URL、路径、规则，格式转换是直接保存的）
@@ -779,16 +858,29 @@ function initEndpointEditState(endpoint: ProviderEndpoint): EndpointEditState {
     }
   }
 
+  const emptyBodyRule = (): Omit<EditableBodyRule, 'action'> => ({
+    path: '', value: '', from: '', to: '', index: '', pattern: '', replacement: '', flags: '',
+  })
+
   const bodyRules: EditableBodyRule[] = []
   if (endpoint.body_rules && endpoint.body_rules.length > 0) {
     for (const rule of endpoint.body_rules) {
       if (rule.action === 'set') {
-        const { value } = initBodyRuleSetValueForEditor((rule as any).value)
-        bodyRules.push({ action: 'set', path: rule.path, value, from: '', to: '' })
+        const { value } = initBodyRuleSetValueForEditor(rule.value)
+        bodyRules.push({ ...emptyBodyRule(), action: 'set', path: rule.path, value })
       } else if (rule.action === 'drop') {
-        bodyRules.push({ action: 'drop', path: rule.path, value: '', from: '', to: '' })
+        bodyRules.push({ ...emptyBodyRule(), action: 'drop', path: rule.path })
       } else if (rule.action === 'rename') {
-        bodyRules.push({ action: 'rename', path: '', value: '', from: rule.from, to: rule.to })
+        bodyRules.push({ ...emptyBodyRule(), action: 'rename', from: rule.from, to: rule.to })
+      } else if (rule.action === 'append') {
+        // 前端将 append 统一展示为 insert（index 留空），保存时再根据 index 是否为空转回 append
+        const { value } = initBodyRuleSetValueForEditor(rule.value)
+        bodyRules.push({ ...emptyBodyRule(), action: 'insert', path: rule.path || '', value, index: '' })
+      } else if (rule.action === 'insert') {
+        const { value } = initBodyRuleSetValueForEditor(rule.value)
+        bodyRules.push({ ...emptyBodyRule(), action: 'insert', path: rule.path || '', value, index: String(rule.index ?? '') })
+      } else if (rule.action === 'regex_replace') {
+        bodyRules.push({ ...emptyBodyRule(), action: 'regex_replace', path: rule.path || '', pattern: rule.pattern || '', replacement: rule.replacement || '', flags: rule.flags || '' })
       }
     }
   }
@@ -977,7 +1069,7 @@ function getEndpointEditBodyRules(endpointId: string): EditableBodyRule[] {
 // 添加请求体规则（同时自动展开折叠）
 function handleAddEndpointBodyRule(endpointId: string) {
   const rules = getEndpointEditBodyRules(endpointId)
-  rules.push({ action: 'set', path: '', value: '', from: '', to: '' })
+  rules.push({ action: 'set', path: '', value: '', from: '', to: '', index: '', pattern: '', replacement: '', flags: '' })
   // 自动展开折叠
   endpointRulesExpanded.value[endpointId] = true
 }
@@ -989,7 +1081,7 @@ function removeEndpointBodyRule(endpointId: string, index: number) {
 }
 
 // 更新请求体规则类型
-function updateEndpointBodyRuleAction(endpointId: string, index: number, action: 'set' | 'drop' | 'rename') {
+function updateEndpointBodyRuleAction(endpointId: string, index: number, action: BodyRuleAction) {
   const rules = getEndpointEditBodyRules(endpointId)
   if (rules[index]) {
     rules[index].action = action
@@ -997,11 +1089,15 @@ function updateEndpointBodyRuleAction(endpointId: string, index: number, action:
     rules[index].value = ''
     rules[index].from = ''
     rules[index].to = ''
+    rules[index].index = ''
+    rules[index].pattern = ''
+    rules[index].replacement = ''
+    rules[index].flags = ''
   }
 }
 
 // 更新请求体规则字段
-function updateEndpointBodyRuleField(endpointId: string, index: number, field: 'path' | 'value' | 'from' | 'to', value: string) {
+function updateEndpointBodyRuleField(endpointId: string, index: number, field: 'path' | 'value' | 'from' | 'to' | 'index' | 'pattern' | 'replacement' | 'flags', value: string) {
   const rules = getEndpointEditBodyRules(endpointId)
   if (rules[index]) {
     rules[index][field] = value
@@ -1013,11 +1109,14 @@ function validateBodyRulePathForEndpoint(endpointId: string, path: string, index
   const raw = path.trim()
   if (!raw) return null
 
-  const parts = parseBodyRulePathParts(raw)
+  // 基础格式校验；对含 [N] 的路径，取方括号前的部分做 dot 校验
+  const dotPart = raw.includes('[') ? raw.slice(0, raw.indexOf('[')) : raw
+  const parts = dotPart ? parseBodyRulePathParts(dotPart) : [raw.split('[')[0] || raw]
   if (!parts) {
-    return '路径格式无效（不允许 .a / a. / a..b）'
+    return '路径格式无效'
   }
 
+  // 提取顶层 key（去除数组索引部分）
   const topKey = (parts[0] || '').trim().toLowerCase()
   if (RESERVED_BODY_FIELDS.has(topKey)) {
     return `"${parts[0]}" 是系统保留的顶层字段`
@@ -1101,7 +1200,7 @@ function validateBodyRenameToForEndpoint(endpointId: string, to: string, index: 
 }
 
 function validateBodySetValue(rule: EditableBodyRule): string | null {
-  if (rule.action !== 'set') return null
+  if (rule.action !== 'set' && rule.action !== 'append' && rule.action !== 'insert') return null
 
   const raw = rule.value.trim()
   if (!raw) return '值不能为空'
@@ -1116,7 +1215,7 @@ function validateBodySetValue(rule: EditableBodyRule): string | null {
 
 // 获取值验证状态：true=有效, false=无效, null=空
 function getBodySetValueValidation(rule: EditableBodyRule): boolean | null {
-  if (rule.action !== 'set') return null
+  if (rule.action !== 'set' && rule.action !== 'append' && rule.action !== 'insert') return null
   const raw = rule.value.trim()
   if (!raw) return null
   try {
@@ -1124,6 +1223,41 @@ function getBodySetValueValidation(rule: EditableBodyRule): boolean | null {
     return true
   } catch {
     return false
+  }
+}
+
+// 正则表达式验证状态：true=有效, false=无效, null=空
+function getRegexPatternValidation(rule: EditableBodyRule): boolean | null {
+  if (rule.action !== 'regex_replace') return null
+  const pattern = rule.pattern.trim()
+  if (!pattern) return null
+  try {
+    new RegExp(pattern)
+    // 校验 flags
+    const flags = rule.flags.trim()
+    if (flags) {
+      const validFlags = new Set(['i', 'm', 's'])
+      for (const f of flags) {
+        if (!validFlags.has(f)) return false
+      }
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+// 获取正则验证提示
+function getRegexPatternValidationTip(rule: EditableBodyRule): string {
+  const validation = getRegexPatternValidation(rule)
+  if (validation === null) return '输入正则表达式'
+  if (validation === true) return '有效的正则表达式'
+  try {
+    new RegExp(rule.pattern.trim())
+    // 正则有效但 flags 无效
+    return '无效的 flags（仅允许 i/m/s）'
+  } catch (err: any) {
+    return err instanceof Error ? err.message : String(err)
   }
 }
 
@@ -1151,6 +1285,8 @@ function getEndpointBodyRulesCount(endpoint: ProviderEndpoint): number {
     return state.bodyRules.filter(r => {
       if (r.action === 'set' || r.action === 'drop') return r.path.trim()
       if (r.action === 'rename') return r.from.trim() && r.to.trim()
+      if (r.action === 'insert' || r.action === 'append') return r.path.trim()
+      if (r.action === 'regex_replace') return r.path.trim() && r.pattern.trim()
       return false
     }).length
   }
@@ -1197,6 +1333,13 @@ function _formatBodyRuleLabel(rule: EditableBodyRule): string {
   } else if (rule.action === 'rename') {
     if (!rule.from || !rule.to) return '(未设置)'
     return `${rule.from}→${rule.to}`
+  } else if (rule.action === 'insert' || rule.action === 'append') {
+    if (!rule.path) return '(未设置)'
+    const idx = rule.index?.trim() || '末尾'
+    return `${rule.path}[${idx}]+=${rule.value || '...'}`
+  } else if (rule.action === 'regex_replace') {
+    if (!rule.path || !rule.pattern) return '(未设置)'
+    return `${rule.path}: s/${rule.pattern}/${rule.replacement || ''}/`
   }
   return '(未知)'
 }
@@ -1210,6 +1353,8 @@ function hasBodyRulesChanges(endpoint: ProviderEndpoint): boolean {
   const editedRules = state.bodyRules.filter(r => {
     if (r.action === 'set' || r.action === 'drop') return r.path.trim()
     if (r.action === 'rename') return r.from.trim() && r.to.trim()
+    if (r.action === 'insert' || r.action === 'append') return r.path.trim()
+    if (r.action === 'regex_replace') return r.path.trim() && r.pattern.trim()
     return false
   })
   if (editedRules.length !== originalRules.length) return true
@@ -1219,13 +1364,29 @@ function hasBodyRulesChanges(endpoint: ProviderEndpoint): boolean {
     if (!original) return true
     if (edited.action !== original.action) return true
     if (edited.action === 'set' && original.action === 'set') {
-      const baseline = initBodyRuleSetValueForEditor((original as any).value)
+      const baseline = initBodyRuleSetValueForEditor(original.value)
       if (edited.path !== original.path) return true
       if (edited.value !== baseline.value) return true
     } else if (edited.action === 'drop' && original.action === 'drop') {
       if (edited.path !== original.path) return true
     } else if (edited.action === 'rename' && original.action === 'rename') {
       if (edited.from !== original.from || edited.to !== original.to) return true
+    } else if (edited.action === 'insert' && original.action === 'append') {
+      // append 加载时被标准化为 insert（index 为空），比对时需跨 action 匹配
+      const baseline = initBodyRuleSetValueForEditor(original.value)
+      if (edited.index.trim() !== '') return true  // 加了 index → 已修改
+      if (edited.path !== original.path) return true
+      if (edited.value !== baseline.value) return true
+    } else if (edited.action === 'insert' && original.action === 'insert') {
+      const baseline = initBodyRuleSetValueForEditor(original.value)
+      if (edited.path !== original.path) return true
+      if (edited.index !== String(original.index ?? '')) return true
+      if (edited.value !== baseline.value) return true
+    } else if (edited.action === 'regex_replace' && original.action === 'regex_replace') {
+      if (edited.path !== original.path) return true
+      if (edited.pattern !== (original.pattern ?? '')) return true
+      if (edited.replacement !== (original.replacement ?? '')) return true
+      if (edited.flags !== (original.flags ?? '')) return true
     }
   }
   return false
@@ -1238,17 +1399,33 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
   for (const rule of rules) {
     if (rule.action === 'set' && rule.path.trim()) {
       let value: any = rule.value
-      try {
-        value = JSON.parse(rule.value.trim())
-      } catch {
-        // 保存前会做校验；这里兜底避免 UI 崩溃
-        value = rule.value
-      }
+      try { value = JSON.parse(rule.value.trim()) } catch { value = rule.value }
       result.push({ action: 'set', path: rule.path.trim(), value })
     } else if (rule.action === 'drop' && rule.path.trim()) {
       result.push({ action: 'drop', path: rule.path.trim() })
     } else if (rule.action === 'rename' && rule.from.trim() && rule.to.trim()) {
       result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim() })
+    } else if ((rule.action === 'insert' || rule.action === 'append') && rule.path.trim()) {
+      let value: any = rule.value
+      try { value = JSON.parse(rule.value.trim()) } catch { value = rule.value }
+      const indexStr = rule.index.trim()
+      if (indexStr === '') {
+        // 索引留空 → append 到末尾
+        result.push({ action: 'append', path: rule.path.trim(), value })
+      } else {
+        const idx = parseInt(indexStr, 10)
+        if (isNaN(idx)) continue
+        result.push({ action: 'insert', path: rule.path.trim(), index: idx, value })
+      }
+    } else if (rule.action === 'regex_replace' && rule.path.trim() && rule.pattern.trim()) {
+      const entry: BodyRuleRegexReplace = {
+        action: 'regex_replace',
+        path: rule.path.trim(),
+        pattern: rule.pattern,
+        replacement: rule.replacement || '',
+        ...(rule.flags.trim() ? { flags: rule.flags.trim() } : {}),
+      }
+      result.push(entry)
     }
   }
 
@@ -1273,6 +1450,29 @@ function getBodyValidationErrorForEndpoint(endpointId: string): string | null {
       if (fromErr) return `${prefix}${fromErr}`
       const toErr = validateBodyRenameToForEndpoint(endpointId, rule.to, i)
       if (toErr) return `${prefix}${toErr}`
+    } else if (rule.action === 'insert' || rule.action === 'append') {
+      const pathErr = validateBodyRulePathForEndpoint(endpointId, rule.path, i)
+      if (pathErr) return `${prefix}${pathErr}`
+      const indexStr = rule.index.trim()
+      if (indexStr !== '' && isNaN(parseInt(indexStr, 10))) return `${prefix}位置必须为整数或留空`
+      const valueErr = validateBodySetValue(rule)
+      if (valueErr) return `${prefix}${valueErr}`
+    } else if (rule.action === 'regex_replace') {
+      const pathErr = validateBodyRulePathForEndpoint(endpointId, rule.path, i)
+      if (pathErr) return `${prefix}${pathErr}`
+      if (!rule.pattern.trim()) return `${prefix}正则表达式不能为空`
+      try {
+        new RegExp(rule.pattern.trim())
+      } catch (err: any) {
+        return `${prefix}正则表达式无效：${err instanceof Error ? err.message : String(err)}`
+      }
+      const flags = rule.flags.trim()
+      if (flags) {
+        const validFlags = new Set(['i', 'm', 's'])
+        for (const f of flags) {
+          if (!validFlags.has(f)) return `${prefix}flags 仅允许 i/m/s，非法字符: ${f}`
+        }
+      }
     }
   }
   return null

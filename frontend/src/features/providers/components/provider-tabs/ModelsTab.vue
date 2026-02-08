@@ -31,7 +31,10 @@
       v-else-if="models.length > 0"
       class="overflow-hidden"
     >
-      <table class="w-full text-sm table-fixed">
+      <table
+        ref="modelsListRef"
+        class="w-full text-sm table-fixed"
+      >
         <colgroup>
           <col class="w-[45%]">
           <col class="w-[30%]">
@@ -39,7 +42,7 @@
         </colgroup>
         <tbody>
           <tr
-            v-for="model in sortedModels"
+            v-for="model in paginatedModels"
             :key="model.id"
             class="border-b border-border/40 last:border-b-0 hover:bg-muted/30 transition-colors"
           >
@@ -196,6 +199,34 @@
           </tr>
         </tbody>
       </table>
+      <!-- 分页控制 -->
+      <div
+        v-if="shouldPaginateModels"
+        class="px-4 py-2 border-t border-border/40 flex items-center justify-between text-xs text-muted-foreground"
+      >
+        <span>共 {{ sortedModels.length }} 个模型</span>
+        <div class="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-6 px-2 text-xs"
+            :disabled="currentModelPage <= 1"
+            @click="currentModelPage--"
+          >
+            ‹
+          </Button>
+          <span class="tabular-nums">{{ currentModelPage }} / {{ totalModelPages }}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-6 px-2 text-xs"
+            :disabled="currentModelPage >= totalModelPages"
+            @click="currentModelPage++"
+          >
+            ›
+          </Button>
+        </div>
+      </div>
     </div>
 
     <!-- 空状态 -->
@@ -216,6 +247,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useSmartPagination } from '@/composables/useSmartPagination'
 import { Box, Edit, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
@@ -282,6 +314,15 @@ const sortedModels = computed(() => {
     return nameA.localeCompare(nameB)
   })
 })
+
+// ===== 模型列表智能分页 =====
+const modelsListRef = ref<HTMLElement | null>(null)
+const {
+  currentPage: currentModelPage,
+  totalPages: totalModelPages,
+  shouldPaginate: shouldPaginateModels,
+  paginatedItems: paginatedModels,
+} = useSmartPagination(sortedModels, modelsListRef)
 
 // 复制模型 ID 到剪贴板
 async function copyModelId(modelId: string) {

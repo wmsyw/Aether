@@ -159,7 +159,51 @@ export interface BodyRuleRename {
   to: string
 }
 
-export type BodyRule = BodyRuleSet | BodyRuleDrop | BodyRuleRename
+/**
+ * 请求体规则 - 向数组追加元素
+ *
+ * - path 指向目标数组，如 "messages"
+ * - value 为要追加的元素
+ */
+export interface BodyRuleAppend {
+  action: 'append'
+  path: string
+  value: any
+}
+
+/**
+ * 请求体规则 - 在数组指定位置插入元素
+ *
+ * - path 指向目标数组，如 "messages"
+ * - index 为插入位置（支持负数）
+ * - value 为要插入的元素
+ */
+export interface BodyRuleInsert {
+  action: 'insert'
+  path: string
+  index: number
+  value: any
+}
+
+/**
+ * 请求体规则 - 正则替换字符串值
+ *
+ * - path 指向目标字符串字段，如 "messages[0].content"
+ * - pattern 为正则表达式
+ * - replacement 为替换字符串
+ * - flags 可选，支持 i(忽略大小写)/m(多行)/s(dotall)
+ * - count 替换次数，0=全部替换（默认）
+ */
+export interface BodyRuleRegexReplace {
+  action: 'regex_replace'
+  path: string
+  pattern: string
+  replacement: string
+  flags?: string
+  count?: number
+}
+
+export type BodyRule = BodyRuleSet | BodyRuleDrop | BodyRuleRename | BodyRuleAppend | BodyRuleInsert | BodyRuleRegexReplace
 
 /**
  * 格式接受策略配置

@@ -208,10 +208,12 @@ export interface BatchImportResult {
 
 export async function batchImportOAuth(
   providerId: string,
-  credentials: string
+  credentials: string,
+  proxyNodeId?: string
 ): Promise<BatchImportResult> {
   const response = await client.post(`/api/admin/provider-oauth/providers/${providerId}/batch-import`, {
     credentials,
+    proxy_node_id: proxyNodeId || undefined,
   })
   return response.data
 }

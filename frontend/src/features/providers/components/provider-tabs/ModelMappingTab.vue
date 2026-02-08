@@ -29,23 +29,24 @@
     <!-- 映射列表 -->
     <div
       v-else-if="combinedMappings.length > 0"
+      ref="mappingsListRef"
       class="divide-y divide-border/40"
     >
       <div
-        v-for="(item, index) in combinedMappings"
+        v-for="item in paginatedMappings"
         :key="item.key"
         class="transition-colors"
       >
         <!-- 行头部（可点击展开） -->
         <div
           class="flex items-center justify-between px-4 py-3 hover:bg-muted/20 cursor-pointer"
-          @click="toggleExpand(index)"
+          @click="toggleExpand(item.key)"
         >
           <div class="flex items-center gap-2 flex-1 min-w-0">
             <!-- 展开/收起图标 -->
             <ChevronRight
               class="w-4 h-4 text-muted-foreground shrink-0 transition-transform self-start mt-0.5"
-              :class="{ 'rotate-90': expandedItems.has(index) }"
+              :class="{ 'rotate-90': expandedItems.has(item.key) }"
             />
             <!-- 精确映射 -->
             <template v-if="item.type === 'exact'">
@@ -134,7 +135,7 @@
 
         <!-- 展开的映射详情 -->
         <div
-          v-show="expandedItems.has(index)"
+          v-show="expandedItems.has(item.key)"
           class="bg-muted/30 border-t border-border/30"
         >
           <!-- 精确映射详情 -->
@@ -272,6 +273,34 @@
           </div>
         </div>
       </div>
+      <!-- 分页控制 -->
+      <div
+        v-if="shouldPaginateMappings"
+        class="px-4 py-2 flex items-center justify-between text-xs text-muted-foreground"
+      >
+        <span>共 {{ combinedMappings.length }} 个映射</span>
+        <div class="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-6 px-2 text-xs"
+            :disabled="currentMappingPage <= 1"
+            @click="currentMappingPage--"
+          >
+            ‹
+          </Button>
+          <span class="tabular-nums">{{ currentMappingPage }} / {{ totalMappingPages }}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-6 px-2 text-xs"
+            :disabled="currentMappingPage >= totalMappingPages"
+            @click="currentMappingPage++"
+          >
+            ›
+          </Button>
+        </div>
+      </div>
     </div>
 
     <!-- 空状态 -->
@@ -315,6 +344,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useSmartPagination } from '@/composables/useSmartPagination'
 import { Tag, Plus, Edit, Trash2, ChevronRight, Loader2, Play } from 'lucide-vue-next'
 import {
   Card, Button, Badge,
@@ -393,7 +423,7 @@ const providerKeysState = ref<EndpointAPIKey[]>([])
 const formatMenuOpen = ref<Record<string, boolean>>({})
 
 // 展开状态
-const expandedItems = ref<Set<number>>(new Set())
+const expandedItems = ref<Set<string>>(new Set())
 
 // 是否有 key 配置了自动获取上游模型
 const hasAutoFetchKey = computed(() => {
@@ -523,6 +553,15 @@ const combinedMappings = computed<CombinedMapping[]>(() => {
   })
 })
 
+// ===== 模型映射智能分页 =====
+const mappingsListRef = ref<HTMLElement | null>(null)
+const {
+  currentPage: currentMappingPage,
+  totalPages: totalMappingPages,
+  shouldPaginate: shouldPaginateMappings,
+  paginatedItems: paginatedMappings,
+} = useSmartPagination(combinedMappings, mappingsListRef)
+
 // 加载数据
 async function loadData() {
   try {
@@ -554,11 +593,11 @@ const deleteConfirmDescription = computed(() => {
 })
 
 // 切换展开状态
-function toggleExpand(index: number) {
-  if (expandedItems.value.has(index)) {
-    expandedItems.value.delete(index)
+function toggleExpand(key: string) {
+  if (expandedItems.value.has(key)) {
+    expandedItems.value.delete(key)
   } else {
-    expandedItems.value.add(index)
+    expandedItems.value.add(key)
   }
 }
 

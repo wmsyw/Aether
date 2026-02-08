@@ -6,6 +6,58 @@
     size="md"
     @update:model-value="handleDialogUpdate"
   >
+    <!-- 右上角代理按钮 -->
+    <template #header-actions>
+      <Popover
+        :open="proxyPopoverOpen"
+        @update:open="(v: boolean) => { proxyPopoverOpen = v; if (v) proxyNodesStore.ensureLoaded() }"
+      >
+        <PopoverTrigger as-child>
+          <button
+            class="flex items-center justify-center w-8 h-8 rounded-md transition-colors shrink-0"
+            :class="selectedProxyNodeId
+              ? 'text-blue-500 bg-blue-500/10 hover:bg-blue-500/20'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'"
+            :title="selectedProxyNodeId ? `代理: ${getSelectedNodeLabel()}` : '设置代理节点'"
+          >
+            <Globe class="w-4 h-4" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          class="w-72 p-3 z-[80]"
+          side="bottom"
+          align="end"
+        >
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs font-medium">代理节点</span>
+                <span
+                  v-if="!proxyNodesStore.loading && proxyNodesStore.onlineNodes.length === 0"
+                  class="text-[10px] text-muted-foreground"
+                >· 前往「模块管理 · 代理节点」添加</span>
+              </div>
+              <button
+                v-if="selectedProxyNodeId"
+                class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                @click="selectedProxyNodeId = ''; proxyPopoverOpen = false"
+              >
+                清除
+              </button>
+            </div>
+            <ProxyNodeSelect
+              :model-value="selectedProxyNodeId"
+              trigger-class="h-8"
+              @update:model-value="(v: string) => { selectedProxyNodeId = v; proxyPopoverOpen = false }"
+            />
+            <p class="text-[10px] text-muted-foreground">
+              {{ selectedProxyNodeId ? '授权、刷新、额度查询均走此代理' : '未设置，依次回退到提供商代理 → 系统代理' }}
+            </p>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </template>
+
     <div class="space-y-4">
       <!-- Tab 切换 -->
       <div class="flex rounded-lg border border-border p-0.5 bg-muted/30">
@@ -227,8 +279,8 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Dialog, Button, Textarea } from '@/components/ui'
-import { UserPlus, Copy, ExternalLink, Upload } from 'lucide-vue-next'
+import { Dialog, Button, Textarea, Popover, PopoverTrigger, PopoverContent } from '@/components/ui'
+import { UserPlus, Copy, ExternalLink, Upload, Globe } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import { parseApiError } from '@/utils/errorParser'
@@ -238,6 +290,8 @@ import {
   importProviderRefreshToken,
   batchImportOAuth,
 } from '@/api/endpoints'
+import ProxyNodeSelect from './ProxyNodeSelect.vue'
+import { useProxyNodesStore } from '@/stores/proxy-nodes'
 
 const props = defineProps<{
   open: boolean
@@ -252,6 +306,18 @@ const emit = defineEmits<{
 
 const { success, error: showError } = useToast()
 const { copyToClipboard } = useClipboard()
+const proxyNodesStore = useProxyNodesStore()
+
+// 代理节点选择
+const proxyPopoverOpen = ref(false)
+const selectedProxyNodeId = ref('')
+
+/** 获取已选代理节点的显示名称 */
+function getSelectedNodeLabel(): string {
+  if (!selectedProxyNodeId.value) return ''
+  const node = proxyNodesStore.nodes.find(n => n.id === selectedProxyNodeId.value)
+  return node ? node.name : `${selectedProxyNodeId.value.slice(0, 8)  }...`
+}
 
 // 模式
 type DialogMode = 'oauth' | 'import'
@@ -318,6 +384,8 @@ function resetForm() {
   importing.value = false
   isDragging.value = false
   showManualInput.value = false
+  proxyPopoverOpen.value = false
+  selectedProxyNodeId.value = ''
   mode.value = isKiroProvider.value ? 'import' : 'oauth'
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
@@ -393,6 +461,7 @@ async function handleCompleteOAuth() {
   try {
     await completeProviderLevelOAuth(props.providerId, {
       callback_url: oauth.value.callback_url.trim(),
+      proxy_node_id: selectedProxyNodeId.value || undefined,
     })
     success('授权成功，账号已添加')
     emit('saved')
@@ -498,10 +567,11 @@ async function handleImport() {
 
   importing.value = true
   try {
+    const proxyNodeId = selectedProxyNodeId.value || undefined
     // 检测是否为批量导入
     if (isBatchImport(inputText)) {
       // 批量导入
-      const result = await batchImportOAuth(props.providerId, inputText)
+      const result = await batchImportOAuth(props.providerId, inputText, proxyNodeId)
       if (result.success > 0) {
         if (result.failed > 0) {
           success(`批量导入完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
@@ -522,7 +592,10 @@ async function handleImport() {
         showError('无法解析输入内容，请检查格式', '格式错误')
         return
       }
-      await importProviderRefreshToken(props.providerId, parsed)
+      await importProviderRefreshToken(props.providerId, {
+        ...parsed,
+        proxy_node_id: proxyNodeId,
+      })
       success('导入成功，账号已添加')
       emit('saved')
       handleClose()
@@ -537,6 +610,8 @@ async function handleImport() {
 
 watch(() => props.open, (newOpen) => {
   if (newOpen) {
+    // 预加载代理节点列表
+    proxyNodesStore.ensureLoaded()
     if (isKiroProvider.value) {
       mode.value = 'import'
     } else {

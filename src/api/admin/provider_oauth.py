@@ -140,6 +140,10 @@ class CompleteOAuthResponse(BaseModel):
 class ProviderCompleteOAuthRequest(BaseModel):
     callback_url: str = Field(..., min_length=5, description="浏览器地址栏中的完整回调 URL")
     name: str | None = Field(None, max_length=100, description="账号名称（可选）")
+    proxy_node_id: str | None = Field(
+        None,
+        description="代理节点 ID（可选）。设置后 token 交换及后续所有操作（刷新、额度查询）均走该代理，避免 IP 污染",
+    )
 
 
 class ProviderCompleteOAuthResponse(BaseModel):
@@ -160,6 +164,32 @@ def _require_fixed_provider(provider: Provider) -> str:
     if provider_type == ProviderType.CUSTOM:
         raise InvalidRequestException("该 Provider 不是固定类型，无法使用 provider-oauth")
     return provider_type
+
+
+def _resolve_proxy_for_oauth(
+    provider_proxy: dict[str, Any] | None,
+    proxy_node_id: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """解析 OAuth 操作使用的代理配置。
+
+    当前端指定了 proxy_node_id 时，优先使用该代理进行 token 交换等操作，
+    并返回需要保存到 Key 上的代理配置。
+
+    Args:
+        provider_proxy: Provider 级别的代理配置
+        proxy_node_id: 前端指定的代理节点 ID（可选）
+
+    Returns:
+        (effective_proxy, key_proxy):
+            - effective_proxy: 本次操作实际使用的代理配置
+            - key_proxy: 需要保存到 Key 上的代理配置（None 表示不设置 Key 级代理）
+    """
+    if proxy_node_id and proxy_node_id.strip():
+        key_proxy: dict[str, Any] = {"node_id": proxy_node_id.strip(), "enabled": True}
+        # 本次操作使用 Key 级代理
+        return key_proxy, key_proxy
+    # 无 Key 级代理，使用 Provider 级代理
+    return provider_proxy, None
 
 
 def _pkce_s256(verifier: str) -> str:
@@ -207,11 +237,14 @@ def _create_oauth_key(
     auth_config: dict[str, Any],
     api_formats: list[str],
     flush_only: bool = False,
+    proxy: dict[str, Any] | None = None,
 ) -> "ProviderAPIKey":
     """创建 OAuth Key 记录并持久化。
 
     Args:
         flush_only: True 时仅 flush（批量导入场景），False 时 commit + refresh。
+        proxy: Key 级别代理配置（如 {"node_id": "xxx", "enabled": True}），
+               创建时设置后，后续 token 刷新、额度刷新等操作立即走代理，避免 IP 污染。
     """
     from src.models.database import ProviderAPIKey as ProviderAPIKeyModel
 
@@ -224,6 +257,8 @@ def _create_oauth_key(
         api_formats=api_formats,
         is_active=True,
     )
+    if proxy:
+        new_key.proxy = proxy
     db.add(new_key)
     if flush_only:
         db.flush()
@@ -929,7 +964,10 @@ async def complete_provider_oauth(
         data = form
         json_body = None
 
-    proxy_config = getattr(provider, "proxy", None)
+    # 解析代理：前端指定 proxy_node_id 时优先使用，否则回退到 Provider 级代理
+    proxy_config, key_proxy = _resolve_proxy_for_oauth(
+        getattr(provider, "proxy", None), payload.proxy_node_id
+    )
 
     resp = await post_oauth_token(
         provider_type=provider_type,
@@ -991,6 +1029,7 @@ async def complete_provider_oauth(
         access_token=access_token,
         auth_config=auth_config,
         api_formats=_get_provider_api_formats(provider),
+        proxy=key_proxy,
     )
 
     return ProviderCompleteOAuthResponse(
@@ -1096,6 +1135,10 @@ def _parse_kiro_import_input(raw_input: str) -> list[dict[str, Any]]:
 class ImportRefreshTokenRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1, description="Refresh Token")
     name: str | None = Field(None, max_length=100, description="账号名称（可选）")
+    proxy_node_id: str | None = Field(
+        None,
+        description="代理节点 ID（可选）。设置后导入验证及后续所有操作均走该代理",
+    )
 
 
 class BatchImportRequest(BaseModel):
@@ -1106,6 +1149,10 @@ class BatchImportRequest(BaseModel):
         min_length=1,
         max_length=500_000,
         description="凭据数据，支持多种格式：JSON 对象、JSON 数组、纯 Token（一行一个）",
+    )
+    proxy_node_id: str | None = Field(
+        None,
+        description="代理节点 ID（可选）。设置后批量导入验证及后续所有操作均走该代理",
     )
 
 
@@ -1148,6 +1195,11 @@ async def import_refresh_token(
         raise NotFoundException("Provider 不存在", "provider")
     provider_type = _require_fixed_provider(provider)
 
+    # 解析代理：前端指定 proxy_node_id 时优先使用，否则回退到 Provider 级代理
+    proxy_config, key_proxy = _resolve_proxy_for_oauth(
+        getattr(provider, "proxy", None), payload.proxy_node_id
+    )
+
     if provider_type == ProviderType.KIRO.value:
         raw_import = payload.refresh_token.strip()
         if not raw_import:
@@ -1173,7 +1225,6 @@ async def import_refresh_token(
         cfg = KiroAuthConfig.from_dict(raw_cfg)
         cfg.provider_type = ProviderType.KIRO.value
 
-        proxy_config = getattr(provider, "proxy", None)
         try:
             access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
         except Exception as e:
@@ -1192,6 +1243,7 @@ async def import_refresh_token(
             access_token=access_token,
             auth_config=new_cfg.to_dict(),
             api_formats=_get_provider_api_formats(provider),
+            proxy=key_proxy,
         )
 
         return ProviderCompleteOAuthResponse(
@@ -1243,7 +1295,7 @@ async def import_refresh_token(
         data = form
         json_body = None
 
-    proxy_config = getattr(provider, "proxy", None)
+    # proxy_config 和 key_proxy 已在上方 Kiro 分支之前统一解析
 
     resp = await post_oauth_token(
         provider_type=provider_type,
@@ -1312,6 +1364,7 @@ async def import_refresh_token(
         access_token=access_token,
         auth_config=auth_config,
         api_formats=_get_provider_api_formats(provider),
+        proxy=key_proxy,
     )
 
     return ProviderCompleteOAuthResponse(
@@ -1355,6 +1408,11 @@ async def batch_import_oauth(
 
     provider_type = _require_fixed_provider(provider)
 
+    # 解析代理：前端指定 proxy_node_id 时优先使用，否则回退到 Provider 级代理
+    proxy_config, key_proxy = _resolve_proxy_for_oauth(
+        getattr(provider, "proxy", None), payload.proxy_node_id
+    )
+
     # Kiro 使用专用逻辑
     if provider_type == ProviderType.KIRO.value:
         return await _batch_import_kiro_internal(
@@ -1362,6 +1420,8 @@ async def batch_import_oauth(
             provider=provider,
             raw_credentials=payload.credentials,
             db=db,
+            proxy_config=proxy_config,
+            key_proxy=key_proxy,
         )
 
     # 标准 OAuth Provider（Codex、Antigravity、GeminiCli、ClaudeCode）
@@ -1378,8 +1438,6 @@ async def batch_import_oauth(
         raise InvalidRequestException("未找到有效的 Token 数据")
 
     api_formats = _get_provider_api_formats(provider)
-
-    proxy_config = getattr(provider, "proxy", None)
     token_url = template.oauth.token_url
     is_json = "anthropic.com" in token_url
     scope_str = " ".join(template.oauth.scopes) if template.oauth.scopes else ""
@@ -1550,6 +1608,7 @@ async def batch_import_oauth(
                 auth_config=auth_config,
                 api_formats=api_formats,
                 flush_only=True,
+                proxy=key_proxy,
             )
 
             results.append(
@@ -1599,8 +1658,15 @@ async def _batch_import_kiro_internal(
     provider: Provider,
     raw_credentials: str,
     db: Session,
+    proxy_config: dict[str, Any] | None = None,
+    key_proxy: dict[str, Any] | None = None,
 ) -> BatchImportResponse:
-    """Kiro 批量导入内部实现（供通用端点调用）。"""
+    """Kiro 批量导入内部实现（供通用端点调用）。
+
+    Args:
+        proxy_config: 本次操作使用的代理配置（已由调用方解析）
+        key_proxy: 需要保存到 Key 上的代理配置
+    """
     from src.services.provider.adapters.kiro.models.credentials import KiroAuthConfig
     from src.services.provider.adapters.kiro.token_manager import refresh_access_token
 
@@ -1610,8 +1676,6 @@ async def _batch_import_kiro_internal(
         raise InvalidRequestException("未找到有效的凭据数据")
 
     api_formats = _get_provider_api_formats(provider)
-
-    proxy_config = getattr(provider, "proxy", None)
 
     results: list[BatchImportResultItem] = []
     success_count = 0
@@ -1675,6 +1739,7 @@ async def _batch_import_kiro_internal(
                 auth_config=new_cfg.to_dict(),
                 api_formats=api_formats,
                 flush_only=True,
+                proxy=key_proxy,
             )
 
             results.append(

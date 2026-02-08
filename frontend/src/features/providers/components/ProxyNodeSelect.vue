@@ -24,12 +24,6 @@
         </SelectItem>
       </SelectContent>
     </Select>
-    <p
-      v-if="!proxyNodesStore.loading && nodeOptions.length === 0"
-      class="text-xs text-muted-foreground"
-    >
-      暂无在线代理节点，请在「代理节点」页面添加
-    </p>
   </div>
 </template>
 

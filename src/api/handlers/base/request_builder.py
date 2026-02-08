@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from src.core.api_format import (
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.core.provider_oauth_utils import enrich_auth_config, post_oauth_token
+from src.models.endpoint_models import parse_re_flags
 
 if TYPE_CHECKING:
     from src.models.database import ProviderAPIKey, ProviderEndpoint
@@ -215,55 +217,103 @@ def build_test_request_body(
 # ==============================================================================
 
 
-def _parse_path(path: str) -> list[str]:
+# 路径段类型：str 表示 dict key，int 表示数组索引
+PathSegment = str | int
+
+
+def _parse_path(path: str) -> list[PathSegment]:
     """
-    解析点号路径，支持转义（用 \\.
-    表示字面量点号）。
+    解析路径，支持点号分隔、转义和数组索引。
 
     Examples:
-        "metadata.user.name" -> ["metadata", "user", "name"]
-        "config\\.v1.enabled" -> ["config.v1", "enabled"]
+        "metadata.user.name"       -> ["metadata", "user", "name"]
+        "config\\.v1.enabled"      -> ["config.v1", "enabled"]
+        "messages[0].content"      -> ["messages", 0, "content"]
+        "data[0].items[2].name"    -> ["data", 0, "items", 2, "name"]
+        "messages[-1]"             -> ["messages", -1]
+        "matrix[0][1]"             -> ["matrix", 0, 1]
 
     约束：
         - 不允许空段（例如：".a" / "a." / "a..b"），遇到则返回空列表表示无效路径。
         - 仅对 "\\." 做特殊处理；其他反斜杠组合按字面量保留。
+        - 数组索引必须是整数（支持负数索引）。
     """
     raw = (path or "").strip()
     if not raw:
         return []
 
-    parts: list[str] = []
+    parts: list[PathSegment] = []
     current: list[str] = []
+    expect_key = True  # 是否期望下一个片段是 dict key
 
     i = 0
     while i < len(raw):
         ch = raw[i]
+
+        # 转义点号：\\.
         if ch == "\\" and i + 1 < len(raw) and raw[i + 1] == ".":
             current.append(".")
+            expect_key = False
             i += 2
             continue
 
+        # 点号分隔符
         if ch == ".":
-            if not current:
+            if current:
+                parts.append("".join(current))
+                current = []
+            elif expect_key:
+                # 空段（如 ".a" 或 "a..b"）
                 return []
-            parts.append("".join(current))
-            current = []
+            expect_key = True
             i += 1
             continue
 
+        # 数组索引：[N]
+        if ch == "[":
+            # 先将当前累积的 key 入栈
+            if current:
+                parts.append("".join(current))
+                current = []
+
+            # 查找闭合括号
+            j = i + 1
+            while j < len(raw) and raw[j] != "]":
+                j += 1
+            if j >= len(raw):
+                return []  # 未闭合的括号
+
+            index_str = raw[i + 1 : j].strip()
+            if not index_str:
+                return []  # 空索引
+
+            try:
+                idx = int(index_str)
+            except ValueError:
+                return []  # 非整数索引
+
+            parts.append(idx)
+            expect_key = False
+            i = j + 1
+            continue
+
         current.append(ch)
+        expect_key = False
         i += 1
 
-    if not current:
+    # 收尾：将剩余的 key 入栈
+    if current:
+        parts.append("".join(current))
+    elif expect_key:
+        # 尾部悬挂的点号（如 "a."）
         return []
 
-    parts.append("".join(current))
-    return parts
+    return parts if parts else []
 
 
-def _get_nested_value(obj: dict[str, Any], path: str) -> tuple[bool, Any]:
+def _get_nested_value(obj: Any, path: str) -> tuple[bool, Any]:
     """
-    获取嵌套值
+    获取嵌套值，支持 dict 和 list 混合遍历
 
     Returns:
         (found, value) - found 为 True 时 value 有效
@@ -273,43 +323,92 @@ def _get_nested_value(obj: dict[str, Any], path: str) -> tuple[bool, Any]:
         return False, None
 
     current: Any = obj
-    for key in parts:
-        if isinstance(current, dict) and key in current:
-            current = current[key]
+    for segment in parts:
+        if isinstance(segment, int):
+            if isinstance(current, list):
+                try:
+                    current = current[segment]
+                except IndexError:
+                    return False, None
+            else:
+                return False, None
         else:
-            return False, None
+            if isinstance(current, dict) and segment in current:
+                current = current[segment]
+            else:
+                return False, None
     return True, current
 
 
 def _set_nested_value(obj: dict[str, Any], path: str, value: Any) -> bool:
     """
-    设置嵌套值，自动创建中间层级。
+    设置嵌套值，支持 dict 和 list 混合遍历。
 
-    当中间层存在但不是 dict 时，会覆盖为 dict 后继续写入（覆写语义）。
+    - dict 中间层：下一段为 str key 时自动创建（覆写语义）；下一段为 int 时要求已存在 list。
+    - list 中间层：必须已存在且索引有效。
+    - list 元素赋值：要求索引在范围内。
 
     Returns:
         True: 写入成功
-        False: 路径无效（空/含空段等）
+        False: 路径无效或结构不匹配
     """
     parts = _parse_path(path)
     if not parts:
         return False
 
-    current: dict[str, Any] = obj
-    for key in parts[:-1]:
-        next_val = current.get(key)
-        if not isinstance(next_val, dict):
-            next_val = {}
-            current[key] = next_val
-        current = next_val
+    current: Any = obj
+    for i in range(len(parts) - 1):
+        segment = parts[i]
+        next_segment = parts[i + 1]
 
-    current[parts[-1]] = value
-    return True
+        if isinstance(segment, int):
+            # 遍历数组元素
+            if not isinstance(current, list):
+                return False
+            try:
+                current = current[segment]
+            except IndexError:
+                return False
+        else:
+            # 遍历 dict key
+            if not isinstance(current, dict):
+                return False
+            child = current.get(segment)
+
+            if isinstance(next_segment, int):
+                # 下一段是数组索引 → child 必须已经是 list
+                if not isinstance(child, list):
+                    return False
+                current = child
+            else:
+                # 下一段是 dict key → 自动创建 dict（覆写语义）
+                if not isinstance(child, dict):
+                    child = {}
+                    current[segment] = child
+                current = child
+
+    # 写入最终值
+    last = parts[-1]
+    if isinstance(last, int):
+        if not isinstance(current, list):
+            return False
+        try:
+            current[last] = value
+            return True
+        except IndexError:
+            return False
+    else:
+        if not isinstance(current, dict):
+            return False
+        current[last] = value
+        return True
 
 
 def _delete_nested_value(obj: dict[str, Any], path: str) -> bool:
     """
-    删除嵌套值
+    删除嵌套值，支持 dict 和 list 混合遍历
+
+    对于 list 元素，使用 del 删除（会移动后续元素的索引）。
 
     Returns:
         True: 删除成功
@@ -320,23 +419,40 @@ def _delete_nested_value(obj: dict[str, Any], path: str) -> bool:
         return False
 
     current: Any = obj
-    for key in parts[:-1]:
-        if isinstance(current, dict) and key in current:
-            current = current[key]
+    for segment in parts[:-1]:
+        if isinstance(segment, int):
+            if isinstance(current, list):
+                try:
+                    current = current[segment]
+                except IndexError:
+                    return False
+            else:
+                return False
         else:
-            return False
-        if not isinstance(current, dict):
-            return False
+            if isinstance(current, dict) and segment in current:
+                current = current[segment]
+            else:
+                return False
 
-    if isinstance(current, dict) and parts[-1] in current:
-        del current[parts[-1]]
-        return True
-    return False
+    last = parts[-1]
+    if isinstance(last, int):
+        if isinstance(current, list):
+            try:
+                del current[last]
+                return True
+            except IndexError:
+                return False
+        return False
+    else:
+        if isinstance(current, dict) and last in current:
+            del current[last]
+            return True
+        return False
 
 
 def _rename_nested_value(obj: dict[str, Any], from_path: str, to_path: str) -> bool:
     """
-    重命名嵌套值（移动到新路径）
+    重命名嵌套值（移动到新路径），支持 dict 和 list 混合遍历
 
     Returns:
         True: 重命名成功
@@ -354,9 +470,37 @@ def _rename_nested_value(obj: dict[str, Any], from_path: str, to_path: str) -> b
     if not found:
         return False
 
+    # 先 set 再 delete，避免 set 失败时源值已被删除导致数据丢失
+    if not _set_nested_value(obj, dst, value):
+        return False
     _delete_nested_value(obj, src)
-    _set_nested_value(obj, dst, value)
     return True
+
+
+def _is_protected_path(parts: list[PathSegment], protected_lower: frozenset[str]) -> bool:
+    """检查路径的顶层 key 是否为受保护字段（int 索引不可能是受保护字段）"""
+    if not parts:
+        return False
+    first = parts[0]
+    return isinstance(first, str) and first.lower() in protected_lower
+
+
+def _extract_path(
+    rule: dict[str, Any],
+    protected_lower: frozenset[str],
+    key: str = "path",
+) -> str | None:
+    """从规则中提取并校验 path 字段，返回 strip 后的路径或 None（无效/受保护时）。"""
+    raw = rule.get(key, "")
+    if not isinstance(raw, str):
+        return None
+    path = raw.strip()
+    parts = _parse_path(path)
+    if not parts:
+        return None
+    if _is_protected_path(parts, protected_lower):
+        return None
+    return path
 
 
 def apply_body_rules(
@@ -370,11 +514,19 @@ def apply_body_rules(
     路径语法：
     - 使用点号分隔层级：metadata.user.name
     - 转义字面量点号：config\\.v1.enabled -> key "config.v1" 下的 "enabled"
+    - 使用方括号访问数组元素：messages[0].content
+    - 支持多层嵌套：data[0].items[2].name
+    - 支持负数索引：messages[-1]
+    - 支持连续数组索引：matrix[0][1]
 
     支持的规则类型：
     - set: 设置/覆盖字段 {"action": "set", "path": "metadata.user_id", "value": 123}
     - drop: 删除字段 {"action": "drop", "path": "unwanted_field"}
     - rename: 重命名字段 {"action": "rename", "from": "old.key", "to": "new.key"}
+    - append: 向数组追加元素 {"action": "append", "path": "messages", "value": {...}}
+    - insert: 在数组指定位置插入元素 {"action": "insert", "path": "messages", "index": 0, "value": {...}}
+    - regex_replace: 正则替换字符串值 {"action": "regex_replace", "path": "messages[0].content",
+        "pattern": "\\bfoo\\b", "replacement": "bar", "flags": "i", "count": 0}
 
     Args:
         body: 原始请求体
@@ -387,7 +539,7 @@ def apply_body_rules(
     if not rules:
         return body
 
-    # 深拷贝，避免修改原始数据（尤其是嵌套 dict）
+    # 深拷贝，避免修改原始数据（尤其是嵌套 dict/list）
     result = copy.deepcopy(body)
     protected = protected_keys or PROTECTED_BODY_FIELDS
     protected_lower = frozenset(str(k).lower() for k in protected)
@@ -402,27 +554,14 @@ def apply_body_rules(
         action = action.strip().lower()
 
         if action == "set":
-            raw_path = rule.get("path", "")
-            if not isinstance(raw_path, str):
+            path = _extract_path(rule, protected_lower)
+            if not path:
                 continue
-            path = raw_path.strip()
-            value = rule.get("value")
-            parts = _parse_path(path)
-            if not parts:
-                continue
-            if parts[0].lower() in protected_lower:
-                continue
-            _set_nested_value(result, path, value)
+            _set_nested_value(result, path, rule.get("value"))
 
         elif action == "drop":
-            raw_path = rule.get("path", "")
-            if not isinstance(raw_path, str):
-                continue
-            path = raw_path.strip()
-            parts = _parse_path(path)
-            if not parts:
-                continue
-            if parts[0].lower() in protected_lower:
+            path = _extract_path(rule, protected_lower)
+            if not path:
                 continue
             _delete_nested_value(result, path)
 
@@ -441,10 +580,61 @@ def apply_body_rules(
                 continue
 
             # 受保护字段只检查顶层 key
-            if from_parts[0].lower() in protected_lower or to_parts[0].lower() in protected_lower:
+            if _is_protected_path(from_parts, protected_lower) or _is_protected_path(
+                to_parts, protected_lower
+            ):
                 continue
 
             _rename_nested_value(result, from_path, to_path)
+
+        elif action == "append":
+            path = _extract_path(rule, protected_lower)
+            if not path:
+                continue
+            found, target = _get_nested_value(result, path)
+            if not found or not isinstance(target, list):
+                continue
+            target.append(rule.get("value"))
+
+        elif action == "insert":
+            path = _extract_path(rule, protected_lower)
+            if not path:
+                continue
+            index = rule.get("index")
+            if not isinstance(index, int):
+                continue
+            found, target = _get_nested_value(result, path)
+            if not found or not isinstance(target, list):
+                continue
+            target.insert(index, rule.get("value"))
+
+        elif action == "regex_replace":
+            path = _extract_path(rule, protected_lower)
+            if not path:
+                continue
+            pattern = rule.get("pattern")
+            replacement = rule.get("replacement", "")
+            if not isinstance(pattern, str) or not isinstance(replacement, str):
+                continue
+            if not pattern:
+                continue
+
+            flags_raw = rule.get("flags", "")
+            re_flags = parse_re_flags(flags_raw if isinstance(flags_raw, str) else "")
+
+            count = rule.get("count", 0)
+            if not isinstance(count, int) or count < 0:
+                count = 0
+
+            found, current_val = _get_nested_value(result, path)
+            if not found or not isinstance(current_val, str):
+                continue
+
+            try:
+                new_val = re.compile(pattern, re_flags).sub(replacement, current_val, count=count)
+                _set_nested_value(result, path, new_val)
+            except re.error:
+                continue  # 正则表达式无效，跳过
 
     return result
 
