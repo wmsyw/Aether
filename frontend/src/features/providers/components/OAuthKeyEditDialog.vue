@@ -135,21 +135,23 @@
           v-if="form.auto_fetch_models"
           class="space-y-2 pt-2 border-t border-border/40"
         >
-          <div>
-            <Label class="text-xs">包含规则</Label>
-            <Input
-              v-model="form.model_include_patterns_text"
-              placeholder="gpt-*, claude-*, 留空包含全部"
-              class="h-8 text-sm"
-            />
-          </div>
-          <div>
-            <Label class="text-xs">排除规则</Label>
-            <Input
-              v-model="form.model_exclude_patterns_text"
-              placeholder="*-preview, *-beta"
-              class="h-8 text-sm"
-            />
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <Label class="text-xs">包含规则</Label>
+              <Input
+                v-model="form.model_include_patterns_text"
+                placeholder="gpt-*, claude-*, 留空包含全部"
+                class="h-8 text-sm"
+              />
+            </div>
+            <div>
+              <Label class="text-xs">排除规则</Label>
+              <Input
+                v-model="form.model_exclude_patterns_text"
+                placeholder="*-preview, *-beta"
+                class="h-8 text-sm"
+              />
+            </div>
           </div>
           <p class="text-xs text-muted-foreground">
             逗号分隔，支持 * ? 通配符，不区分大小写
@@ -176,10 +178,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Dialog, Button, Input, Label, Switch } from '@/components/ui'
 import { SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseApiError } from '@/utils/errorParser'
 import { parseNumberInput, parseNullableNumberInput } from '@/utils/form'
@@ -200,6 +203,7 @@ const emit = defineEmits<{
 }>()
 
 const { success, error: showError } = useToast()
+const { confirmWarning } = useConfirm()
 
 // 显示自动获取模型警告：编辑模式下，原本未启用但现在启用，且已有 allowed_models
 const showAutoFetchWarning = computed(() => {
@@ -238,6 +242,27 @@ const form = ref({
   model_exclude_patterns_text: ''
 })
 
+// ---------------------------------------------------------------------------
+// Dirty 状态跟踪：通过快照比较判断表单是否被修改
+// ---------------------------------------------------------------------------
+const formSnapshot = ref('')
+
+function takeSnapshot() {
+  formSnapshot.value = JSON.stringify(form.value)
+}
+
+const isDirty = computed(() => {
+  if (!formSnapshot.value) return false
+  return JSON.stringify(form.value) !== formSnapshot.value
+})
+
+// 对话框关闭时清除快照（快照在 loadKeyData 中拍摄）
+watch(isOpen, (val) => {
+  if (!val) {
+    formSnapshot.value = ''
+  }
+})
+
 // 重置表单
 function resetForm() {
   form.value = {
@@ -251,6 +276,7 @@ function resetForm() {
     model_include_patterns_text: '',
     model_exclude_patterns_text: ''
   }
+  formSnapshot.value = ''
 }
 
 // 加载密钥数据
@@ -267,10 +293,15 @@ function loadKeyData() {
     model_include_patterns_text: (props.editingKey.model_include_patterns || []).join(', '),
     model_exclude_patterns_text: (props.editingKey.model_exclude_patterns || []).join(', ')
   }
+  // 数据加载完成后拍快照，作为 dirty 判断的基准
+  takeSnapshot()
 }
 
 // 使用 useFormDialog 统一处理对话框逻辑
-const { handleDialogUpdate, handleCancel } = useFormDialog({
+const {
+  handleDialogUpdate: _baseHandleDialogUpdate,
+  handleCancel: _baseHandleCancel,
+} = useFormDialog({
   isOpen: () => props.open,
   entity: () => props.editingKey,
   isLoading: saving,
@@ -278,6 +309,23 @@ const { handleDialogUpdate, handleCancel } = useFormDialog({
   loadData: loadKeyData,
   resetForm,
 })
+
+// 包装关闭逻辑：有未保存更改时弹出确认
+async function handleDialogUpdate(value: boolean) {
+  if (!value && isDirty.value) {
+    const confirmed = await confirmWarning('有未保存的更改，确定要关闭吗？', '放弃更改')
+    if (!confirmed) return
+  }
+  _baseHandleDialogUpdate(value)
+}
+
+async function handleCancel() {
+  if (isDirty.value) {
+    const confirmed = await confirmWarning('有未保存的更改，确定要关闭吗？', '放弃更改')
+    if (!confirmed) return
+  }
+  _baseHandleCancel()
+}
 
 // 将逗号分隔的文本解析为数组（去空、去重）
 function parsePatternText(text: string): string[] {

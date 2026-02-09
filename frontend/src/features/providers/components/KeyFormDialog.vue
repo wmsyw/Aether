@@ -272,21 +272,23 @@
           v-if="form.auto_fetch_models"
           class="space-y-2 pt-2 border-t border-border/40"
         >
-          <div>
-            <Label class="text-xs">包含规则</Label>
-            <Input
-              v-model="form.model_include_patterns_text"
-              placeholder="gpt-*, claude-*, 留空包含全部"
-              class="h-8 text-sm"
-            />
-          </div>
-          <div>
-            <Label class="text-xs">排除规则</Label>
-            <Input
-              v-model="form.model_exclude_patterns_text"
-              placeholder="*-preview, *-beta"
-              class="h-8 text-sm"
-            />
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <Label class="text-xs">包含规则</Label>
+              <Input
+                v-model="form.model_include_patterns_text"
+                placeholder="gpt-*, claude-*, 留空包含全部"
+                class="h-8 text-sm"
+              />
+            </div>
+            <div>
+              <Label class="text-xs">排除规则</Label>
+              <Input
+                v-model="form.model_exclude_patterns_text"
+                placeholder="*-preview, *-beta"
+                class="h-8 text-sm"
+              />
+            </div>
           </div>
           <p class="text-xs text-muted-foreground">
             逗号分隔，支持 * ? 通配符，不区分大小写

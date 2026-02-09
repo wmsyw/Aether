@@ -2,7 +2,7 @@
   <Dialog
     :model-value="open"
     :title="editingGroup ? '编辑模型映射' : '添加模型映射'"
-    :description="editingGroup ? '修改映射配置' : '为模型添加名称映射'"
+    :description="editingGroup ? '修改映射配置' : '将提供商模型映射到客户端模型'"
     :icon="Tag"
     size="lg"
     @update:model-value="$emit('update:open', $event)"
@@ -10,14 +10,14 @@
     <div class="space-y-4">
       <!-- 目标模型选择 -->
       <div class="space-y-1.5">
-        <Label class="text-xs">目标模型</Label>
+        <Label class="text-xs">客户端模型</Label>
         <Select
           :model-value="formData.modelId"
           :disabled="!!editingGroup"
           @update:model-value="handleModelChange"
         >
           <SelectTrigger class="h-9">
-            <SelectValue placeholder="请选择目标模型" />
+            <SelectValue placeholder="请选择客户端模型" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem
@@ -33,20 +33,20 @@
           </SelectContent>
         </Select>
         <p class="text-xs text-muted-foreground">
-          选中的映射名称将指向此模型
+          客户端请求此模型时，将路由到选中的提供商模型
         </p>
       </div>
 
       <!-- 映射名称选择面板 -->
       <div class="space-y-1.5">
-        <Label class="text-xs">映射名称</Label>
+        <Label class="text-xs">提供商模型</Label>
         <!-- 搜索栏 -->
         <div class="flex items-center gap-2">
           <div class="flex-1 relative">
             <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               v-model="searchQuery"
-              placeholder="搜索或添加自定义映射名称..."
+              placeholder="搜索或添加自定义提供商模型..."
               class="pl-8 h-9"
             />
           </div>
@@ -94,7 +94,7 @@
 
         <!-- 模型列表 -->
         <div class="border rounded-lg overflow-hidden">
-          <div class="max-h-80 overflow-y-auto">
+          <div class="min-h-60 max-h-80 overflow-y-auto">
             <!-- 加载中 -->
             <div
               v-if="loadingModels"
@@ -117,7 +117,7 @@
                     <Plus class="w-4 h-4 text-muted-foreground" />
                     <span class="text-sm font-mono">{{ searchQuery }}</span>
                   </div>
-                  <span class="text-xs text-muted-foreground">添加自定义模型</span>
+                  <span class="text-xs text-muted-foreground">添加自定义提供商模型</span>
                 </div>
               </div>
 
@@ -132,7 +132,7 @@
                       class="w-4 h-4 transition-transform shrink-0"
                       :class="collapsedGroups.has('custom') ? '-rotate-90' : ''"
                     />
-                    <span class="text-xs font-medium">自定义映射</span>
+                    <span class="text-xs font-medium">自定义模型</span>
                     <span class="text-xs text-muted-foreground">({{ customNames.length }})</span>
                   </div>
                 </div>
@@ -216,7 +216,7 @@
                   {{ searchQuery ? '无匹配结果' : '暂无可选模型' }}
                 </p>
                 <p class="text-xs mt-1">
-                  输入名称后点击添加自定义映射
+                  输入模型名称后点击添加自定义提供商模型
                 </p>
               </div>
             </template>
@@ -486,8 +486,10 @@ function initForm() {
     formData.value = {
       modelId: props.editingGroup.model.id
     }
-    selectedNames.value = props.editingGroup.aliases.map(a => a.name)
-    allCustomNames.value = []
+    const existingNames = props.editingGroup.aliases.map(a => a.name)
+    selectedNames.value = [...existingNames]
+    // 将已有映射名称添加到自定义列表，使其在列表中可见（可取消选中来移除映射）
+    allCustomNames.value = [...existingNames]
   } else {
     formData.value = {
       modelId: props.preselectedModelId || ''

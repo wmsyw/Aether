@@ -391,25 +391,6 @@
                         >
                           <Shield class="w-3.5 h-3.5" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="h-7 w-7"
-                          title="编辑密钥"
-                          @click="handleEditKey(endpoint, key)"
-                        >
-                          <Edit class="w-3.5 h-3.5" />
-                        </Button>
-                        <Button
-                          v-if="provider.provider_type === 'antigravity'"
-                          variant="ghost"
-                          size="icon"
-                          class="h-7 w-7"
-                          title="配额详情"
-                          @click="openAntigravityQuotaDialog(key)"
-                        >
-                          <BarChart3 class="w-3.5 h-3.5" />
-                        </Button>
                         <!-- 代理节点配置（仅非 custom 类型显示） -->
                         <Popover
                           v-if="provider.provider_type !== 'custom'"
@@ -459,6 +440,25 @@
                             </div>
                           </PopoverContent>
                         </Popover>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="h-7 w-7"
+                          title="编辑密钥"
+                          @click="handleEditKey(endpoint, key)"
+                        >
+                          <Edit class="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          v-if="provider.provider_type === 'antigravity'"
+                          variant="ghost"
+                          size="icon"
+                          class="h-7 w-7"
+                          title="配额详情"
+                          @click="openAntigravityQuotaDialog(key)"
+                        >
+                          <BarChart3 class="w-3.5 h-3.5" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

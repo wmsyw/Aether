@@ -10,7 +10,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
+
+# Fetcher 函数签名：与 UpstreamModelsFetcherRegistry 中的 _ModelsFetcher 保持一致
+# (ctx, timeout_seconds) -> (models, errors, has_success, upstream_metadata)
+ModelsFetcherFunc = Callable[
+    [Any, float],
+    Awaitable[tuple[list[dict], list[str], bool, dict[str, Any] | None]],
+]
 
 # ---------------------------------------------------------------------------
 # 预设模型定义
@@ -124,7 +132,7 @@ def get_preset_models(provider_type: str) -> list[dict[str, Any]]:
 
 def create_preset_models_fetcher(
     provider_type: str,
-) -> Any:
+) -> ModelsFetcherFunc:
     """创建一个返回预设模型列表的 fetcher 函数。
 
     Args:
@@ -136,22 +144,21 @@ def create_preset_models_fetcher(
     models = get_preset_models(provider_type)
 
     async def fetch_preset_models(
-        ctx: Any,
-        timeout_seconds: float,  # noqa: ARG001
+        _ctx: Any,
+        _timeout_seconds: float,
     ) -> tuple[list[dict], list[str], bool, dict[str, Any] | None]:
         """Return preset model catalog.
 
         This provider does not expose a /v1/models endpoint, so we skip the
         HTTP call entirely and return a hardcoded list.
         """
-        _ = ctx
-        _ = timeout_seconds
         return list(models), [], True, None
 
     return fetch_preset_models
 
 
 __all__ = [
+    "ModelsFetcherFunc",
     "PRESET_MODELS",
     "create_preset_models_fetcher",
     "get_preset_models",
