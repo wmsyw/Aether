@@ -238,6 +238,7 @@ def _create_oauth_key(
     api_formats: list[str],
     flush_only: bool = False,
     proxy: dict[str, Any] | None = None,
+    auto_fetch_models: bool = True,
 ) -> "ProviderAPIKey":
     """创建 OAuth Key 记录并持久化。
 
@@ -245,6 +246,7 @@ def _create_oauth_key(
         flush_only: True 时仅 flush（批量导入场景），False 时 commit + refresh。
         proxy: Key 级别代理配置（如 {"node_id": "xxx", "enabled": True}），
                创建时设置后，后续 token 刷新、额度刷新等操作立即走代理，避免 IP 污染。
+        auto_fetch_models: 是否启用自动获取上游模型，非 custom 提供商默认开启。
     """
     from src.models.database import ProviderAPIKey as ProviderAPIKeyModel
 
@@ -256,6 +258,7 @@ def _create_oauth_key(
         auth_config=crypto_service.encrypt(json.dumps(auth_config)),
         api_formats=api_formats,
         is_active=True,
+        auto_fetch_models=auto_fetch_models,
     )
     if proxy:
         new_key.proxy = proxy
@@ -266,6 +269,24 @@ def _create_oauth_key(
         db.commit()
         db.refresh(new_key)
     return new_key
+
+
+async def _trigger_auto_fetch_models(key_ids: list[str]) -> None:
+    """为启用了 auto_fetch_models 的新建 Key 触发模型获取。"""
+    if not key_ids:
+        return
+    try:
+        from src.services.model.fetch_scheduler import get_model_fetch_scheduler
+
+        scheduler = get_model_fetch_scheduler()
+        for key_id in key_ids:
+            logger.info("[AUTO_FETCH] OAuth Key {} 默认开启自动获取模型，触发模型获取", key_id)
+            try:
+                await scheduler._fetch_models_for_key_by_id(key_id)
+            except Exception as e:
+                logger.error(f"[AUTO_FETCH] Key {key_id} 触发模型获取失败: {e}")
+    except Exception as e:
+        logger.error(f"[AUTO_FETCH] 获取 ModelFetchScheduler 失败: {e}")
 
 
 async def _fetch_kiro_email(
@@ -1034,6 +1055,9 @@ async def complete_provider_oauth(
         proxy=key_proxy,
     )
 
+    # 默认开启了 auto_fetch_models，触发模型获取
+    await _trigger_auto_fetch_models([str(new_key.id)])
+
     return ProviderCompleteOAuthResponse(
         key_id=str(new_key.id),
         provider_type=provider_type,
@@ -1257,6 +1281,9 @@ async def import_refresh_token(
             proxy=key_proxy,
         )
 
+        # 默认开启了 auto_fetch_models，触发模型获取
+        await _trigger_auto_fetch_models([str(new_key.id)])
+
         return ProviderCompleteOAuthResponse(
             key_id=str(new_key.id),
             provider_type=provider_type,
@@ -1377,6 +1404,9 @@ async def import_refresh_token(
         api_formats=_get_provider_api_formats(provider),
         proxy=key_proxy,
     )
+
+    # 默认开启了 auto_fetch_models，触发模型获取
+    await _trigger_auto_fetch_models([str(new_key.id)])
 
     return ProviderCompleteOAuthResponse(
         key_id=str(new_key.id),
@@ -1647,6 +1677,11 @@ async def batch_import_oauth(
     if success_count > 0:
         db.commit()
 
+    # 批量导入完成后，触发所有成功 Key 的模型获取
+    success_key_ids = [r.key_id for r in results if r.status == "success" and r.key_id]
+    if success_key_ids:
+        await _trigger_auto_fetch_models(success_key_ids)
+
     logger.info(
         "[BATCH_IMPORT] Provider {} ({}): 成功 {}/{}, 失败 {}",
         provider_id,
@@ -1783,6 +1818,11 @@ async def _batch_import_kiro_internal(
     # 提交所有成功的记录
     if success_count > 0:
         db.commit()
+
+    # 批量导入完成后，触发所有成功 Key 的模型获取
+    success_key_ids = [r.key_id for r in results if r.status == "success" and r.key_id]
+    if success_key_ids:
+        await _trigger_auto_fetch_models(success_key_ids)
 
     logger.info(
         "[KIRO_BATCH_IMPORT] Provider {}: 成功 {}/{}, 失败 {}",

@@ -417,6 +417,11 @@ const apiKeyFieldName = computed(() => `api-key-field-${formNonce.value}`)
 // 可用的能力列表
 const availableCapabilities = ref<CapabilityDefinition[]>([])
 
+// 非 custom 提供商默认开启自动获取上游模型
+const defaultAutoFetchModels = computed(() =>
+  !!props.providerType && props.providerType !== 'custom'
+)
+
 const form = ref({
   name: '',
   api_key: '',  // 标准 API Key
@@ -519,7 +524,7 @@ function resetForm() {
     note: '',
     is_active: true,
     capabilities: {},
-    auto_fetch_models: false,
+    auto_fetch_models: defaultAutoFetchModels.value,
     model_include_patterns_text: '',
     model_exclude_patterns_text: ''
   }
