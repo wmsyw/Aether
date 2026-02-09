@@ -1626,10 +1626,12 @@ class CacheAwareScheduler:
                 result.extend(sorted_group)
             else:
                 # 单个候选或没有 affinity_key，按次要排序条件排序
-                def secondary_sort(c: ProviderCandidate) -> Any:
+                def secondary_sort(c: ProviderCandidate) -> tuple[int, int, str]:
+                    pp = c.provider.provider_priority
+                    ip = c.key.internal_priority if c.key else None
                     return (
-                        c.provider.provider_priority,
-                        c.key.internal_priority if c.key else 999999,
+                        pp if pp is not None else 999999,
+                        ip if ip is not None else 999999,
                         c.key.id if c.key else "",
                     )
 
@@ -1668,9 +1670,11 @@ class CacheAwareScheduler:
         else:
             # 提供商优先模式：按 (provider_priority, internal_priority) 分组
             for candidate in candidates:
+                pp = candidate.provider.provider_priority
+                ip = candidate.key.internal_priority if candidate.key else None
                 key = (
-                    candidate.provider.provider_priority or 999999,
-                    candidate.key.internal_priority if candidate.key else 999999,
+                    pp if pp is not None else 999999,
+                    ip if ip is not None else 999999,
                 )
                 priority_groups[key].append(candidate)
 
