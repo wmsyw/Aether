@@ -107,6 +107,23 @@ def _normalize_to_camel_case(body: dict[str, Any]) -> None:
             if snake in gc and camel not in gc:
                 gc[camel] = gc.pop(snake)
 
+    # 4. Inside contents → parts: function_call/function_response → camelCase
+    contents = body.get("contents")
+    if isinstance(contents, list):
+        for content in contents:
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if "function_call" in part and "functionCall" not in part:
+                    part["functionCall"] = part.pop("function_call")
+                if "function_response" in part and "functionResponse" not in part:
+                    part["functionResponse"] = part.pop("function_response")
+
 
 # ---------------------------------------------------------------------------
 # Request body 预处理工具函数（对齐 AM wrapper.rs / common_utils.rs）
@@ -286,7 +303,7 @@ def _process_thinking_budget(inner_request: dict[str, Any], model: str) -> None:
         return
 
     budget = thinking_config.get("thinkingBudget")
-    if not isinstance(budget, int):
+    if not isinstance(budget, int) or budget <= 0:
         return
 
     # 1. 限制 budget 上限
