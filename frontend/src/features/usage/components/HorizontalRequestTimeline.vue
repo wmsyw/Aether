@@ -209,6 +209,10 @@
                         v-if="currentAttempt.extra_data.proxy.source === 'system'"
                         class="text-xs text-muted-foreground ml-1"
                       >(系统)</span>
+                      <span
+                        v-if="currentAttempt.extra_data.proxy.ttfb_ms != null"
+                        class="text-xs text-muted-foreground ml-1"
+                      >{{ formatLatency(currentAttempt.extra_data.proxy.ttfb_ms) }}</span>
                     </span>
                   </div>
                   <div

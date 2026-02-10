@@ -31,19 +31,29 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import re
 import time
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session, selectinload
 
+from src.core.api_format.conversion.compatibility import is_format_compatible
 from src.core.api_format.enums import ApiFamily, EndpointKind
 from src.core.api_format.signature import make_signature_key, parse_signature_key
 from src.core.exceptions import ModelNotSupportedException, ProviderNotAvailableException
+from src.core.key_capabilities import check_capability_match
 from src.core.logger import logger
+from src.core.model_permissions import (
+    check_model_allowed,
+    check_model_allowed_with_mappings,
+    get_allowed_models_preview,
+    merge_allowed_models,
+)
 from src.models.database import (
     ApiKey,
     Model,
@@ -68,6 +78,7 @@ from src.services.rate_limit.adaptive_reservation import (
 )
 from src.services.rate_limit.adaptive_rpm import get_adaptive_rpm_manager
 from src.services.rate_limit.concurrency_manager import get_concurrency_manager
+from src.services.system.config import SystemConfigService
 
 
 @dataclass
@@ -381,17 +392,17 @@ class CacheAwareScheduler:
                     f"并发状态[{snapshot.describe()}]"
                 )
 
-            if key.cache_ttl_minutes > 0 and global_model_id:
-                ttl = key.cache_ttl_minutes * 60 if key.cache_ttl_minutes > 0 else None
-                await self.set_cache_affinity(
-                    affinity_key=affinity_key,
-                    provider_id=str(provider.id),
-                    endpoint_id=str(endpoint.id),
-                    key_id=str(key.id),
-                    api_format=normalized_format,
-                    global_model_id=global_model_id,
-                    ttl=int(ttl) if ttl is not None else None,
-                )
+                if key.cache_ttl_minutes > 0 and global_model_id:
+                    ttl = key.cache_ttl_minutes * 60
+                    await self.set_cache_affinity(
+                        affinity_key=affinity_key,
+                        provider_id=str(provider.id),
+                        endpoint_id=str(endpoint.id),
+                        key_id=str(key.id),
+                        api_format=normalized_format,
+                        global_model_id=global_model_id,
+                        ttl=ttl,
+                    )
 
                 if is_cached_user:
                     self._metrics["cache_hits"] += 1
@@ -498,7 +509,6 @@ class CacheAwareScheduler:
             else:
                 # 新用户: 只能使用 (1 - 动态预留比例) 的槽位
                 # 使用 max 确保至少有 1 个槽位可用
-                import math
 
                 # 与 ConcurrencyManager 的 Lua 脚本保持一致：使用 floor 计算新用户可用槽位
                 available_for_new = max(
@@ -576,35 +586,18 @@ class CacheAwareScheduler:
             f"User.allowed_models={user.allowed_models if user else 'N/A'}"
         )
 
-        def merge_restrictions(key_restriction: Any, user_restriction: Any) -> Any:
-            """合并两个限制列表，返回有效的限制集合"""
-            key_set = set(key_restriction) if key_restriction else None
-            user_set = set(user_restriction) if user_restriction else None
-
-            if key_set and user_set:
-                # 两者都有限制，取交集
-                return key_set & user_set
-            elif key_set:
-                return key_set
-            elif user_set:
-                return user_set
-            else:
-                return None
-
         # 合并 allowed_providers
-        result["allowed_providers"] = merge_restrictions(
+        result["allowed_providers"] = self._merge_restriction_sets(
             user_api_key.allowed_providers, user.allowed_providers if user else None
         )
 
         # 合并 allowed_models（取交集）
-        from src.core.model_permissions import merge_allowed_models
-
         result["allowed_models"] = merge_allowed_models(
             user_api_key.allowed_models, user.allowed_models if user else None
         )
 
         # 合并 allowed_api_formats
-        result["allowed_api_formats"] = merge_restrictions(
+        result["allowed_api_formats"] = self._merge_restriction_sets(
             user_api_key.allowed_api_formats, user.allowed_api_formats if user else None
         )
 
@@ -702,8 +695,6 @@ class CacheAwareScheduler:
                 return [], global_model_id
 
         # 0.2 检查模型是否被允许
-        from src.core.model_permissions import check_model_allowed, get_allowed_models_preview
-
         if not check_model_allowed(
             model_name=model_name,
             allowed_models=allowed_models,
@@ -755,7 +746,6 @@ class CacheAwareScheduler:
             return [], global_model_id
 
         # 2. 构建候选列表（传入 is_stream 和 capability_requirements 用于过滤）
-        from src.services.system.config import SystemConfigService
 
         # 格式转换总开关（数据库配置）：关闭时禁止任何跨格式候选进入队列
         global_conversion_enabled = SystemConfigService.is_format_conversion_enabled(db)
@@ -1031,8 +1021,6 @@ class CacheAwareScheduler:
         # 模型权限检查：使用 allowed_models 白名单
         # None = 允许所有模型，[] = 拒绝所有模型，["a","b"] = 只允许指定模型
         # 支持通配符映射匹配（通过 model_mappings）
-        from src.core.model_permissions import check_model_allowed_with_mappings
-
         try:
             is_allowed, mapping_matched_model = check_model_allowed_with_mappings(
                 model_name=model_name,
@@ -1073,8 +1061,6 @@ class CacheAwareScheduler:
         # 注意：模型级别的能力检查已在 _check_model_support 中完成
         # 始终执行检查，即使 capability_requirements 为空
         # 因为 check_capability_match 会检查 Key 的 EXCLUSIVE 能力是否被浪费
-        from src.core.key_capabilities import check_capability_match
-
         key_caps: dict[str, bool] = dict(key.capabilities or {})
         is_match, skip_reason = check_capability_match(key_caps, capability_requirements)
         if not is_match:
@@ -1115,8 +1101,6 @@ class CacheAwareScheduler:
         Returns:
             候选列表
         """
-        from src.core.api_format.conversion.compatibility import is_format_compatible
-
         candidates: list[ProviderCandidate] = []
         client_format_str = normalize_endpoint_signature(client_format)
         client_sig = parse_signature_key(client_format_str)
@@ -1361,8 +1345,6 @@ class CacheAwareScheduler:
                 return candidates
 
             # 判断候选是否应该被降级（用于分组）
-            from src.services.system.config import SystemConfigService
-
             global_keep_priority = SystemConfigService.is_keep_priority_on_conversion(db)
 
             def should_demote(c: ProviderCandidate) -> bool:
@@ -1457,6 +1439,20 @@ class CacheAwareScheduler:
             logger.warning(f"检查缓存亲和性失败: {e}，继续使用默认排序")
             return candidates
 
+    @staticmethod
+    def _affinity_hash(affinity_key: str, identifier: str) -> int:
+        """基于 affinity_key 和标识符的确定性哈希（用于同优先级内分散负载均衡）"""
+        return int(hashlib.sha256(f"{affinity_key}:{identifier}".encode()).hexdigest()[:16], 16)
+
+    @staticmethod
+    def _merge_restriction_sets(key_restriction: Any, user_restriction: Any) -> set[Any] | None:
+        """合并两个限制列表，取交集；任一方为空则使用另一方；均空返回 None"""
+        key_set = set(key_restriction) if key_restriction else None
+        user_set = set(user_restriction) if user_restriction else None
+        if key_set and user_set:
+            return key_set & user_set
+        return key_set or user_set
+
     def _normalize_priority_mode(self, mode: str | None) -> str:
         normalized = (mode or "").strip().lower()
         if normalized not in self.ALLOWED_PRIORITY_MODES:
@@ -1513,8 +1509,6 @@ class CacheAwareScheduler:
         if not candidates:
             return candidates
 
-        from src.services.system.config import SystemConfigService
-
         # 全局配置：如果开启，所有候选保持原优先级
         global_keep_priority = SystemConfigService.is_keep_priority_on_conversion(db)
 
@@ -1569,8 +1563,6 @@ class CacheAwareScheduler:
         2. 同优先级组内，使用 affinity_key 哈希分散
         3. 确保同一用户请求稳定选择同一个 Key（缓存亲和性）
         """
-        import hashlib
-        from collections import defaultdict
 
         def get_priority(candidate: ProviderCandidate) -> int:
             """获取候选的优先级"""
@@ -1596,8 +1588,7 @@ class CacheAwareScheduler:
                 scored_candidates = []
                 for candidate in group:
                     key_id = candidate.key.id if candidate.key else ""
-                    hash_input = f"{affinity_key}:{key_id}"
-                    hash_value = int(hashlib.sha256(hash_input.encode()).hexdigest()[:16], 16)
+                    hash_value = self._affinity_hash(affinity_key, key_id)
                     scored_candidates.append((hash_value, candidate))
 
                 # 按哈希值排序
@@ -1631,8 +1622,6 @@ class CacheAwareScheduler:
         """
         if not candidates:
             return candidates
-
-        from collections import defaultdict
 
         priority_groups: dict[tuple, list[ProviderCandidate]] = defaultdict(list)
 
@@ -1697,8 +1686,6 @@ class CacheAwareScheduler:
             return []
 
         # 按 internal_priority 分组
-        from collections import defaultdict
-
         priority_groups: dict[int, list[ProviderAPIKey]] = defaultdict(list)
 
         for key in keys:
@@ -1720,9 +1707,7 @@ class CacheAwareScheduler:
                     # 正常模式：使用哈希确定性打乱（保持缓存亲和性）
                     key_scores = []
                     for key in group_keys:
-                        # 使用 affinity_key + key.id 的组合哈希
-                        hash_input = f"{affinity_key}:{key.id}"
-                        hash_value = int(hashlib.sha256(hash_input.encode()).hexdigest()[:16], 16)
+                        hash_value = self._affinity_hash(affinity_key, key.id)
                         key_scores.append((hash_value, key))
 
                     # 按哈希值排序

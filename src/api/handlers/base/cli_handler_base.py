@@ -932,7 +932,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     payload=provider_payload,
                     timeout=request_timeout_sync,
                 )
+                _connect_start = time.monotonic()
                 resp = await http_client.post(**_pkw)
+                ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
                 if envelope:
                     envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
@@ -971,7 +973,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         timeout=request_timeout_sync,
                         refresh_auth=True,
                     )
+                    _connect_start = time.monotonic()
                     resp = await http_client.post(**_pkw)
+                    ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
                     ctx.status_code = resp.status_code
                     ctx.response_headers = dict(resp.headers)
                     if envelope:
@@ -1140,8 +1144,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     else None
                 ),
             )
+            _connect_start = time.monotonic()
             response_ctx = http_client.stream(**_skw)
             stream_response = await response_ctx.__aenter__()
+            ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
 
             ctx.status_code = stream_response.status_code
             ctx.response_headers = dict(stream_response.headers)

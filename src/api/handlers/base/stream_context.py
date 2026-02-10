@@ -112,7 +112,7 @@ class StreamContext:
     perf_sampled: bool = False
     perf_metrics: dict[str, Any] = field(default_factory=dict)
 
-    # 代理信息（用于 usage 记录和日志）
+    # 代理信息（用于 usage 记录和日志，含 ttfb_ms）
     proxy_info: dict[str, Any] | None = None
 
     # 流式格式转换状态（跨 chunk 追踪）
@@ -266,6 +266,11 @@ class StreamContext:
     def is_client_disconnected(self) -> bool:
         """检查是否因客户端断开连接而结束"""
         return self.status_code == 499
+
+    def set_ttfb_ms(self, ms: int) -> None:
+        """将首字节响应耗时（TTFB）注入到 proxy_info 中"""
+        if self.proxy_info is not None:
+            self.proxy_info["ttfb_ms"] = ms
 
     def build_response_body(self, response_time_ms: int) -> dict[str, Any]:
         """
