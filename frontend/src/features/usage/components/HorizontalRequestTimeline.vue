@@ -452,6 +452,13 @@ const formatLatency = (ms: number | undefined | null): string => {
   return `${ms}ms`
 }
 
+// 格式化字节大小
+const formatSize = (bytes: number): string => {
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)}MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${bytes}B`
+}
+
 // 代理 timing 分阶段展示
 const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
   const t = proxy.timing
@@ -459,9 +466,16 @@ const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
 
   const parts: string[] = []
 
-  // 新版细分字段（aether-proxy 新版本上报）
-  if (t.body_read_ms != null && t.body_read_ms > 0) {
-    parts.push(`读取 ${formatLatency(t.body_read_ms)}`)
+  // 读取 + 解压合并显示（含压缩率）
+  const readDecompress = (t.body_read_ms || 0) + (t.decompress_ms || 0)
+  if (readDecompress > 0) {
+    let label = `读取 ${formatLatency(readDecompress)}`
+    if (t.decompress_ms != null && t.decompress_ms > 0 && t.wire_size != null && t.body_size != null && t.body_size > 0) {
+      const ratio = Math.round((1 - t.wire_size / t.body_size) * 100)
+      label += ` ${formatSize(t.wire_size)}→${formatSize(t.body_size)}`
+      if (ratio > 0) label += ` -${ratio}%`
+    }
+    parts.push(label)
   }
 
   parts.push(`DNS ${formatLatency(t.dns_ms)}`)
@@ -471,7 +485,6 @@ const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
   if (proxy.ttfb_ms != null && t.total_ms != null) {
     const gap = proxy.ttfb_ms - t.total_ms
     if (gap > 500) {
-      // 超过 500ms 的差值才显示，排除正常网络 RTT
       parts.push(`传输 ${formatLatency(Math.round(gap))}`)
     }
   }

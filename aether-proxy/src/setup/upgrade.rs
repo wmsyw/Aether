@@ -17,13 +17,6 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 struct GithubRelease {
     tag_name: String,
     name: String,
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(serde::Deserialize)]
-struct GithubAsset {
-    name: String,
-    id: u64,
 }
 
 // ── Platform detection ───────────────────────────────────────────────────────
@@ -49,17 +42,15 @@ fn detect_platform() -> &'static str {
 // ── GitHub HTTP client ───────────────────────────────────────────────────────
 
 fn build_github_client() -> anyhow::Result<reqwest::Client> {
-    let token = std::env::var("GITHUB_TOKEN").map_err(|_| {
-        anyhow::anyhow!(
-            "GITHUB_TOKEN is required (private repo).\n  Set it via: export GITHUB_TOKEN=ghp_xxx"
-        )
-    })?;
-
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?,
-    );
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?,
+        );
+    }
+
     headers.insert(
         reqwest::header::ACCEPT,
         reqwest::header::HeaderValue::from_static("application/vnd.github+json"),
@@ -119,16 +110,18 @@ async fn fetch_release(
     }
 }
 
-// ── Download & verify ────────────────────────────────────────────────────────
+// ── Download via GitHub release direct links ─────────────────────────────────
 
-async fn download_asset_bytes(
+/// Download a release asset via the public direct download URL:
+/// `https://github.com/{repo}/releases/download/{tag}/{filename}`
+async fn download_release_file(
     client: &reqwest::Client,
-    asset: &GithubAsset,
+    tag: &str,
+    filename: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    // Use GitHub API asset endpoint for reliable private repo downloads
     let url = format!(
-        "{}/repos/{}/releases/assets/{}",
-        GITHUB_API_BASE, GITHUB_REPO, asset.id
+        "https://github.com/{}/releases/download/{}/{}",
+        GITHUB_REPO, tag, filename
     );
     let resp = client
         .get(&url)
@@ -138,7 +131,7 @@ async fn download_asset_bytes(
     if !resp.status().is_success() {
         anyhow::bail!(
             "download failed for '{}' (HTTP {})",
-            asset.name,
+            filename,
             resp.status(),
         );
     }
@@ -161,28 +154,16 @@ fn parse_checksum(sums_text: &str, filename: &str) -> anyhow::Result<String> {
 
 async fn download_and_verify(
     client: &reqwest::Client,
-    release: &GithubRelease,
+    tag: &str,
     platform: &str,
     dest: &Path,
 ) -> anyhow::Result<()> {
     let archive_name = format!("aether-proxy-{}.tar.gz", platform);
 
-    let archive_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == archive_name)
-        .ok_or_else(|| anyhow::anyhow!("asset '{}' not found in release", archive_name))?;
-
-    let checksum_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == "SHA256SUMS.txt")
-        .ok_or_else(|| anyhow::anyhow!("SHA256SUMS.txt not found in release"))?;
-
     eprintln!("  Downloading {}...", archive_name);
     let (archive_bytes, checksum_bytes) = tokio::try_join!(
-        download_asset_bytes(client, archive_asset),
-        download_asset_bytes(client, checksum_asset),
+        download_release_file(client, tag, &archive_name),
+        download_release_file(client, tag, "SHA256SUMS.txt"),
     )?;
     let checksum_text = String::from_utf8(checksum_bytes)?;
 
@@ -348,7 +329,7 @@ pub async fn cmd_upgrade(version: Option<String>) -> anyhow::Result<()> {
     eprintln!("  Upgrading: {} -> {}", CURRENT_VERSION, target_semver);
     eprintln!();
 
-    if let Err(e) = download_and_verify(&client, &release, platform, &temp_path).await {
+    if let Err(e) = download_and_verify(&client, target_tag, platform, &temp_path).await {
         let _ = std::fs::remove_file(&temp_path);
         return Err(e);
     }

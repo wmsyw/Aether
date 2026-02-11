@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 import base64
+import gzip as _gzip
 import hashlib
 import hmac as _hmac
+import json as _json
 import time
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -613,6 +615,9 @@ def _build_delegate_kwargs_core(
     """
     构建代发请求的核心参数（post/stream 共用）
 
+    元数据通过 HTTP headers 传递（X-Delegate-Method/Url/Headers），
+    上游请求体 gzip 压缩后直接作为 HTTP body 发送，大幅减少跨国传输耗时。
+
     Args:
         delegate_cfg: resolve_delegate_config 返回的配置
         url:          上游实际 URL
@@ -621,26 +626,41 @@ def _build_delegate_kwargs_core(
         timeout:      上游超时秒数
         refresh_auth: 为 True 时重新生成 HMAC 签名（用于 retry）
     """
-    import json as _json
-
     auth = (
         delegate_cfg["fresh_auth_header"]()
         if refresh_auth
         else delegate_cfg.get("auth_header") or delegate_cfg["fresh_auth_header"]()
     )
 
-    return {
+    # 上游 headers base64 编码
+    headers_b64 = base64.b64encode(_json.dumps(headers, ensure_ascii=False).encode("utf-8")).decode(
+        "ascii"
+    )
+
+    # 构建代发请求 headers（元数据）
+    delegate_headers: dict[str, str] = {
+        "Authorization": auth,
+        "X-Delegate-Method": "POST",
+        "X-Delegate-Url": url,
+        "X-Delegate-Headers": headers_b64,
+        "X-Delegate-Timeout": str(int(timeout)),
+    }
+
+    kwargs: dict[str, Any] = {
         "url": delegate_cfg["delegate_url"],
-        "json": {
-            "method": "POST",
-            "url": url,
-            "headers": headers,
-            "body": _json.dumps(payload, ensure_ascii=False) if payload is not None else None,
-            "timeout": int(timeout),
-        },
-        "headers": {"Authorization": auth, "Content-Type": _JSON_CT},
+        "headers": delegate_headers,
         "timeout": httpx.Timeout(timeout + 10),
     }
+
+    # body gzip 压缩后直接作为 HTTP content
+    if payload is not None:
+        body_bytes = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        compressed = _gzip.compress(body_bytes)
+        kwargs["content"] = compressed
+        kwargs["headers"]["Content-Encoding"] = "gzip"
+        kwargs["headers"]["Content-Type"] = _JSON_CT
+
+    return kwargs
 
 
 def build_delegate_post_kwargs(
