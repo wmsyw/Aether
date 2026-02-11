@@ -169,7 +169,7 @@
                 <code class="text-xs text-muted-foreground">{{ node.is_manual ? (node.proxy_url || `${node.ip}:${node.port}`) : `${node.ip}:${node.port}` }}</code>
               </TableCell>
               <TableCell class="py-4">
-                <span class="text-sm text-muted-foreground">{{ node.region || '-' }}</span>
+                <span class="text-sm text-muted-foreground">{{ formatRegion(node.region) }}</span>
               </TableCell>
               <TableCell class="py-4 text-center">
                 <Badge
@@ -286,7 +286,7 @@
           <div class="grid grid-cols-3 gap-2 text-xs text-muted-foreground mb-3">
             <div>
               <span class="block text-foreground/60">区域</span>
-              <span>{{ node.region || '-' }}</span>
+              <span>{{ formatRegion(node.region) }}</span>
             </div>
             <div>
               <span class="block text-foreground/60">连接</span>
@@ -565,6 +565,7 @@ import {
 } from '@/components/ui'
 
 import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings } from 'lucide-vue-next'
+import { formatRegion } from '@/utils/region'
 import HardwareTooltip from './components/HardwareTooltip.vue'
 
 const { success, error: toastError } = useToast()

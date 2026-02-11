@@ -52,9 +52,11 @@ pub async fn handle_delegate(
         warn!(error = %e, "delegate auth failed");
         return error_response(401, "authentication_failed", &e.to_string());
     }
+    let auth_ms = total_start.elapsed().as_millis() as u64;
 
     // Read and parse request body (limit to 10 MB to prevent OOM)
     const MAX_BODY: usize = 10 * 1024 * 1024;
+    let body_read_start = Instant::now();
     let body_bytes = match Limited::new(req.into_body(), MAX_BODY).collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(e) => {
@@ -62,7 +64,10 @@ pub async fn handle_delegate(
             return error_response(413, "payload_too_large", "request body exceeds 10MB limit");
         }
     };
+    let body_read_ms = body_read_start.elapsed().as_millis() as u64;
+    let body_size = body_bytes.len() as u64;
 
+    let body_parse_start = Instant::now();
     let delegate_req: DelegateRequest = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,
         Err(e) => {
@@ -70,6 +75,7 @@ pub async fn handle_delegate(
             return error_response(400, "bad_request", &format!("invalid JSON: {}", e));
         }
     };
+    let body_parse_ms = body_parse_start.elapsed().as_millis() as u64;
 
     // Target filter: validate the upstream URL against allowed ports and private IP checks
     let parsed_url = match Url::parse(&delegate_req.url) {
@@ -168,6 +174,10 @@ pub async fn handle_delegate(
 
     // Inject proxy timing header for Aether to parse
     let timing = serde_json::json!({
+        "auth_ms": auth_ms,
+        "body_read_ms": body_read_ms,
+        "body_parse_ms": body_parse_ms,
+        "body_size": body_size,
         "dns_ms": dns_ms,
         "upstream_ms": upstream_ms,
         "total_ms": total_ms,

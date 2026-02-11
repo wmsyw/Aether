@@ -187,15 +187,12 @@
                     class="info-item"
                   >
                     <span class="info-label">密钥</span>
-                    <span class="info-value">
+                    <span class="info-value info-value-stacked">
                       <span class="key-name">{{ currentAttempt.key_name || '未知' }}</span>
-                      <template v-if="currentAttempt.key_preview">
-                        <Separator
-                          orientation="vertical"
-                          class="h-3 mx-2"
-                        />
-                        <code class="key-preview">{{ currentAttempt.key_preview }}</code>
-                      </template>
+                      <code
+                        v-if="currentAttempt.key_preview"
+                        class="key-preview"
+                      >{{ currentAttempt.key_preview }}</code>
                     </span>
                   </div>
                   <div
@@ -203,20 +200,26 @@
                     class="info-item"
                   >
                     <span class="info-label">代理</span>
-                    <span class="info-value">
-                      <span>{{ currentAttempt.extra_data.proxy.node_name || currentAttempt.extra_data.proxy.url || '未知' }}</span>
-                      <span
-                        v-if="currentAttempt.extra_data.proxy.source === 'system'"
-                        class="text-xs text-muted-foreground ml-1"
-                      >(系统)</span>
-                      <span
-                        v-if="currentAttempt.extra_data.proxy.ttfb_ms != null"
-                        class="text-xs text-muted-foreground ml-1"
-                      >{{ formatLatency(currentAttempt.extra_data.proxy.ttfb_ms) }}</span>
-                      <span
-                        v-if="currentAttempt.extra_data.proxy.timing"
-                        class="text-xs text-muted-foreground ml-1"
-                      >(DNS {{ formatLatency(currentAttempt.extra_data.proxy.timing.dns_ms) }} / 上游 {{ formatLatency(currentAttempt.extra_data.proxy.timing.upstream_ms) }})</span>
+                    <span class="info-value info-value-stacked">
+                      <span class="proxy-name">
+                        {{ currentAttempt.extra_data.proxy.node_name || currentAttempt.extra_data.proxy.url || '未知' }}
+                        <span
+                          v-if="currentAttempt.extra_data.proxy.source === 'system'"
+                          class="text-xs text-muted-foreground ml-1"
+                        >(系统)</span>
+                      </span>
+                      <span class="proxy-detail">
+                        <span
+                          v-if="currentAttempt.extra_data.proxy.ttfb_ms != null"
+                          class="text-xs text-muted-foreground"
+                        >{{ formatLatency(currentAttempt.extra_data.proxy.ttfb_ms) }}</span>
+                        <span
+                          v-if="currentAttempt.extra_data.proxy.timing"
+                          class="text-xs text-muted-foreground"
+                        >(<!--
+                          -->{{ proxyTimingBreakdown(currentAttempt.extra_data.proxy) }}<!--
+                        -->)</span>
+                      </span>
                     </span>
                   </div>
                   <div
@@ -335,7 +338,6 @@ import { ref, watch, computed } from 'vue'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
 import Skeleton from '@/components/ui/skeleton.vue'
-import Separator from '@/components/ui/separator.vue'
 import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-vue-next'
 import { requestTraceApi, type RequestTrace, type CandidateRecord } from '@/api/requestTrace'
 import { log } from '@/utils/logger'
@@ -448,6 +450,33 @@ const formatLatency = (ms: number | undefined | null): string => {
     return `${(ms / 1000).toFixed(2)}s`
   }
   return `${ms}ms`
+}
+
+// 代理 timing 分阶段展示
+const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
+  const t = proxy.timing
+  if (!t) return ''
+
+  const parts: string[] = []
+
+  // 新版细分字段（aether-proxy 新版本上报）
+  if (t.body_read_ms != null && t.body_read_ms > 0) {
+    parts.push(`读取 ${formatLatency(t.body_read_ms)}`)
+  }
+
+  parts.push(`DNS ${formatLatency(t.dns_ms)}`)
+  parts.push(`上游 ${formatLatency(t.upstream_ms)}`)
+
+  // 计算 Aether→代理 之间无法解释的耗时差
+  if (proxy.ttfb_ms != null && t.total_ms != null) {
+    const gap = proxy.ttfb_ms - t.total_ms
+    if (gap > 500) {
+      // 超过 500ms 的差值才显示，排除正常网络 RTT
+      parts.push(`传输 ${formatLatency(Math.round(gap))}`)
+    }
+  }
+
+  return parts.join(' / ')
 }
 
 // 候选时间线（按实际执行顺序排序）
@@ -1256,18 +1285,36 @@ const getStatusColorClass = (status: string) => {
   font-family: ui-monospace, monospace;
 }
 
+/* 两行堆叠布局 */
+.info-value-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+}
+
 /* Key 信息 */
 .key-name {
   font-weight: 500;
 }
 
 .key-preview {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   padding: 0.1rem 0.3rem;
   background: hsl(var(--muted));
   border-radius: 3px;
   color: hsl(var(--muted-foreground));
   font-family: ui-monospace, monospace;
+}
+
+/* 代理信息 */
+.proxy-name {
+  font-weight: 500;
+}
+
+.proxy-detail {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
 }
 
 /* 能力标签 */

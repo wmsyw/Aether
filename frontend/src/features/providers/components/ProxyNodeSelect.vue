@@ -20,7 +20,7 @@
           :key="node.id"
           :value="node.id"
         >
-          {{ node.name }}{{ node.region ? ` · ${node.region}` : '' }} ({{ node.ip }}:{{ node.port }})
+          {{ node.name }}{{ node.region ? ` · ${formatRegion(node.region, '')}` : '' }} ({{ node.ip }}:{{ node.port }})
         </SelectItem>
       </SelectContent>
     </Select>
@@ -37,6 +37,7 @@ import {
   SelectItem,
 } from '@/components/ui'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
+import { formatRegion } from '@/utils/region'
 
 const props = defineProps<{
   modelValue: string
