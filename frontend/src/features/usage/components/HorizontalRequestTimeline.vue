@@ -489,9 +489,16 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
       currentGroup.retryCount++
       currentGroup.endIndex = index
       currentGroup.totalLatency += candidate.latency_ms || 0
-      // 如果任一尝试成功，更新主状态
-      if (candidate.status === 'success') {
-        currentGroup.primaryStatus = 'success'
+      // 按优先级提升组状态：success > streaming/pending > failed/cancelled/stream_interrupted > skipped > available/unused
+      const statusPriority: Record<string, number> = {
+        available: 0, unused: 0, skipped: 1,
+        failed: 2, cancelled: 2, stream_interrupted: 2,
+        pending: 3, streaming: 3, success: 4,
+      }
+      const currentPriority = statusPriority[currentGroup.primaryStatus] ?? 0
+      const newPriority = statusPriority[candidate.status] ?? 0
+      if (newPriority > currentPriority) {
+        currentGroup.primaryStatus = candidate.status
       }
     } else {
       // 新建一个组
@@ -713,28 +720,29 @@ watch(groupedTimeline, (newGroups) => {
     return
   }
 
-  // 查找最后一个有效结果的组（failed 优先于 skipped/available）
-  // 从后往前找第一个 failed 的组
+  // 查找最后一个有效结果的组（有实际执行过的状态：failed/cancelled/stream_interrupted/skipped）
+  // 从后往前找第一个有效状态的组
+  const activeStatuses = ['failed', 'cancelled', 'stream_interrupted', 'skipped']
   for (let i = newGroups.length - 1; i >= 0; i--) {
     const group = newGroups[i]
-    if (group.primaryStatus === 'failed') {
+    if (activeStatuses.includes(group.primaryStatus)) {
       selectedGroupIndex.value = i
-      // 选中最后一个失败的尝试（从后往前遍历）
-      let failedIdx = -1
+      // 选中最后一个有效状态的尝试（从后往前遍历）
+      let targetIdx = -1
       for (let j = group.allAttempts.length - 1; j >= 0; j--) {
-        if (group.allAttempts[j].status === 'failed') {
-          failedIdx = j
+        if (activeStatuses.includes(group.allAttempts[j].status)) {
+          targetIdx = j
           break
         }
       }
-      selectedAttemptIndex.value = failedIdx >= 0 ? failedIdx : group.allAttempts.length - 1
+      selectedAttemptIndex.value = targetIdx >= 0 ? targetIdx : group.allAttempts.length - 1
       return
     }
   }
 
-  // 都没有则选择最后一个组
-  selectedGroupIndex.value = newGroups.length - 1
-  selectedAttemptIndex.value = newGroups[newGroups.length - 1].allAttempts.length - 1
+  // 都没有有效状态，选择第一个组（避免选到末尾的未执行节点）
+  selectedGroupIndex.value = 0
+  selectedAttemptIndex.value = 0
 }, { immediate: true })
 
 // 监听 requestId 变化
