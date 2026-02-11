@@ -40,7 +40,11 @@ from src.api.handlers.base.base_handler import (
 from src.api.handlers.base.parsers import get_parser_for_format
 from src.api.handlers.base.request_builder import PassthroughRequestBuilder, get_provider_auth
 from src.api.handlers.base.response_parser import ResponseParser
-from src.api.handlers.base.stream_context import StreamContext, is_format_converted
+from src.api.handlers.base.stream_context import (
+    StreamContext,
+    extract_proxy_timing,
+    is_format_converted,
+)
 from src.api.handlers.base.stream_processor import StreamProcessor
 from src.api.handlers.base.stream_telemetry import StreamTelemetryRecorder
 from src.api.handlers.base.upstream_stream_bridge import (
@@ -975,6 +979,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             ctx.status_code = resp.status_code
             ctx.response_headers = dict(resp.headers)
+            ctx.set_proxy_timing(ctx.response_headers)
             if envelope:
                 envelope.on_http_status(base_url=ctx.selected_base_url, status_code=ctx.status_code)
 
@@ -1005,6 +1010,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     resp = await http_client.post(**_pkw)
                     ctx.status_code = resp.status_code
                     ctx.response_headers = dict(resp.headers)
+                    ctx.set_proxy_timing(ctx.response_headers)
                     if envelope:
                         envelope.on_http_status(
                             base_url=ctx.selected_base_url, status_code=ctx.status_code
@@ -1168,6 +1174,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             ctx.status_code = stream_response.status_code
             ctx.response_headers = dict(stream_response.headers)
+            ctx.set_proxy_timing(ctx.response_headers)
             if envelope:
                 envelope.on_http_status(
                     base_url=ctx.selected_base_url,
@@ -1643,6 +1650,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
                         status_code = stream_resp.status_code
                         response_headers = dict(stream_resp.headers)
+                        extract_proxy_timing(sync_proxy_info, response_headers)
 
                         if envelope:
                             envelope.on_http_status(
@@ -1695,6 +1703,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             status_code = resp.status_code
             response_headers = dict(resp.headers)
+            extract_proxy_timing(sync_proxy_info, response_headers)
 
             if envelope:
                 envelope.on_http_status(base_url=selected_base_url_cached, status_code=status_code)

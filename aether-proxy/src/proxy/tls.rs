@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 
+const SESSION_CACHE_SIZE: usize = 1024;
+
 /// Generate a self-signed certificate if the files do not already exist.
 ///
 /// The certificate includes SANs: `localhost` and `aether-proxy`.
@@ -73,9 +75,20 @@ pub fn build_tls_acceptor(cert_path: &Path, key_path: &Path) -> anyhow::Result<T
         rustls_pemfile::private_key(&mut BufReader::new(key_file))?
             .ok_or_else(|| anyhow::anyhow!("no private key found in {}", key_path.display()))?;
 
-    let config = rustls::ServerConfig::builder()
+    let mut config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
+
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config.session_storage = rustls::server::ServerSessionMemoryCache::new(SESSION_CACHE_SIZE);
+    match rustls::crypto::ring::Ticketer::new() {
+        Ok(ticketer) => {
+            config.ticketer = ticketer;
+        }
+        Err(e) => {
+            warn!(error = %e, "failed to init TLS ticketer; tickets disabled");
+        }
+    }
 
     Ok(TlsAcceptor::from(Arc::new(config)))
 }

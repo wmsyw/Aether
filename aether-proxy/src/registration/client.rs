@@ -1,5 +1,8 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
@@ -100,19 +103,44 @@ pub struct AetherClient {
     http: Client,
     base_url: String,
     token: String,
+    retry_max_attempts: u32,
+    retry_base_delay: Duration,
+    retry_max_delay: Duration,
 }
 
 impl AetherClient {
     pub fn new(config: &Config) -> Self {
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("failed to create HTTP client");
+        let mut builder = Client::builder()
+            .timeout(Duration::from_secs(config.aether_request_timeout_secs))
+            .connect_timeout(Duration::from_secs(config.aether_connect_timeout_secs))
+            .pool_max_idle_per_host(config.aether_pool_max_idle_per_host)
+            .pool_idle_timeout(Duration::from_secs(config.aether_pool_idle_timeout_secs))
+            .tcp_nodelay(config.aether_tcp_nodelay);
+
+        if config.aether_tcp_keepalive_secs > 0 {
+            builder =
+                builder.tcp_keepalive(Some(Duration::from_secs(config.aether_tcp_keepalive_secs)));
+        } else {
+            builder = builder.tcp_keepalive(None);
+        }
+
+        if config.aether_http2 {
+            builder = builder.http2_adaptive_window(true);
+        }
+
+        let http = builder.build().expect("failed to create HTTP client");
+
+        let retry_base_delay = Duration::from_millis(config.aether_retry_base_delay_ms);
+        let retry_max_delay =
+            Duration::from_millis(config.aether_retry_max_delay_ms).max(retry_base_delay);
 
         Self {
             http,
             base_url: config.aether_url.trim_end_matches('/').to_string(),
             token: config.management_token.clone(),
+            retry_max_attempts: config.aether_retry_max_attempts.max(1),
+            retry_base_delay,
+            retry_max_delay,
         }
     }
 
@@ -149,11 +177,15 @@ impl AetherClient {
         );
 
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&body)
-            .send()
+            .send_with_retry(
+                || {
+                    self.http
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .json(&body)
+                },
+                "register",
+            )
             .await?;
 
         let status = resp.status();
@@ -190,11 +222,15 @@ impl AetherClient {
         debug!(node_id = %node_id, "sending heartbeat");
 
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&body)
-            .send()
+            .send_with_retry(
+                || {
+                    self.http
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .json(&body)
+                },
+                "heartbeat",
+            )
             .await
             .map_err(|e| HeartbeatError::Other(e.into()))?;
 
@@ -247,11 +283,15 @@ impl AetherClient {
         info!(node_id = %node_id, "unregistering from Aether");
 
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&body)
-            .send()
+            .send_with_retry(
+                || {
+                    self.http
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .json(&body)
+                },
+                "unregister",
+            )
             .await;
 
         match resp {
@@ -271,4 +311,75 @@ impl AetherClient {
             }
         }
     }
+
+    async fn send_with_retry<F>(
+        &self,
+        mut make_req: F,
+        label: &str,
+    ) -> Result<reqwest::Response, reqwest::Error>
+    where
+        F: FnMut() -> reqwest::RequestBuilder,
+    {
+        let mut attempt: u32 = 0;
+        let mut delay = self.retry_base_delay;
+
+        loop {
+            attempt = attempt.saturating_add(1);
+            let resp = make_req().send().await;
+            match resp {
+                Ok(resp) => {
+                    if should_retry_status(resp.status()) && attempt < self.retry_max_attempts {
+                        let sleep_for = jitter_delay(delay);
+                        debug!(
+                            attempt,
+                            status = %resp.status(),
+                            sleep_ms = sleep_for.as_millis(),
+                            label,
+                            "Aether request retrying"
+                        );
+                        sleep(sleep_for).await;
+                        let next_delay = delay.checked_mul(2).unwrap_or(self.retry_max_delay);
+                        delay = std::cmp::min(next_delay, self.retry_max_delay);
+                        continue;
+                    }
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    if attempt < self.retry_max_attempts {
+                        let sleep_for = jitter_delay(delay);
+                        debug!(
+                            attempt,
+                            error = %e,
+                            sleep_ms = sleep_for.as_millis(),
+                            label,
+                            "Aether request retrying"
+                        );
+                        sleep(sleep_for).await;
+                        let next_delay = delay.checked_mul(2).unwrap_or(self.retry_max_delay);
+                        delay = std::cmp::min(next_delay, self.retry_max_delay);
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status == StatusCode::REQUEST_TIMEOUT
+}
+
+fn jitter_delay(base: Duration) -> Duration {
+    if base.is_zero() {
+        return base;
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let jitter_ms = nanos % 100;
+    base + Duration::from_millis(jitter_ms)
 }

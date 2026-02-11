@@ -642,14 +642,13 @@
             </SelectContent>
           </Select>
           <Button
-            variant="ghost"
-            size="icon"
-            class="h-7 w-7 text-primary hover:text-primary"
-            title="添加"
+            variant="outline"
+            size="sm"
+            class="h-7 px-3"
             :disabled="!newEndpoint.api_format || (!newEndpoint.base_url?.trim() && !provider?.website?.trim()) || addingEndpoint"
             @click="handleAddEndpoint"
           >
-            <Plus class="w-3.5 h-3.5" />
+            添加
           </Button>
         </div>
         <!-- 卡片内容：URL 配置 -->

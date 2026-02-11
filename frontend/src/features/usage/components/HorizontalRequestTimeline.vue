@@ -213,6 +213,10 @@
                         v-if="currentAttempt.extra_data.proxy.ttfb_ms != null"
                         class="text-xs text-muted-foreground ml-1"
                       >{{ formatLatency(currentAttempt.extra_data.proxy.ttfb_ms) }}</span>
+                      <span
+                        v-if="currentAttempt.extra_data.proxy.timing"
+                        class="text-xs text-muted-foreground ml-1"
+                      >(DNS {{ formatLatency(currentAttempt.extra_data.proxy.timing.dns_ms) }} / 上游 {{ formatLatency(currentAttempt.extra_data.proxy.timing.upstream_ms) }})</span>
                     </span>
                   </div>
                   <div

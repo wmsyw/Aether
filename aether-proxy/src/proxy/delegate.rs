@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures_util::TryStreamExt;
 use http_body_util::{BodyExt, Full, Limited, StreamBody};
@@ -13,7 +14,7 @@ use url::Url;
 use super::BoxBody;
 use crate::auth;
 use crate::config::Config;
-use crate::proxy::target_filter;
+use crate::proxy::target_filter::{self, DnsCache};
 
 /// Delegation request payload sent by Aether.
 #[derive(Debug, Deserialize)]
@@ -36,8 +37,11 @@ pub async fn handle_delegate(
     config: Arc<Config>,
     allowed_ports: &HashSet<u16>,
     timestamp_tolerance: u64,
+    dns_cache: &DnsCache,
     http_client: &reqwest::Client,
 ) -> Response<BoxBody> {
+    let total_start = Instant::now();
+
     // Authenticate via Authorization header (same HMAC scheme as Proxy-Authorization)
     let auth_header = req
         .headers()
@@ -86,10 +90,12 @@ pub async fn handle_delegate(
 
     let port = parsed_url.port_or_known_default().unwrap_or(443);
 
-    if let Err(e) = target_filter::validate_target(&host, port, allowed_ports).await {
+    let dns_start = Instant::now();
+    if let Err(e) = target_filter::validate_target(&host, port, allowed_ports, dns_cache).await {
         warn!(host = %host, port, error = %e, "delegate target rejected");
         return error_response(403, "target_not_allowed", &e.to_string());
     }
+    let dns_ms = dns_start.elapsed().as_millis() as u64;
 
     debug!(
         method = %delegate_req.method,
@@ -110,8 +116,8 @@ pub async fn handle_delegate(
 
     // NOTE: We intentionally do NOT set a per-request timeout here.
     // reqwest's `.timeout()` caps the *entire* request including body streaming,
-    // which would truncate long-lived SSE streams.  The delegate_client already
-    // has a 30s connect_timeout for connection establishment, and Aether controls
+    // which would truncate long-lived SSE streams. The delegate_client already
+    // has a configured connect_timeout for connection establishment, and Aether controls
     // first-byte / idle timeouts on its own side via asyncio.
 
     // Set headers (skip `host` — reqwest sets it from the URL automatically,
@@ -129,6 +135,7 @@ pub async fn handle_delegate(
     }
 
     // Send upstream request
+    let upstream_start = Instant::now();
     let upstream_resp = match upstream_req.send().await {
         Ok(resp) => resp,
         Err(e) => {
@@ -142,12 +149,29 @@ pub async fn handle_delegate(
             return error_response(502, "upstream_connection_failed", &safe_detail);
         }
     };
+    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
 
     // Build response: pass through upstream status + headers, stream body back
     let status = upstream_resp.status().as_u16();
     let upstream_headers = upstream_resp.headers().clone();
 
-    debug!(url = %delegate_req.url, status, "delegate upstream response");
+    let total_ms = total_start.elapsed().as_millis() as u64;
+
+    debug!(
+        url = %delegate_req.url,
+        status,
+        dns_ms,
+        upstream_ms,
+        total_ms,
+        "delegate upstream response"
+    );
+
+    // Inject proxy timing header for Aether to parse
+    let timing = serde_json::json!({
+        "dns_ms": dns_ms,
+        "upstream_ms": upstream_ms,
+        "total_ms": total_ms,
+    });
 
     // Stream the response body
     let body_stream = upstream_resp
@@ -161,10 +185,14 @@ pub async fn handle_delegate(
     for (name, value) in upstream_headers.iter() {
         builder = builder.header(name, value);
     }
+    builder = builder.header("X-Proxy-Timing", timing.to_string());
 
-    builder
-        .body(stream_body)
-        .unwrap_or_else(|_| Response::builder().status(500).body(super::empty_box_body()).unwrap())
+    builder.body(stream_body).unwrap_or_else(|_| {
+        Response::builder()
+            .status(500)
+            .body(super::empty_box_body())
+            .unwrap()
+    })
 }
 
 // ── Sanitisation ─────────────────────────────────────────────────────────────

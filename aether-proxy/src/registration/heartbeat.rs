@@ -34,9 +34,24 @@ pub async fn run(state: &Arc<AppState>, mut shutdown_rx: watch::Receiver<bool>) 
         let current_node_id = state.node_id.read().unwrap().clone();
         let active_conns = state.active_connections.load(Ordering::Relaxed) as i64;
 
+        // Swap-and-reset: report incremental metrics since last heartbeat
+        let interval_requests = state.metrics.total_requests.swap(0, Ordering::Relaxed);
+        let interval_latency_ns = state.metrics.total_latency_ns.swap(0, Ordering::Relaxed);
+        let interval_requests_i64 = i64::try_from(interval_requests).unwrap_or(i64::MAX);
+        let avg_latency_ms = if interval_requests > 0 {
+            Some(interval_latency_ns as f64 / interval_requests as f64 / 1_000_000.0)
+        } else {
+            None
+        };
+
         match state
             .aether_client
-            .heartbeat(&current_node_id, Some(active_conns), None, None)
+            .heartbeat(
+                &current_node_id,
+                Some(active_conns),
+                Some(interval_requests_i64),
+                avg_latency_ms,
+            )
             .await
         {
             Ok(result) => {

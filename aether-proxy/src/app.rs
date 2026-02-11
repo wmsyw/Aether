@@ -5,16 +5,17 @@
 
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use tokio::signal;
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 use tracing::{error, info};
 
 use crate::config::Config;
 use crate::net;
 use crate::registration::client::AetherClient;
 use crate::runtime::{self, DynamicConfig};
-use crate::state::AppState;
+use crate::state::{AppState, ProxyMetrics};
 use crate::{hardware, proxy};
 
 /// Run the full application lifecycle after config has been parsed.
@@ -61,6 +62,23 @@ pub async fn run(mut config: Config) -> anyhow::Result<()> {
     // Collect hardware info (once at startup)
     let hw_info = hardware::collect();
 
+    let max_connections_raw = config
+        .max_concurrent_connections
+        .unwrap_or(hw_info.estimated_max_concurrency)
+        .max(1);
+    let max_connections = usize::try_from(max_connections_raw).unwrap_or(usize::MAX);
+    info!(
+        max_connections = max_connections_raw,
+        "connection limit configured"
+    );
+
+    let connection_semaphore = Arc::new(Semaphore::new(max_connections));
+    let metrics = Arc::new(ProxyMetrics::new());
+    let dns_cache = Arc::new(proxy::target_filter::DnsCache::new(
+        Duration::from_secs(config.dns_cache_ttl_secs),
+        config.dns_cache_capacity,
+    ));
+
     // Register with Aether
     let aether_client = Arc::new(AetherClient::new(&config));
     let node_id = aether_client
@@ -82,10 +100,21 @@ pub async fn run(mut config: Config) -> anyhow::Result<()> {
     // No overall timeout — SSE streams can last indefinitely.
     // Connect timeout limits connection establishment; Aether controls
     // first-byte / idle timeouts on its own side.
-    let delegate_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_max_idle_per_host(20)
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
+    let mut delegate_builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(config.delegate_connect_timeout_secs))
+        .pool_max_idle_per_host(config.delegate_pool_max_idle_per_host)
+        .pool_idle_timeout(Duration::from_secs(config.delegate_pool_idle_timeout_secs))
+        .tcp_nodelay(config.delegate_tcp_nodelay);
+
+    if config.delegate_tcp_keepalive_secs > 0 {
+        delegate_builder = delegate_builder.tcp_keepalive(Some(Duration::from_secs(
+            config.delegate_tcp_keepalive_secs,
+        )));
+    } else {
+        delegate_builder = delegate_builder.tcp_keepalive(None);
+    }
+
+    let delegate_client = delegate_builder
         .build()
         .expect("failed to create delegate HTTP client");
 
@@ -101,6 +130,9 @@ pub async fn run(mut config: Config) -> anyhow::Result<()> {
         tls_acceptor,
         delegate_client,
         active_connections: Arc::new(AtomicU64::new(0)),
+        connection_semaphore,
+        dns_cache,
+        metrics,
     });
 
     // Shutdown signal channel

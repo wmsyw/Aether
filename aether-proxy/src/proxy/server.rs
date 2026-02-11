@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
@@ -11,6 +12,7 @@ use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::proxy::{connect, delegate, tls, BoxBody};
@@ -39,6 +41,8 @@ pub async fn run(
         info!(addr = %addr, "proxy server listening (HTTP only)");
     }
 
+    let handshake_timeout = Duration::from_secs(state.config.tls_handshake_timeout_secs);
+
     loop {
         tokio::select! {
             result = listener.accept() => {
@@ -52,15 +56,38 @@ pub async fn run(
 
                 debug!(peer = %peer_addr, "new connection");
 
+                if let Err(e) = stream.set_nodelay(true) {
+                    debug!(peer = %peer_addr, error = %e, "failed to set TCP_NODELAY");
+                }
+
+                let permit = match state.connection_semaphore.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        warn!(peer = %peer_addr, "connection rejected: limit reached");
+                        continue;
+                    }
+                };
+
                 let state = Arc::clone(state);
                 state.active_connections.fetch_add(1, Ordering::Relaxed);
 
                 tokio::task::spawn(async move {
+                    let _permit = permit;
+
                     // Dual-stack: peek first byte to decide TLS vs plain HTTP
                     if let Some(ref acceptor) = state.tls_acceptor {
-                        if tls::is_tls_client_hello(&stream).await {
-                            match acceptor.clone().accept(stream).await {
-                                Ok(tls_stream) => {
+                        let is_tls = match timeout(handshake_timeout, tls::is_tls_client_hello(&stream)).await {
+                            Ok(v) => v,
+                            Err(_) => {
+                                debug!(peer = %peer_addr, "TLS detection timeout");
+                                state.active_connections.fetch_sub(1, Ordering::Relaxed);
+                                return;
+                            }
+                        };
+
+                        if is_tls {
+                            match timeout(handshake_timeout, acceptor.clone().accept(stream)).await {
+                                Ok(Ok(tls_stream)) => {
                                     debug!(peer = %peer_addr, "TLS handshake ok");
                                     serve_connection(
                                         TokioIo::new(tls_stream),
@@ -69,8 +96,11 @@ pub async fn run(
                                     )
                                     .await;
                                 }
-                                Err(e) => {
+                                Ok(Err(e)) => {
                                     debug!(peer = %peer_addr, error = %e, "TLS handshake failed");
+                                }
+                                Err(_) => {
+                                    debug!(peer = %peer_addr, "TLS handshake timeout");
                                 }
                             }
                             state.active_connections.fetch_sub(1, Ordering::Relaxed);
@@ -107,13 +137,18 @@ where
     let config = Arc::clone(&state.config);
     let dynamic = Arc::clone(&state.dynamic);
     let delegate_client = state.delegate_client.clone();
+    let dns_cache = Arc::clone(&state.dns_cache);
+    let metrics = Arc::clone(&state.metrics);
 
     let service = service_fn(move |req: Request<Incoming>| {
         let config = Arc::clone(&config);
         let dynamic = Arc::clone(&dynamic);
         let delegate_client = delegate_client.clone();
+        let dns_cache = Arc::clone(&dns_cache);
+        let metrics = Arc::clone(&metrics);
 
         async move {
+            let start = Instant::now();
             // Snapshot current dynamic values (may be updated by remote config)
             let (allowed_ports, timestamp_tolerance) = {
                 let d = dynamic.read().unwrap();
@@ -121,13 +156,20 @@ where
             };
 
             if req.method() == Method::CONNECT {
-                let resp =
-                    connect::handle_connect(req, config, &allowed_ports, timestamp_tolerance).await;
+                let resp = connect::handle_connect(
+                    req,
+                    config,
+                    &allowed_ports,
+                    timestamp_tolerance,
+                    dns_cache.as_ref(),
+                )
+                .await;
                 let resp = resp.map(|_| -> BoxBody {
                     http_body_util::Empty::new()
                         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { match e {} })
                         .boxed()
                 });
+                metrics.record_request(start.elapsed());
                 Ok::<_, hyper::Error>(resp)
             } else if req.uri().path() == "/_aether/delegate" && req.method() == hyper::Method::POST
             {
@@ -136,19 +178,23 @@ where
                     config,
                     &allowed_ports,
                     timestamp_tolerance,
+                    dns_cache.as_ref(),
                     &delegate_client,
                 )
                 .await;
+                metrics.record_request(start.elapsed());
                 Ok(resp)
             } else {
                 // Only CONNECT tunnels and /_aether/delegate are supported;
                 // plain HTTP forward proxy was removed (all API traffic is HTTPS).
-                Ok(Response::builder()
+                let resp = Response::builder()
                     .status(405)
                     .header("Allow", "CONNECT")
                     .header("Content-Length", "0")
                     .body(crate::proxy::empty_box_body())
-                    .unwrap())
+                    .unwrap();
+                metrics.record_request(start.elapsed());
+                Ok(resp)
             }
         }
     });

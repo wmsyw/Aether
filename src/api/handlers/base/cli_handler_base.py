@@ -43,7 +43,11 @@ from src.api.handlers.base.request_builder import PassthroughRequestBuilder, get
 from src.api.handlers.base.response_parser import (
     ResponseParser,
 )
-from src.api.handlers.base.stream_context import StreamContext, is_format_converted
+from src.api.handlers.base.stream_context import (
+    StreamContext,
+    extract_proxy_timing,
+    is_format_converted,
+)
 from src.api.handlers.base.upstream_stream_bridge import (
     aggregate_upstream_stream_to_internal_response,
 )
@@ -90,7 +94,7 @@ from src.utils.sse_parser import SSEEventParser
 from src.utils.timeout import read_first_chunk_with_ttfb_timeout
 
 # ==============================================================================
-# SSE 行解析辅助函数
+# 辅助函数
 # ==============================================================================
 
 
@@ -946,6 +950,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             ctx.status_code = resp.status_code
             ctx.response_headers = dict(resp.headers)
+            ctx.set_proxy_timing(ctx.response_headers)
             if envelope:
                 envelope.on_http_status(base_url=ctx.selected_base_url, status_code=ctx.status_code)
 
@@ -978,6 +983,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
                     ctx.status_code = resp.status_code
                     ctx.response_headers = dict(resp.headers)
+                    ctx.set_proxy_timing(ctx.response_headers)
                     if envelope:
                         envelope.on_http_status(
                             base_url=ctx.selected_base_url, status_code=ctx.status_code
@@ -1142,6 +1148,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             ctx.status_code = stream_response.status_code
             ctx.response_headers = dict(stream_response.headers)
+            ctx.set_proxy_timing(ctx.response_headers)
 
             logger.debug(f"  └─ 收到响应: status={stream_response.status_code}")
 
@@ -3079,6 +3086,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
                         status_code = stream_resp.status_code
                         response_headers = dict(stream_resp.headers)
+                        extract_proxy_timing(sync_proxy_info, response_headers)
 
                         if envelope:
                             envelope.on_http_status(
@@ -3131,6 +3139,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             status_code = resp.status_code
             response_headers = dict(resp.headers)
+            extract_proxy_timing(sync_proxy_info, response_headers)
 
             if envelope:
                 envelope.on_http_status(base_url=selected_base_url_cached, status_code=status_code)

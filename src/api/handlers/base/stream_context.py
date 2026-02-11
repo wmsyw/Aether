@@ -10,12 +10,28 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.core.api_format.conversion.stream_state import StreamState
+
+
+def extract_proxy_timing(proxy_info: dict[str, Any] | None, headers: dict[str, str]) -> None:
+    """从响应头中提取代理分阶段耗时（X-Proxy-Timing）写入 proxy_info"""
+    if proxy_info is None:
+        return
+    timing_raw = headers.get("x-proxy-timing")
+    if not timing_raw:
+        return
+    try:
+        timing = json.loads(timing_raw)
+        if isinstance(timing, dict):
+            proxy_info["timing"] = timing
+    except (json.JSONDecodeError, TypeError):
+        pass
 
 
 def is_format_converted(
@@ -271,6 +287,10 @@ class StreamContext:
         """将首字节响应耗时（TTFB）注入到 proxy_info 中"""
         if self.proxy_info is not None:
             self.proxy_info["ttfb_ms"] = ms
+
+    def set_proxy_timing(self, headers: dict[str, str]) -> None:
+        """从代理响应头中提取分阶段耗时信息（X-Proxy-Timing）"""
+        extract_proxy_timing(self.proxy_info, headers)
 
     def build_response_body(self, response_time_ms: int) -> dict[str, Any]:
         """

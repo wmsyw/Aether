@@ -61,6 +61,26 @@ sudo aether-proxy uninstall
 | `--heartbeat-interval` | `AETHER_PROXY_HEARTBEAT_INTERVAL` | `30` | 心跳间隔（秒） |
 | `--allowed-ports` | `AETHER_PROXY_ALLOWED_PORTS` | `80,443,8080,8443` | 允许代理的目标端口 |
 | `--timestamp-tolerance` | `AETHER_PROXY_TIMESTAMP_TOLERANCE` | `300` | HMAC 时间戳容差（秒） |
+| `--aether-request-timeout` | `AETHER_PROXY_AETHER_REQUEST_TIMEOUT` | `10` | Aether API 请求总超时（秒） |
+| `--aether-connect-timeout` | `AETHER_PROXY_AETHER_CONNECT_TIMEOUT` | `10` | Aether API 建连超时（秒） |
+| `--aether-pool-max-idle-per-host` | `AETHER_PROXY_AETHER_POOL_MAX_IDLE_PER_HOST` | `8` | Aether API 每 Host 最大空闲连接数 |
+| `--aether-pool-idle-timeout` | `AETHER_PROXY_AETHER_POOL_IDLE_TIMEOUT` | `90` | Aether API 连接池空闲超时（秒） |
+| `--aether-tcp-keepalive` | `AETHER_PROXY_AETHER_TCP_KEEPALIVE` | `60` | Aether API TCP keepalive（秒，0 关闭） |
+| `--aether-tcp-nodelay` | `AETHER_PROXY_AETHER_TCP_NODELAY` | `true` | Aether API 启用 TCP_NODELAY |
+| `--aether-http2` | `AETHER_PROXY_AETHER_HTTP2` | `true` | Aether API 启用 HTTP/2 |
+| `--aether-retry-max-attempts` | `AETHER_PROXY_AETHER_RETRY_MAX_ATTEMPTS` | `3` | Aether API 最大重试次数（含首次） |
+| `--aether-retry-base-delay-ms` | `AETHER_PROXY_AETHER_RETRY_BASE_DELAY_MS` | `200` | Aether API 重试基础延迟（毫秒） |
+| `--aether-retry-max-delay-ms` | `AETHER_PROXY_AETHER_RETRY_MAX_DELAY_MS` | `2000` | Aether API 重试最大延迟（毫秒） |
+| `--max-concurrent-connections` | `AETHER_PROXY_MAX_CONCURRENT_CONNECTIONS` | 自动估算 | 最大并发连接数（默认硬件估算） |
+| `--connect-timeout` | `AETHER_PROXY_CONNECT_TIMEOUT` | `30` | CONNECT 上游建连超时（秒） |
+| `--tls-handshake-timeout` | `AETHER_PROXY_TLS_HANDSHAKE_TIMEOUT` | `10` | TLS 握手超时（秒） |
+| `--dns-cache-ttl` | `AETHER_PROXY_DNS_CACHE_TTL` | `60` | DNS 缓存 TTL（秒） |
+| `--dns-cache-capacity` | `AETHER_PROXY_DNS_CACHE_CAPACITY` | `1024` | DNS 缓存容量（条目数） |
+| `--delegate-connect-timeout` | `AETHER_PROXY_DELEGATE_CONNECT_TIMEOUT` | `30` | delegate 上游建连超时（秒） |
+| `--delegate-pool-max-idle-per-host` | `AETHER_PROXY_DELEGATE_POOL_MAX_IDLE_PER_HOST` | `64` | delegate 每 Host 最大空闲连接数 |
+| `--delegate-pool-idle-timeout` | `AETHER_PROXY_DELEGATE_POOL_IDLE_TIMEOUT` | `300` | delegate 连接池空闲超时（秒） |
+| `--delegate-tcp-keepalive` | `AETHER_PROXY_DELEGATE_TCP_KEEPALIVE` | `60` | delegate TCP keepalive（秒，0 关闭） |
+| `--delegate-tcp-nodelay` | `AETHER_PROXY_DELEGATE_TCP_NODELAY` | `true` | delegate 启用 TCP_NODELAY |
 | `--log-level` | `AETHER_PROXY_LOG_LEVEL` | `info` | 日志级别 |
 | `--log-json` | `AETHER_PROXY_LOG_JSON` | `false` | JSON 格式日志 |
 | `--enable-tls` | `AETHER_PROXY_ENABLE_TLS` | `true` | 启用 TLS |
