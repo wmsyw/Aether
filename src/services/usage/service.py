@@ -1450,7 +1450,17 @@ class UsageService:
 
         if request_ids:
             # 查询已存在的 Usage 记录（包括 pending/streaming 状态）
-            existing_records = db.query(Usage).filter(Usage.request_id.in_(request_ids)).all()
+            from sqlalchemy.orm import selectinload
+
+            existing_records = (
+                db.query(Usage)
+                .options(
+                    selectinload(Usage.user),
+                    selectinload(Usage.api_key),
+                )
+                .filter(Usage.request_id.in_(request_ids))
+                .all()
+            )
             existing_usages = {u.request_id: u for u in existing_records}
 
             for record in records:
@@ -1643,7 +1653,10 @@ class UsageService:
                 logger.warning("批量记录中更新失败: {}, request_id={}", e, request_id)
                 continue
 
-        # 2. 处理需要新建的记录
+        # 2. 处理需要新建的记录（批量插入）
+        insert_mappings: list[dict[str, Any]] = []
+        insert_request_ids: list[str] = []
+
         for i, (record, request_id, params) in enumerate(insert_params_list):
             try:
                 usage_params, total_cost, exc = insert_results[i]
@@ -1653,16 +1666,17 @@ class UsageService:
                 user = params.user
                 api_key = params.api_key
 
-                # 创建 Usage 记录
-                usage = Usage(**usage_params)
-                # 新建记录默认 billing_status=settled，但补齐 finalized_at，便于审计与幂等判断
-                if usage_params.get("status") in terminal_statuses:
-                    if getattr(usage, "billing_status", None) in (None, "pending"):
-                        usage.billing_status = "settled"
-                    if getattr(usage, "finalized_at", None) is None:
-                        usage.finalized_at = finalized_at
-                db.add(usage)
-                usages.append(usage)
+                # 终态记录：补齐 settled/finalized_at；非终态：确保 billing_status=pending
+                status = usage_params.get("status")
+                if status in terminal_statuses:
+                    if usage_params.get("billing_status") in (None, "pending"):
+                        usage_params["billing_status"] = "settled"
+                    usage_params.setdefault("finalized_at", finalized_at)
+                elif usage_params.get("billing_status") is None:
+                    usage_params["billing_status"] = "pending"
+
+                insert_mappings.append(usage_params)
+                insert_request_ids.append(request_id)
 
                 # 聚合统计
                 model_name = record.get("model") or "unknown"
@@ -1688,6 +1702,24 @@ class UsageService:
                 skipped_count += 1
                 logger.warning("批量记录中跳过无效记录: {}, request_id={}", e, request_id)
                 continue
+
+        if insert_mappings:
+            try:
+                db.bulk_insert_mappings(Usage, insert_mappings)
+
+                # 仅用于保持返回值语义：将新建记录读回为 ORM 对象
+                inserted_records = (
+                    db.query(Usage).filter(Usage.request_id.in_(insert_request_ids)).all()
+                )
+                inserted_map = {u.request_id: u for u in inserted_records}
+                for rid in insert_request_ids:
+                    inserted_usage = inserted_map.get(rid)
+                    if inserted_usage is not None:
+                        usages.append(inserted_usage)
+            except Exception as e:
+                logger.error("批量插入 Usage 记录时出错: {}", e)
+                db.rollback()
+                raise
 
         # 统计跳过的记录，失败率超过 10% 时提升日志级别
         if skipped_count > 0:
@@ -1763,13 +1795,14 @@ class UsageService:
         # 单次提交所有更改
         try:
             db.commit()
-            inserted_count = len(usages) - updated_count
+            inserted_count = len(insert_mappings)
+            total_written = updated_count + inserted_count
             if updated_count > 0:
-                logger.debug(f"批量记录成功: 更新 {updated_count} 条, 新建 {inserted_count} 条")
+                logger.debug("批量记录成功: 更新 {} 条, 新建 {} 条", updated_count, inserted_count)
             else:
-                logger.debug(f"批量记录 {len(usages)} 条使用记录成功")
+                logger.debug("批量记录 {} 条使用记录成功", total_written)
         except Exception as e:
-            logger.error(f"批量提交使用记录时出错: {e}")
+            logger.error("批量提交使用记录时出错: {}", e)
             db.rollback()
             raise
 

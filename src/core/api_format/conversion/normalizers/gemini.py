@@ -692,10 +692,18 @@ class GeminiNormalizer(FormatNormalizer):
                     # 关闭前面的 thinking/text block（如果还开着）
                     if ss.get("thinking_block_started") and not ss.get("thinking_block_stopped"):
                         ss["thinking_block_stopped"] = True
-                        events.append(ContentBlockStopEvent(block_index=_reserve_block_index("thinking_block_index")))
+                        events.append(
+                            ContentBlockStopEvent(
+                                block_index=_reserve_block_index("thinking_block_index")
+                            )
+                        )
                     if ss.get("text_block_started") and not ss.get("text_block_stopped"):
                         ss["text_block_stopped"] = True
-                        events.append(ContentBlockStopEvent(block_index=_reserve_block_index("text_block_index")))
+                        events.append(
+                            ContentBlockStopEvent(
+                                block_index=_reserve_block_index("text_block_index")
+                            )
+                        )
 
                     name = str(func_call.get("name") or "")
                     args = func_call.get("args")
@@ -766,10 +774,14 @@ class GeminiNormalizer(FormatNormalizer):
             # 先补齐 content_block_stop（所有已开启的 block），再发送 MessageStop
             if ss.get("thinking_block_started") and not ss.get("thinking_block_stopped"):
                 ss["thinking_block_stopped"] = True
-                events.append(ContentBlockStopEvent(block_index=_reserve_block_index("thinking_block_index")))
+                events.append(
+                    ContentBlockStopEvent(block_index=_reserve_block_index("thinking_block_index"))
+                )
             if ss.get("text_block_started") and not ss.get("text_block_stopped"):
                 ss["text_block_stopped"] = True
-                events.append(ContentBlockStopEvent(block_index=_reserve_block_index("text_block_index")))
+                events.append(
+                    ContentBlockStopEvent(block_index=_reserve_block_index("text_block_index"))
+                )
             events.append(MessageStopEvent(stop_reason=stop_reason, usage=usage_info))
 
         if "error" in chunk:
