@@ -168,6 +168,12 @@ class YesCodeBalanceAction(BalanceAction):
     display_name = "查询余额（含每周限额）"
     description = "查询账户余额和每周限额信息"
 
+    _cookie_auth = True
+
+    def _parse_balance(self, data: Any) -> BalanceInfo:
+        """YesCode 不使用基类的 _do_query_balance，此方法不会被调用"""
+        raise NotImplementedError("YesCode 使用自定义 _do_query_balance")
+
     async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
         """执行余额查询（实现抽象方法，复用 client 调用两个接口获取完整数据）"""
         import time

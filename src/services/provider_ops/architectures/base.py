@@ -241,6 +241,9 @@ class ProviderArchitecture(ABC):
     display_name: str = ""
     description: str = ""
 
+    # 设为 True 时不在架构列表 API 中返回（内部使用的架构）
+    hidden: bool = False
+
     # 支持的 Connector 类型列表（按优先级排序）
     supported_connectors: list[type[ProviderConnector]] = []
 
@@ -259,7 +262,7 @@ class ProviderArchitecture(ABC):
         """
         self.config = config or {}
 
-    # ==================== 认证验证相关方法（子类必须实现） ====================
+    # ==================== 认证验证相关方法 ====================
 
     @abstractmethod
     def get_credentials_schema(self) -> dict[str, Any]:
@@ -267,26 +270,9 @@ class ProviderArchitecture(ABC):
         获取凭据字段定义（JSON Schema 格式）
 
         子类必须实现此方法定义需要的凭据字段。
-        这个 schema 可用于：
-        1. 前端表单生成（如果需要动态渲染）
-        2. 凭据验证
-        3. 文档生成
 
         Returns:
             JSON Schema 格式的字段定义
-
-        Example:
-            {
-                "type": "object",
-                "properties": {
-                    "api_key": {
-                        "type": "string",
-                        "title": "API Key",
-                        "description": "访问令牌",
-                    },
-                },
-                "required": ["api_key"],
-            }
         """
         pass
 
@@ -322,7 +308,6 @@ class ProviderArchitecture(ABC):
         """
         pass
 
-    @abstractmethod
     def parse_verify_response(
         self,
         status_code: int,
@@ -331,7 +316,8 @@ class ProviderArchitecture(ABC):
         """
         解析认证验证响应
 
-        子类必须实现此方法解析响应。
+        默认实现处理通用的 {"success": bool, "data": {...}} 格式。
+        子类可重写 _auth_fail_message() 和 _build_verify_result() 进行自定义。
 
         Args:
             status_code: HTTP 状态码
@@ -340,7 +326,61 @@ class ProviderArchitecture(ABC):
         Returns:
             验证结果
         """
-        pass
+        if status_code == 401:
+            return VerifyResult(success=False, message=self._auth_fail_message(401))
+        if status_code == 403:
+            return VerifyResult(success=False, message=self._auth_fail_message(403))
+        if status_code != 200:
+            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
+
+        # 解析通用响应格式
+        if data.get("success") is True and "data" in data:
+            user_data = data["data"]
+        elif data.get("success") is False:
+            message = data.get("message", "验证失败")
+            return VerifyResult(success=False, message=message)
+        else:
+            user_data = data
+
+        return self._build_verify_result(user_data, data)
+
+    def _auth_fail_message(self, status_code: int) -> str:
+        """
+        获取认证失败消息
+
+        子类可重写以提供自定义消息（如 Cookie 认证场景）。
+        """
+        if status_code == 401:
+            return "认证失败：无效的凭据"
+        return "认证失败：权限不足"
+
+    def _build_verify_result(
+        self, user_data: dict[str, Any], raw_data: dict[str, Any] | None = None
+    ) -> VerifyResult:
+        """
+        从用户数据构建验证结果
+
+        默认实现提取 username, display_name, email, quota, used_quota, request_count。
+        子类可重写以自定义字段提取。
+        """
+        known_fields = (
+            "username",
+            "display_name",
+            "email",
+            "quota",
+            "used_quota",
+            "request_count",
+        )
+        return VerifyResult(
+            success=True,
+            username=user_data.get("username"),
+            display_name=user_data.get("display_name") or user_data.get("username"),
+            email=user_data.get("email"),
+            quota=user_data.get("quota"),
+            used_quota=user_data.get("used_quota"),
+            request_count=user_data.get("request_count"),
+            extra={k: v for k, v in user_data.items() if k not in known_fields},
+        )
 
     # ==================== 可选的钩子方法 ====================
 

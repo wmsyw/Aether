@@ -17,32 +17,8 @@ from src.services.provider_ops.architectures.base import (
     VerifyResult,
 )
 from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
+from src.services.provider_ops.utils import extract_cookie_value
 from src.utils.ssl_utils import get_ssl_context
-
-
-def _extract_session_from_cookie(cookie_string: str) -> str:
-    """
-    从完整的 Cookie 字符串中提取 session 值
-
-    支持两种输入格式：
-    1. 完整 Cookie: "session=xxx; other=xxx; ..."
-    2. 仅 session 值: "MTc2OTYx..."
-
-    Args:
-        cookie_string: Cookie 字符串或 session 值
-
-    Returns:
-        session cookie 的值
-    """
-    # 如果包含 "session="，说明是完整 Cookie 字符串
-    if "session=" in cookie_string:
-        # 解析 Cookie 字符串
-        for part in cookie_string.split(";"):
-            part = part.strip()
-            if part.startswith("session="):
-                return part[8:]  # 去掉 "session=" 前缀
-    # 否则认为直接是 session 值
-    return cookie_string.strip()
 
 
 class NekoCodeConnector(ProviderConnector):
@@ -68,7 +44,7 @@ class NekoCodeConnector(ProviderConnector):
             return False
 
         # 提取纯 session 值（支持完整 Cookie 字符串或仅 session 值）
-        self._session_cookie = _extract_session_from_cookie(session_cookie)
+        self._session_cookie = extract_cookie_value(session_cookie, "session")
 
         self._set_connected()
         return True
@@ -95,13 +71,50 @@ class NekoCodeConnector(ProviderConnector):
         return {
             "type": "object",
             "properties": {
+                "base_url": {
+                    "type": "string",
+                    "title": "站点地址",
+                    "description": "API 基础地址",
+                    "x-default-value": "https://nekocode.ai",
+                },
                 "session_cookie": {
                     "type": "string",
                     "title": "Session Cookie",
                     "description": "从浏览器复制的 session Cookie 值",
+                    "x-sensitive": True,
+                    "x-input-type": "password",
                 },
             },
             "required": ["session_cookie"],
+            "x-field-groups": [
+                {"fields": ["base_url"]},
+                {"fields": ["session_cookie"]},
+            ],
+            "x-auth-type": "cookie",
+            "x-default-base-url": "https://nekocode.ai",
+            "x-validation": [
+                {
+                    "type": "required",
+                    "fields": ["session_cookie"],
+                    "message": "请填写 Session Cookie",
+                },
+            ],
+            "x-quota-divisor": None,
+            "x-currency": "USD",
+            "x-balance-extra-format": [
+                {
+                    "label": "天",
+                    "type": "daily_quota",
+                    "source_limit": "daily_quota_limit",
+                    "source_remaining": "daily_remaining_quota",
+                    "source_start_date": "effective_start_date",
+                },
+                {
+                    "label": "月",
+                    "type": "monthly_expiry",
+                    "source_end_date": "effective_end_date",
+                },
+            ],
         }
 
 
@@ -172,7 +185,7 @@ class NekoCodeArchitecture(ProviderArchitecture):
             # 添加 Cookie
             cookie_input = credentials.get("session_cookie")
             if cookie_input:
-                session_value = _extract_session_from_cookie(cookie_input)
+                session_value = extract_cookie_value(cookie_input, "session")
                 headers["Cookie"] = f"session={session_value}"
 
             # 构建 client 参数
@@ -218,31 +231,21 @@ class NekoCodeArchitecture(ProviderArchitecture):
         cookie_input = credentials.get("session_cookie")
         if cookie_input:
             # 提取 session 值（支持完整 Cookie 字符串或仅 session 值）
-            session_value = _extract_session_from_cookie(cookie_input)
+            session_value = extract_cookie_value(cookie_input, "session")
             headers["Cookie"] = f"session={session_value}"
 
         return headers
 
-    def parse_verify_response(
-        self,
-        status_code: int,
-        data: dict[str, Any],
-    ) -> VerifyResult:
-        """解析 NekoCode 验证响应（/api/user/self + _usage_summary）"""
+    def _auth_fail_message(self, status_code: int) -> str:
+        """Cookie 认证的错误消息"""
         if status_code == 401:
-            return VerifyResult(success=False, message="Cookie 已失效，请重新配置")
-        if status_code == 403:
-            return VerifyResult(success=False, message="Cookie 已失效或无权限")
-        if status_code != 200:
-            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
+            return "Cookie 已失效，请重新配置"
+        return "Cookie 已失效或无权限"
 
-        # NekoCode 响应格式: {"success": true, "data": {...}}
-        if not data.get("success"):
-            message = data.get("message", "验证失败")
-            return VerifyResult(success=False, message=message)
-
-        user_data = data.get("data", {})
-
+    def _build_verify_result(
+        self, user_data: dict[str, Any], raw_data: dict[str, Any] | None = None
+    ) -> VerifyResult:
+        """NekoCode 自定义字段提取（合并 _usage_summary 天卡数据）"""
         # 转换余额字符串为数字
         balance = user_data.get("balance")
         try:
@@ -252,11 +255,10 @@ class NekoCodeArchitecture(ProviderArchitecture):
 
         # 从 prepare_verify_config 获取的 _usage_summary 数据（天卡信息）
         extra: dict[str, Any] = {}
-        usage_summary = data.get("_usage_summary", {})
+        usage_summary = (raw_data or {}).get("_usage_summary", {})
         subscription = usage_summary.get("subscription", {})
 
         if subscription:
-            # 转换字符串为数字
             daily_limit = subscription.get("daily_quota_limit")
             daily_remaining = subscription.get("daily_remaining_quota")
             try:

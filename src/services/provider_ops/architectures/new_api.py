@@ -15,7 +15,6 @@ from src.services.provider_ops.actions import (
 from src.services.provider_ops.architectures.base import (
     ProviderArchitecture,
     ProviderConnector,
-    VerifyResult,
 )
 from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
 
@@ -90,10 +89,17 @@ class NewApiConnector(ProviderConnector):
         return {
             "type": "object",
             "properties": {
+                "base_url": {
+                    "type": "string",
+                    "title": "站点地址",
+                    "description": "API 基础地址",
+                },
                 "api_key": {
                     "type": "string",
                     "title": "访问令牌 (API Key)",
                     "description": "New API 的访问令牌，与 Cookie 二选一",
+                    "x-sensitive": True,
+                    "x-input-type": "password",
                 },
                 "user_id": {
                     "type": "string",
@@ -104,9 +110,47 @@ class NewApiConnector(ProviderConnector):
                     "type": "string",
                     "title": "Cookie",
                     "description": "用于 Cookie 认证，与访问令牌二选一",
+                    "x-sensitive": True,
+                    "x-input-type": "password",
                 },
             },
             "required": [],
+            "x-field-groups": [
+                {"fields": ["base_url"]},
+                {
+                    "fields": ["cookie"],
+                    "x-help": "从浏览器开发者工具复制完整 Cookie",
+                },
+                {
+                    "layout": "inline",
+                    "fields": ["api_key", "user_id"],
+                    "x-flex": {"api_key": 3, "user_id": 1},
+                },
+            ],
+            "x-auth-type": "api_key",
+            "x-auth-method": "bearer",
+            "x-validation": [
+                {
+                    "type": "any_required",
+                    "fields": ["api_key", "cookie"],
+                    "message": "访问令牌和 Cookie 至少需要填写一个",
+                },
+                {
+                    "type": "conditional_required",
+                    "if": "api_key",
+                    "unless": "cookie",
+                    "then": ["user_id"],
+                    "message": "使用访问令牌时，用户 ID 不能为空",
+                },
+            ],
+            "x-quota-divisor": 500000,
+            "x-currency": "USD",
+            "x-field-hooks": {
+                "cookie": {
+                    "action": "parse_new_api_user_id",
+                    "target": "user_id",
+                },
+            },
         }
 
 
@@ -180,48 +224,3 @@ class NewApiArchitecture(ProviderArchitecture):
             headers["Cookie"] = cookie
 
         return headers
-
-    def parse_verify_response(
-        self,
-        status_code: int,
-        data: dict[str, Any],
-    ) -> VerifyResult:
-        """解析 New API 验证响应"""
-        if status_code == 401:
-            return VerifyResult(success=False, message="认证失败：无效的凭据")
-        if status_code == 403:
-            return VerifyResult(success=False, message="认证失败：权限不足")
-        if status_code != 200:
-            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
-
-        # New API 响应格式: {"success": true, "data": {...}}
-        if data.get("success") is True and "data" in data:
-            user_data = data["data"]
-        elif data.get("success") is False:
-            message = data.get("message", "验证失败")
-            return VerifyResult(success=False, message=message)
-        else:
-            user_data = data
-
-        return VerifyResult(
-            success=True,
-            username=user_data.get("username"),
-            display_name=user_data.get("display_name") or user_data.get("username"),
-            email=user_data.get("email"),
-            quota=user_data.get("quota"),
-            used_quota=user_data.get("used_quota"),
-            request_count=user_data.get("request_count"),
-            extra={
-                k: v
-                for k, v in user_data.items()
-                if k
-                not in (
-                    "username",
-                    "display_name",
-                    "email",
-                    "quota",
-                    "used_quota",
-                    "request_count",
-                )
-            },
-        )

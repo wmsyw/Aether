@@ -45,6 +45,7 @@ export interface ArchitectureInfo {
   architecture_id: string
   display_name: string
   description: string
+  credentials_schema: Record<string, any>
   supported_auth_types: Array<{
     type: string
     display_name: string

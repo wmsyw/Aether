@@ -2,14 +2,13 @@
 New API 余额查询操作
 """
 
-import time
 from typing import Any
 
 import httpx
 
 from src.core.logger import logger
 from src.services.provider_ops.actions.balance import BalanceAction
-from src.services.provider_ops.types import ActionResult, ActionStatus, BalanceInfo
+from src.services.provider_ops.types import BalanceInfo
 
 
 class NewApiBalanceAction(BalanceAction):
@@ -24,66 +23,6 @@ class NewApiBalanceAction(BalanceAction):
 
     display_name = "查询余额"
     description = "查询 New API 账户余额信息"
-
-    async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
-        """执行余额查询（实现抽象方法）"""
-        endpoint = self.config.get("endpoint", "/api/user/self")
-        method = self.config.get("method", "GET")
-
-        start_time = time.time()
-
-        try:
-            response = await client.request(method, endpoint)
-            response_time_ms = int((time.time() - start_time) * 1000)
-
-            # 尝试解析 JSON
-            try:
-                data = response.json()
-            except Exception:
-                return self._make_error_result(
-                    ActionStatus.PARSE_ERROR,
-                    "响应不是有效的 JSON",
-                )
-
-            # 检查 HTTP 状态
-            if response.status_code != 200:
-                return self._handle_http_error(response, data)
-
-            # 检查业务状态码
-            if data.get("success") is False:
-                message = data.get("message", "业务状态码表示失败")
-                return self._make_error_result(
-                    ActionStatus.UNKNOWN_ERROR,
-                    message,
-                    raw_response=data,
-                )
-
-            # 解析余额信息
-            balance = self._parse_balance(data)
-
-            return self._make_success_result(
-                data=balance,
-                response_time_ms=response_time_ms,
-                raw_response=data,
-            )
-
-        except httpx.TimeoutException:
-            return self._make_error_result(
-                ActionStatus.NETWORK_ERROR,
-                "请求超时",
-                retry_after_seconds=30,
-            )
-        except httpx.RequestError as e:
-            return self._make_error_result(
-                ActionStatus.NETWORK_ERROR,
-                f"网络错误: {str(e)}",
-                retry_after_seconds=30,
-            )
-        except Exception as e:
-            return self._make_error_result(
-                ActionStatus.UNKNOWN_ERROR,
-                f"未知错误: {str(e)}",
-            )
 
     def _parse_balance(
         self,

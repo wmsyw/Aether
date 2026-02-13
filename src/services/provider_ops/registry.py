@@ -15,7 +15,6 @@ from src.services.provider_ops.architectures import (
     GenericApiArchitecture,
     NekoCodeArchitecture,
     NewApiArchitecture,
-    OneApiArchitecture,
     ProviderArchitecture,
     YesCodeArchitecture,
 )
@@ -58,7 +57,6 @@ class ArchitectureRegistry:
             GenericApiArchitecture,
             NekoCodeArchitecture,
             NewApiArchitecture,
-            OneApiArchitecture,
             YesCodeArchitecture,
         ]
 
@@ -133,8 +131,8 @@ class ArchitectureRegistry:
         return list(self._architectures.keys())
 
     def to_dict_list(self) -> list[dict]:
-        """获取所有架构的字典表示（用于 API 响应）"""
-        return [arch.to_dict() for arch in self._architectures.values()]
+        """获取所有架构的字典表示（用于 API 响应，隐藏 hidden 架构）"""
+        return [arch.to_dict() for arch in self._architectures.values() if not arch.hidden]
 
 
 # 全局注册表实例

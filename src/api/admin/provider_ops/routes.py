@@ -40,6 +40,7 @@ class ArchitectureInfo(BaseModel):
     architecture_id: str
     display_name: str
     description: str
+    credentials_schema: dict[str, Any]
     supported_auth_types: list[dict[str, str]]
     supported_actions: list[dict[str, Any]]
     default_connector: str | None

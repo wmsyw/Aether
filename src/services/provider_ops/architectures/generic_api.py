@@ -50,7 +50,6 @@ from src.services.provider_ops.actions import (
 from src.services.provider_ops.architectures.base import (
     ProviderArchitecture,
     ProviderConnector,
-    VerifyResult,
 )
 from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
 
@@ -112,13 +111,35 @@ class GenericApiKeyConnector(ProviderConnector):
         return {
             "type": "object",
             "properties": {
+                "base_url": {
+                    "type": "string",
+                    "title": "站点地址",
+                    "description": "API 基础地址",
+                },
                 "api_key": {
                     "type": "string",
                     "title": "API Key",
                     "description": "提供商的 API Key",
+                    "x-sensitive": True,
+                    "x-input-type": "password",
                 },
             },
             "required": ["api_key"],
+            "x-field-groups": [
+                {"fields": ["base_url"]},
+                {"fields": ["api_key"]},
+            ],
+            "x-auth-type": "api_key",
+            "x-auth-method": "bearer",
+            "x-validation": [
+                {
+                    "type": "required",
+                    "fields": ["api_key"],
+                    "message": "请填写 API Key",
+                },
+            ],
+            "x-quota-divisor": 500000,
+            "x-currency": "USD",
         }
 
 
@@ -135,6 +156,7 @@ class GenericApiArchitecture(ProviderArchitecture):
     architecture_id = "generic_api"
     display_name = "通用 API"
     description = "可配置的通用 API 架构，适用于各种中转站"
+    hidden = True
 
     supported_connectors: list[type[ProviderConnector]] = [
         GenericApiKeyConnector,
@@ -180,48 +202,3 @@ class GenericApiArchitecture(ProviderArchitecture):
                 headers[header_name] = api_key
 
         return headers
-
-    def parse_verify_response(
-        self,
-        status_code: int,
-        data: dict[str, Any],
-    ) -> VerifyResult:
-        """解析通用 API 验证响应"""
-        if status_code == 401:
-            return VerifyResult(success=False, message="认证失败：无效的凭据")
-        if status_code == 403:
-            return VerifyResult(success=False, message="认证失败：权限不足")
-        if status_code != 200:
-            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
-
-        # 尝试解析通用响应格式
-        if data.get("success") is True and "data" in data:
-            user_data = data["data"]
-        elif data.get("success") is False:
-            message = data.get("message", "验证失败")
-            return VerifyResult(success=False, message=message)
-        else:
-            user_data = data
-
-        return VerifyResult(
-            success=True,
-            username=user_data.get("username"),
-            display_name=user_data.get("display_name") or user_data.get("username"),
-            email=user_data.get("email"),
-            quota=user_data.get("quota"),
-            used_quota=user_data.get("used_quota"),
-            request_count=user_data.get("request_count"),
-            extra={
-                k: v
-                for k, v in user_data.items()
-                if k
-                not in (
-                    "username",
-                    "display_name",
-                    "email",
-                    "quota",
-                    "used_quota",
-                    "request_count",
-                )
-            },
-        )

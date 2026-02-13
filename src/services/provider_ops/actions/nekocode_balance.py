@@ -2,15 +2,12 @@
 NekoCode 余额查询操作
 """
 
-import time
 from datetime import datetime
 from typing import Any
 
-import httpx
-
 from src.core.logger import logger
 from src.services.provider_ops.actions.balance import BalanceAction
-from src.services.provider_ops.types import ActionResult, ActionStatus, BalanceInfo
+from src.services.provider_ops.types import BalanceInfo
 
 
 class NekoCodeBalanceAction(BalanceAction):
@@ -27,61 +24,7 @@ class NekoCodeBalanceAction(BalanceAction):
     display_name = "查询余额"
     description = "查询 NekoCode 账户余额和订阅信息"
 
-    async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
-        """执行余额查询"""
-        endpoint = self.config.get("endpoint", "/api/usage/summary")
-        method = self.config.get("method", "GET")
-
-        start_time = time.time()
-
-        try:
-            response = await client.request(method, endpoint)
-            response_time_ms = int((time.time() - start_time) * 1000)
-
-            try:
-                data = response.json()
-            except Exception:
-                return self._make_error_result(
-                    ActionStatus.PARSE_ERROR,
-                    "响应不是有效的 JSON",
-                )
-
-            if response.status_code != 200:
-                return self._handle_http_error(response, data)
-
-            if data.get("success") is False:
-                message = data.get("message", "业务状态码表示失败")
-                return self._make_error_result(
-                    ActionStatus.UNKNOWN_ERROR,
-                    message,
-                    raw_response=data,
-                )
-
-            balance = self._parse_balance(data)
-
-            return self._make_success_result(
-                data=balance,
-                response_time_ms=response_time_ms,
-                raw_response=data,
-            )
-
-        except httpx.TimeoutException:
-            return self._make_error_result(
-                ActionStatus.NETWORK_ERROR,
-                "请求超时",
-                retry_after_seconds=30,
-            )
-        except httpx.RequestError as e:
-            return self._make_error_result(
-                ActionStatus.NETWORK_ERROR,
-                f"网络错误: {str(e)}",
-                retry_after_seconds=30,
-            )
-        except Exception as e:
-            return self._make_error_result(
-                ActionStatus.UNKNOWN_ERROR,
-                f"未知错误: {str(e)}",
-            )
+    _cookie_auth = True
 
     def _parse_balance(self, data: Any) -> BalanceInfo:
         """解析余额信息"""
@@ -159,23 +102,6 @@ class NekoCodeBalanceAction(BalanceAction):
             currency="USD",  # NekoCode 使用美元单位
             extra=extra,
         )
-
-    def _handle_http_error(
-        self, response: httpx.Response, raw_data: dict[str, Any] | None = None
-    ) -> ActionResult:
-        """处理 HTTP 错误响应"""
-        status_code = response.status_code
-
-        if status_code == 401:
-            return self._make_error_result(
-                ActionStatus.AUTH_FAILED, "Cookie 已失效，请重新配置", raw_response=raw_data
-            )
-        elif status_code == 403:
-            return self._make_error_result(
-                ActionStatus.AUTH_FAILED, "Cookie 已失效或无权限", raw_response=raw_data
-            )
-
-        return super()._handle_http_error(response, raw_data)
 
     @classmethod
     def get_config_schema(cls) -> dict[str, Any]:

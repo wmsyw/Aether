@@ -2,6 +2,7 @@
 余额查询操作抽象基类
 """
 
+import time
 from abc import abstractmethod
 from typing import Any
 
@@ -20,14 +21,20 @@ class BalanceAction(ProviderAction):
     """
     余额查询操作抽象基类
 
-    子类必须实现 _do_query_balance() 方法来处理特定平台的余额查询逻辑。
-    子类可选实现 _do_checkin() 方法来在查询余额前执行签到。
+    子类必须实现 _parse_balance() 方法来处理特定平台的余额解析逻辑。
+    子类可选重写 _do_query_balance() 或 _do_checkin() 进行自定义。
+
+    如果子类使用 Cookie 认证，设置 _cookie_auth = True 可让 401/403 错误
+    显示 "Cookie 已失效" 而非 "认证失败"。
     """
 
     action_type = ProviderActionType.QUERY_BALANCE
     display_name = "查询余额"
     description = "查询账户余额信息"
     default_cache_ttl = 86400  # 24 小时
+
+    # 子类设为 True 即可在 401/403 时显示 "Cookie 已失效" 消息
+    _cookie_auth: bool = False
 
     async def execute(self, client: httpx.AsyncClient) -> ActionResult:
         """
@@ -67,10 +74,13 @@ class BalanceAction(ProviderAction):
 
         return result
 
-    @abstractmethod
     async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
         """
-        执行余额查询（子类必须实现）
+        执行余额查询
+
+        默认实现处理通用的请求/响应/错误处理流程。
+        子类只需实现 _parse_balance() 即可。
+        如果查询逻辑不同（如并发调用多个接口），子类可重写此方法。
 
         Args:
             client: 已认证的 HTTP 客户端
@@ -78,7 +88,108 @@ class BalanceAction(ProviderAction):
         Returns:
             ActionResult，其中 data 字段为 BalanceInfo
         """
+        endpoint = self.config.get("endpoint", "/api/user/self")
+        method = self.config.get("method", "GET")
+
+        start_time = time.time()
+
+        try:
+            response = await client.request(method, endpoint)
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            try:
+                data = response.json()
+            except Exception:
+                return self._make_error_result(
+                    ActionStatus.PARSE_ERROR,
+                    "响应不是有效的 JSON",
+                )
+
+            if response.status_code != 200:
+                return self._handle_http_error(response, data)
+
+            if data.get("success") is False:
+                message = data.get("message", "业务状态码表示失败")
+                return self._make_error_result(
+                    ActionStatus.UNKNOWN_ERROR,
+                    message,
+                    raw_response=data,
+                )
+
+            balance = self._parse_balance(data)
+
+            return self._make_success_result(
+                data=balance,
+                response_time_ms=response_time_ms,
+                raw_response=data,
+            )
+
+        except httpx.TimeoutException:
+            return self._make_error_result(
+                ActionStatus.NETWORK_ERROR,
+                "请求超时",
+                retry_after_seconds=30,
+            )
+        except httpx.RequestError as e:
+            return self._make_error_result(
+                ActionStatus.NETWORK_ERROR,
+                f"网络错误: {str(e)}",
+                retry_after_seconds=30,
+            )
+        except Exception as e:
+            return self._make_error_result(
+                ActionStatus.UNKNOWN_ERROR,
+                f"未知错误: {str(e)}",
+            )
+
+    @abstractmethod
+    def _parse_balance(self, data: Any) -> BalanceInfo:
+        """
+        解析余额数据（子类必须实现）
+
+        Args:
+            data: API 响应 JSON 数据
+
+        Returns:
+            BalanceInfo 对象
+        """
         pass
+
+    def _handle_http_error(
+        self, response: httpx.Response, raw_data: dict[str, Any] | None = None
+    ) -> ActionResult:
+        """
+        处理 HTTP 错误响应
+
+        Cookie 认证的子类设置 _cookie_auth = True 即可获得友好的错误提示，
+        无需再逐个重写此方法。
+        """
+        status_code = response.status_code
+
+        if status_code == 401:
+            msg = "Cookie 已失效，请重新配置" if self._cookie_auth else "认证失败"
+            return self._make_error_result(ActionStatus.AUTH_FAILED, msg, raw_response=raw_data)
+        elif status_code == 403:
+            msg = "Cookie 已失效或无权限" if self._cookie_auth else "无权限访问"
+            return self._make_error_result(ActionStatus.AUTH_FAILED, msg, raw_response=raw_data)
+        elif status_code == 404:
+            return self._make_error_result(
+                ActionStatus.NOT_SUPPORTED, "功能未开放", raw_response=raw_data
+            )
+        elif status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            return self._make_error_result(
+                ActionStatus.RATE_LIMITED,
+                "请求频率限制",
+                retry_after_seconds=int(retry_after) if retry_after else 60,
+                raw_response=raw_data,
+            )
+        else:
+            return self._make_error_result(
+                ActionStatus.UNKNOWN_ERROR,
+                f"HTTP {status_code}: {response.reason_phrase}",
+                raw_response=raw_data,
+            )
 
     async def _do_checkin(self, client: httpx.AsyncClient) -> dict[str, Any] | None:
         """

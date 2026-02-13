@@ -16,31 +16,7 @@ from src.services.provider_ops.architectures.base import (
     VerifyResult,
 )
 from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
-
-
-def _extract_token_from_cookie(cookie_string: str) -> str:
-    """
-    从完整的 Cookie 字符串中提取 token 值
-
-    支持两种输入格式：
-    1. 完整 Cookie: "token=xxx; other=yyy; ..."
-    2. 仅 token 值: "eyJhbGciOiJI..."
-
-    Args:
-        cookie_string: Cookie 字符串或 token 值
-
-    Returns:
-        token cookie 的值
-    """
-    # 如果包含 "token="，说明是完整 Cookie 字符串
-    if "token=" in cookie_string:
-        # 解析 Cookie 字符串
-        for part in cookie_string.split(";"):
-            part = part.strip()
-            if part.startswith("token="):
-                return part[6:]  # 去掉 "token=" 前缀
-    # 否则认为直接是 token 值
-    return cookie_string.strip()
+from src.services.provider_ops.utils import extract_cookie_value
 
 
 class CubenceConnector(ProviderConnector):
@@ -66,7 +42,7 @@ class CubenceConnector(ProviderConnector):
             return False
 
         # 提取纯 token 值
-        self._token_cookie = _extract_token_from_cookie(token_cookie)
+        self._token_cookie = extract_cookie_value(token_cookie, "token")
 
         self._set_connected()
         return True
@@ -93,13 +69,50 @@ class CubenceConnector(ProviderConnector):
         return {
             "type": "object",
             "properties": {
+                "base_url": {
+                    "type": "string",
+                    "title": "站点地址",
+                    "description": "API 基础地址",
+                    "x-default-value": "https://cubence.com",
+                },
                 "token_cookie": {
                     "type": "string",
                     "title": "Token Cookie",
                     "description": "从浏览器复制的 token Cookie 值（JWT 格式）",
+                    "x-sensitive": True,
+                    "x-input-type": "password",
                 },
             },
             "required": ["token_cookie"],
+            "x-field-groups": [
+                {"fields": ["base_url"]},
+                {"fields": ["token_cookie"]},
+            ],
+            "x-auth-type": "cookie",
+            "x-default-base-url": "https://cubence.com",
+            "x-validation": [
+                {
+                    "type": "required",
+                    "fields": ["token_cookie"],
+                    "message": "请填写 Token Cookie",
+                },
+            ],
+            "x-quota-divisor": None,
+            "x-currency": "USD",
+            "x-balance-extra-format": [
+                {
+                    "label": "5h",
+                    "type": "window_limit",
+                    "source": "five_hour_limit",
+                    "unit_divisor": 1000000,
+                },
+                {
+                    "label": "周",
+                    "type": "window_limit",
+                    "source": "weekly_limit",
+                    "unit_divisor": 1000000,
+                },
+            ],
         }
 
 
@@ -161,30 +174,21 @@ class CubenceArchitecture(ProviderArchitecture):
         # 添加 token Cookie
         cookie_input = credentials.get("token_cookie")
         if cookie_input:
-            token_value = _extract_token_from_cookie(cookie_input)
+            token_value = extract_cookie_value(cookie_input, "token")
             headers["Cookie"] = f"token={token_value}"
 
         return headers
 
-    def parse_verify_response(
-        self,
-        status_code: int,
-        data: dict[str, Any],
-    ) -> VerifyResult:
-        """解析 Cubence 验证响应"""
+    def _auth_fail_message(self, status_code: int) -> str:
+        """Cookie 认证的错误消息"""
         if status_code == 401:
-            return VerifyResult(success=False, message="Cookie 已失效，请重新配置")
-        if status_code == 403:
-            return VerifyResult(success=False, message="Cookie 已失效或无权限")
-        if status_code != 200:
-            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
+            return "Cookie 已失效，请重新配置"
+        return "Cookie 已失效或无权限"
 
-        # Cubence 响应格式: {"success": true, "data": {...}}
-        if not data.get("success"):
-            message = data.get("message", "验证失败")
-            return VerifyResult(success=False, message=message)
-
-        user_data = data.get("data", {})
+    def _build_verify_result(
+        self, user_data: dict[str, Any], raw_data: dict[str, Any] | None = None
+    ) -> VerifyResult:
+        """Cubence 自定义字段提取（user/balance/subscription_limits）"""
         user_info = user_data.get("user", {})
         balance_info = user_data.get("balance", {})
         subscription_limits = user_data.get("subscription_limits", {})

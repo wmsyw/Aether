@@ -29,26 +29,26 @@
         <div class="space-y-2">
           <Label>认证模板</Label>
           <Select
-            v-model="selectedTemplateId"
-            @update:model-value="handleTemplateChange"
+            v-model="selectedArchitectureId"
+            @update:model-value="handleArchitectureChange"
           >
             <SelectTrigger>
               <SelectValue placeholder="选择认证模板" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem
-                v-for="template in templates"
-                :key="template.id"
-                :value="template.id"
+                v-for="arch in architectures"
+                :key="arch.architecture_id"
+                :value="arch.architecture_id"
               >
-                {{ template.name }}
+                {{ arch.display_name }}
               </SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         <!-- 动态表单字段 -->
-        <template v-if="selectedTemplate">
+        <template v-if="currentSchema">
           <template
             v-for="(group, groupIndex) in fieldGroups"
             :key="groupIndex"
@@ -268,14 +268,26 @@ import {
   SelectValue,
   Switch,
 } from '@/components/ui'
-import { saveProviderOpsConfig, verifyProviderAuth, getProviderOpsConfig, deleteProviderOpsConfig } from '@/api/providerOps'
+import {
+  getArchitectures,
+  saveProviderOpsConfig,
+  verifyProviderAuth,
+  getProviderOpsConfig,
+  deleteProviderOpsConfig,
+  type ArchitectureInfo,
+} from '@/api/providerOps'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import type { AuthTemplateFieldGroup } from '../auth-templates/types'
 import {
-  authTemplateRegistry,
-  type AuthTemplate,
-  type AuthTemplateFieldGroup,
-} from '../auth-templates'
+  schemaToFieldGroups,
+  buildRequestFromSchema,
+  parseConfigFromSchema,
+  validateFromSchema,
+  formatQuotaFromSchema,
+  handleSchemaFieldChange,
+  type CredentialsSchema,
+} from '../auth-templates/schema-utils'
 import ProxyNodeSelect from './ProxyNodeSelect.vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 
@@ -291,15 +303,19 @@ const emit = defineEmits<{
   (e: 'saved'): void
 }>()
 
-// 敏感字段列表（用于验证和加载配置时的特殊处理）
-const SENSITIVE_FIELDS = ['api_key', 'password', 'session_token', 'session_cookie', 'token_cookie', 'auth_cookie', 'cookie_string', 'cookie', 'proxy_password'] as const
+// 敏感字段检测：根据 schema 动态判断
+function isSensitiveField(key: string): boolean {
+  if (!currentSchema.value) return false
+  const prop = currentSchema.value.properties[key]
+  return prop?.['x-sensitive'] === true
+}
 
 const { success: showSuccess, error: showError } = useToast()
 const { confirmDanger } = useConfirm()
 const proxyNodeSelectRef = ref<InstanceType<typeof ProxyNodeSelect> | null>(null)
 const proxyNodesStore = useProxyNodesStore()
 
-/** 启用代理时加载节点列表（直接调用 store，避免 ref 未挂载时静默失败） */
+/** 启用代理时加载节点列表 */
 function handleProxyToggle(toggleKey: string, value: boolean) {
   formData.value[toggleKey] = value
   if (value) {
@@ -320,30 +336,37 @@ const sensitivePlaceholders = ref<Record<string, string>>({})
 // 是否有已保存的配置（编辑模式）
 const hasExistingConfig = ref(false)
 
-// 模板选择
-const selectedTemplateId = ref('new_api')
+// 架构列表（从后端获取）
+const architectures = ref<ArchitectureInfo[]>([])
+const architecturesLoaded = ref(false)
+
+// 当前选择
+const selectedArchitectureId = ref('new_api')
 const formData = ref<Record<string, any>>({})
+
+// 当前架构的 schema
+const currentSchema = computed<CredentialsSchema | null>(() => {
+  const arch = architectures.value.find((a) => a.architecture_id === selectedArchitectureId.value)
+  return (arch?.credentials_schema as CredentialsSchema) ?? null
+})
 
 // 表单是否可以验证（必填字段已填写）
 const canVerify = computed(() => {
-  const template = selectedTemplate.value
-  if (!template) return false
+  const schema = currentSchema.value
+  if (!schema) return false
 
   // 编辑模式下，敏感字段可以为空（使用已保存的值）
+  let dataToValidate = formData.value
   if (hasExistingConfig.value) {
-    // 创建一个临时数据，把空的敏感字段填充为占位值以通过验证
-    const tempData = { ...formData.value }
-    for (const field of SENSITIVE_FIELDS) {
-      if (!tempData[field] && sensitivePlaceholders.value[field]) {
-        tempData[field] = 'placeholder'
+    dataToValidate = { ...formData.value }
+    for (const key of Object.keys(schema.properties)) {
+      if (isSensitiveField(key) && !dataToValidate[key] && sensitivePlaceholders.value[key]) {
+        dataToValidate[key] = 'placeholder'
       }
     }
-    const error = template.validate(tempData)
-    if (error) return false
-  } else {
-    const error = template.validate(formData.value)
-    if (error) return false
   }
+  const error = validateFromSchema(schema, dataToValidate)
+  if (error) return false
 
   const effectiveBaseUrl = formData.value.base_url || props.providerWebsite
   return !!effectiveBaseUrl
@@ -354,35 +377,26 @@ const canSave = computed(() => {
   return verifyStatus.value === 'success' && !formChanged.value
 })
 
-// Computed
-const templates = computed(() => authTemplateRegistry.getAll())
-
-const selectedTemplate = computed<AuthTemplate | undefined>(() => {
-  return authTemplateRegistry.get(selectedTemplateId.value)
-})
-
+// 字段分组
 const fieldGroups = computed<AuthTemplateFieldGroup[]>(() => {
-  if (!selectedTemplate.value) return []
-  return selectedTemplate.value.getFields(props.providerWebsite)
+  if (!currentSchema.value) return []
+  return schemaToFieldGroups(currentSchema.value, props.providerWebsite)
 })
 
 // Methods
-function handleTemplateChange() {
-  // 重置表单数据
+function handleArchitectureChange() {
   resetFormData()
-  // 重置验证状态
   verifyStatus.value = null
   formChanged.value = true
 }
 
 function handleFieldChange(fieldKey: string, value: any) {
-  // 标记表单已变动
   formChanged.value = true
 
-  // 调用模板的 onFieldChange 回调
-  const template = selectedTemplate.value
-  if (template?.onFieldChange) {
-    template.onFieldChange(fieldKey, value, formData.value)
+  // 执行 schema 定义的字段钩子
+  const schema = currentSchema.value
+  if (schema) {
+    handleSchemaFieldChange(schema, fieldKey, value, formData.value)
   }
 }
 
@@ -390,7 +404,6 @@ function handleFieldChange(fieldKey: string, value: any) {
 watch(
   formData,
   () => {
-    // 验证成功后任何修改都需要重新验证
     if (verifyStatus.value === 'success') {
       formChanged.value = true
     }
@@ -399,55 +412,52 @@ watch(
 )
 
 function resetFormData() {
-  const template = selectedTemplate.value
-  if (!template) {
+  const schema = currentSchema.value
+  if (!schema) {
     formData.value = {}
     return
   }
 
-  // 初始化表单数据，设置默认值
+  // 初始化表单数据
   const data: Record<string, any> = {}
-  const groups = template.getFields(props.providerWebsite)
-
-  for (const group of groups) {
-    for (const field of group.fields) {
-      data[field.key] = field.defaultValue ?? ''
-    }
+  for (const [key, prop] of Object.entries(schema.properties)) {
+    data[key] = (prop as any)['x-default-value'] ?? ''
   }
+  // 代理相关默认值
+  data.proxy_enabled = false
+  data.proxy_node_id = ''
 
   formData.value = data
 }
 
 function formatQuota(quota: number): string {
-  const template = selectedTemplate.value
-  if (template?.formatQuota) {
-    return template.formatQuota(quota)
+  const schema = currentSchema.value
+  if (schema) {
+    return formatQuotaFromSchema(schema, quota)
   }
-  // 默认格式化
   return quota.toLocaleString()
 }
 
 async function handleVerify() {
-  const template = selectedTemplate.value
-  if (!template) return
+  const schema = currentSchema.value
+  if (!schema) return
 
   // 验证表单（编辑模式下敏感字段可以为空）
   let dataToValidate = formData.value
   if (hasExistingConfig.value) {
     dataToValidate = { ...formData.value }
-    for (const field of SENSITIVE_FIELDS) {
-      if (!dataToValidate[field] && sensitivePlaceholders.value[field]) {
-        dataToValidate[field] = 'placeholder'
+    for (const key of Object.keys(schema.properties)) {
+      if (isSensitiveField(key) && !dataToValidate[key] && sensitivePlaceholders.value[key]) {
+        dataToValidate[key] = 'placeholder'
       }
     }
   }
-  const error = template.validate(dataToValidate)
+  const error = validateFromSchema(schema, dataToValidate)
   if (error) {
     showError(error)
     return
   }
 
-  // 检查 base_url
   const effectiveBaseUrl = formData.value.base_url || props.providerWebsite
   if (!effectiveBaseUrl) {
     showError('请填写 API 地址')
@@ -457,8 +467,12 @@ async function handleVerify() {
   isVerifying.value = true
 
   try {
-    const request = template.buildRequest(formData.value, props.providerWebsite)
-    // 确保 base_url 是有效字符串，用于 VerifyAuthRequest
+    const request = buildRequestFromSchema(
+      schema,
+      selectedArchitectureId.value,
+      formData.value,
+      props.providerWebsite,
+    )
     const verifyRequest = {
       ...request,
       base_url: request.base_url || effectiveBaseUrl,
@@ -466,12 +480,10 @@ async function handleVerify() {
     const result = await verifyProviderAuth(props.providerId, verifyRequest)
 
     if (result.success) {
-      // 检查是否获取到有效的用户信息和余额
       const username = result.data?.username?.trim() || result.data?.display_name?.trim()
       const quota = result.data?.quota
 
       if (!username || quota === undefined || quota === null) {
-        // 没有获取到必要信息，视为验证失败
         verifyStatus.value = 'error'
         const missing: string[] = []
         if (!username) missing.push('用户信息')
@@ -479,8 +491,7 @@ async function handleVerify() {
         showError(`验证响应缺少: ${missing.join('、')}`)
       } else {
         verifyStatus.value = 'success'
-        formChanged.value = false  // 验证成功后重置表单变动标记
-        // Toast 提示
+        formChanged.value = false
         const displayName = result.data?.display_name || result.data?.username
         showSuccess(`用户: ${displayName} | 余额: ${formatQuota(quota)}`, '验证成功')
       }
@@ -498,26 +509,25 @@ async function handleVerify() {
 }
 
 async function handleSave() {
-  const template = selectedTemplate.value
-  if (!template) return
+  const schema = currentSchema.value
+  if (!schema) return
 
-  // 验证表单（编辑模式下敏感字段可以为空）
+  // 验证表单
   let dataToValidate = formData.value
   if (hasExistingConfig.value) {
     dataToValidate = { ...formData.value }
-    for (const field of SENSITIVE_FIELDS) {
-      if (!dataToValidate[field] && sensitivePlaceholders.value[field]) {
-        dataToValidate[field] = 'placeholder'
+    for (const key of Object.keys(schema.properties)) {
+      if (isSensitiveField(key) && !dataToValidate[key] && sensitivePlaceholders.value[key]) {
+        dataToValidate[key] = 'placeholder'
       }
     }
   }
-  const error = template.validate(dataToValidate)
+  const error = validateFromSchema(schema, dataToValidate)
   if (error) {
     showError(error)
     return
   }
 
-  // 检查 base_url
   const effectiveBaseUrl = formData.value.base_url || props.providerWebsite
   if (!effectiveBaseUrl) {
     showError('请填写 API 地址')
@@ -526,7 +536,12 @@ async function handleSave() {
 
   isSaving.value = true
   try {
-    const request = template.buildRequest(formData.value, props.providerWebsite)
+    const request = buildRequestFromSchema(
+      schema,
+      selectedArchitectureId.value,
+      formData.value,
+      props.providerWebsite,
+    )
     const result = await saveProviderOpsConfig(props.providerId, request)
     if (result.success) {
       showSuccess(result.message || '配置已保存', '保存成功')
@@ -557,12 +572,11 @@ async function handleClear() {
     const result = await deleteProviderOpsConfig(props.providerId)
     if (result.success) {
       showSuccess(result.message || '认证信息已清除', '清除成功')
-      // 重置状态
       hasExistingConfig.value = false
       sensitivePlaceholders.value = {}
       verifyStatus.value = null
       formChanged.value = false
-      selectedTemplateId.value = 'new_api'
+      selectedArchitectureId.value = 'new_api'
       resetFormData()
       emit('saved')
       emit('update:open', false)
@@ -581,26 +595,36 @@ function loadFromConfig(config: any) {
 
   hasExistingConfig.value = true
 
-  // 根据已保存的 architecture_id 选择对应模板，不存在则回退到 new_api
+  // 根据已保存的 architecture_id 选择对应架构
   const architectureId = config.architecture_id || 'new_api'
-  selectedTemplateId.value = authTemplateRegistry.get(architectureId) ? architectureId : 'new_api'
-  const template = authTemplateRegistry.get(selectedTemplateId.value)
+  const archExists = architectures.value.some((a) => a.architecture_id === architectureId)
+  selectedArchitectureId.value = archExists ? architectureId : 'new_api'
 
-  if (template) {
-    const parsedData = template.parseConfig(config)
+  const schema = currentSchema.value
+  if (schema) {
+    const parsedData = parseConfigFromSchema(schema, config)
 
     // 敏感字段：脱敏值放到 placeholder，表单值设为空
     sensitivePlaceholders.value = {}
-    for (const field of SENSITIVE_FIELDS) {
-      if (parsedData[field]) {
-        // 保存脱敏值作为 placeholder 提示
-        sensitivePlaceholders.value[field] = `${parsedData[field]}`
-        // 表单值设为空
-        parsedData[field] = ''
+    for (const key of Object.keys(schema.properties)) {
+      if (isSensitiveField(key) && parsedData[key]) {
+        sensitivePlaceholders.value[key] = `${parsedData[key]}`
+        parsedData[key] = ''
       }
     }
 
     formData.value = parsedData
+  }
+}
+
+/** 确保架构列表已加载 */
+async function ensureArchitecturesLoaded(): Promise<void> {
+  if (architecturesLoaded.value) return
+  try {
+    architectures.value = await getArchitectures()
+    architecturesLoaded.value = true
+  } catch {
+    architectures.value = []
   }
 }
 
@@ -611,6 +635,9 @@ watch(
     if (newVal) {
       verifyStatus.value = null
       formChanged.value = false
+
+      // 确保架构列表已加载
+      await ensureArchitecturesLoaded()
 
       // 如果传入了 currentConfig，直接使用
       if (props.currentConfig?.connector) {
@@ -624,7 +651,6 @@ watch(
         try {
           const config = await getProviderOpsConfig(props.providerId)
           if (config.is_configured && config.architecture_id) {
-            // 构建与 loadFromConfig 兼容的格式
             const configData = {
               architecture_id: config.architecture_id,
               base_url: config.base_url,
@@ -634,14 +660,13 @@ watch(
           } else {
             hasExistingConfig.value = false
             sensitivePlaceholders.value = {}
-            selectedTemplateId.value = 'new_api'
+            selectedArchitectureId.value = 'new_api'
             resetFormData()
           }
         } catch {
-          // 加载失败，使用默认值
           hasExistingConfig.value = false
           sensitivePlaceholders.value = {}
-          selectedTemplateId.value = 'new_api'
+          selectedArchitectureId.value = 'new_api'
           resetFormData()
         } finally {
           isLoadingConfig.value = false
@@ -649,7 +674,7 @@ watch(
       } else {
         hasExistingConfig.value = false
         sensitivePlaceholders.value = {}
-        selectedTemplateId.value = 'new_api'
+        selectedArchitectureId.value = 'new_api'
         resetFormData()
       }
     }

@@ -1,13 +1,6 @@
 /**
  * 提供商认证模板类型定义
- *
- * 认证模板定义了：
- * - 需要收集的表单字段
- * - 如何构建后端请求
- * - 如何解析已有配置
  */
-
-import type { SaveConfigRequest } from '@/api/providerOps'
 
 /**
  * 表单字段类型
@@ -61,78 +54,6 @@ export interface AuthTemplateFieldGroup {
 }
 
 /**
- * 验证结果数据
- */
-export interface VerifyResultData {
-  username?: string
-  display_name?: string
-  email?: string
-  quota?: number
-  used_quota?: number
-  request_count?: number
-  extra?: Record<string, any>
-}
-
-/**
- * 认证模板接口
- */
-export interface AuthTemplate {
-  /** 模板 ID（对应后端 architecture_id） */
-  id: string
-  /** 显示名称 */
-  name: string
-  /** 描述 */
-  description: string
-
-  /**
-   * 获取表单字段定义
-   * @param providerWebsite 提供商官网（用于设置默认 base_url）
-   */
-  getFields(providerWebsite?: string): AuthTemplateFieldGroup[]
-
-  /**
-   * 构建保存请求
-   * @param formData 表单数据
-   * @param providerWebsite 提供商官网
-   */
-  buildRequest(formData: Record<string, any>, providerWebsite?: string): SaveConfigRequest
-
-  /**
-   * 从已有配置解析表单数据
-   * @param config 已有配置
-   */
-  parseConfig(config: any): Record<string, any>
-
-  /**
-   * 验证表单数据
-   * @param formData 表单数据
-   * @returns 错误消息，无错误返回 null
-   */
-  validate(formData: Record<string, any>): string | null
-
-  /**
-   * 格式化验证结果中的 quota 显示
-   * @param quota quota 值
-   */
-  formatQuota?(quota: number): string
-
-  /**
-   * 格式化余额 extra 信息（如窗口限额等）
-   * 返回一个数组，每个元素包含 label 和 value
-   * @param extra 余额 extra 字段
-   */
-  formatBalanceExtra?(extra: Record<string, any>): BalanceExtraItem[]
-
-  /**
-   * 字段值变化时的回调，可用于联动填充其他字段
-   * @param fieldKey 变化的字段 key
-   * @param value 新值
-   * @param formData 当前表单数据（可修改）
-   */
-  onFieldChange?(fieldKey: string, value: any, formData: Record<string, any>): void
-}
-
-/**
  * 余额附加信息项
  */
 export interface BalanceExtraItem {
@@ -146,20 +67,6 @@ export interface BalanceExtraItem {
   resetsAt?: number
   /** 可选的提示文本 */
   tooltip?: string
-}
-
-/**
- * 认证模板注册表类型
- */
-export interface AuthTemplateRegistry {
-  /** 获取所有模板 */
-  getAll(): AuthTemplate[]
-  /** 根据 ID 获取模板 */
-  get(id: string): AuthTemplate | undefined
-  /** 获取默认模板 */
-  getDefault(): AuthTemplate
-  /** 注册模板 */
-  register(template: AuthTemplate): void
 }
 
 // ==================== 通用字段定义 ====================
@@ -186,30 +93,6 @@ export const PROXY_FIELD_GROUP: AuthTemplateFieldGroup = {
   defaultExpanded: false,
   hasToggle: true,
   toggleKey: 'proxy_enabled',
-}
-
-// 兼容旧代码的字段导出
-export const PROXY_URL_FIELD: AuthTemplateField = {
-  key: 'proxy_url',
-  label: '代理地址',
-  type: 'text',
-  placeholder: 'http://proxy:port 或 socks5://',
-  required: false,
-}
-export const PROXY_USERNAME_FIELD: AuthTemplateField = {
-  key: 'proxy_username',
-  label: '用户名',
-  type: 'text',
-  placeholder: '可选',
-  required: false,
-}
-export const PROXY_PASSWORD_FIELD: AuthTemplateField = {
-  key: 'proxy_password',
-  label: '密码',
-  type: 'password',
-  placeholder: '可选',
-  required: false,
-  sensitive: true,
 }
 
 /**
@@ -253,6 +136,3 @@ export function parseProxyConfig(config: any): Record<string, any> {
     proxy_node_id: '',
   }
 }
-
-// 兼容旧的导出
-export const PROXY_FIELD: AuthTemplateField = PROXY_URL_FIELD

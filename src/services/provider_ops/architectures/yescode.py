@@ -121,13 +121,52 @@ class YesCodeConnector(ProviderConnector):
         return {
             "type": "object",
             "properties": {
+                "base_url": {
+                    "type": "string",
+                    "title": "站点地址",
+                    "description": "API 基础地址",
+                    "x-default-value": "https://co.yes.vg",
+                },
                 "auth_cookie": {
                     "type": "string",
                     "title": "Auth Cookie",
                     "description": "从浏览器复制的 Cookie（包含 yescode_auth 和 yescode_csrf）",
+                    "x-sensitive": True,
+                    "x-input-type": "password",
                 },
             },
             "required": ["auth_cookie"],
+            "x-field-groups": [
+                {"fields": ["base_url"]},
+                {"fields": ["auth_cookie"]},
+            ],
+            "x-auth-type": "cookie",
+            "x-default-base-url": "https://co.yes.vg",
+            "x-validation": [
+                {
+                    "type": "required",
+                    "fields": ["auth_cookie"],
+                    "message": "请填写 Auth Cookie",
+                },
+            ],
+            "x-quota-divisor": None,
+            "x-currency": "USD",
+            "x-balance-extra-format": [
+                {
+                    "label": "天",
+                    "type": "weekly_spent",
+                    "source_limit": "daily_limit",
+                    "source_spent": "daily_spent",
+                    "source_resets_at": "daily_resets_at",
+                },
+                {
+                    "label": "周",
+                    "type": "weekly_spent",
+                    "source_limit": "weekly_limit",
+                    "source_spent": "weekly_spent",
+                    "source_resets_at": "weekly_resets_at",
+                },
+            ],
         }
 
 

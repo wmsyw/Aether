@@ -698,9 +698,10 @@ import {
   API_FORMAT_SHORT
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
-import { batchQueryBalance, type ActionResultResponse } from '@/api/providerOps'
+import { batchQueryBalance, getArchitectures, type ActionResultResponse, type ArchitectureInfo } from '@/api/providerOps'
 import { formatBillingType } from '@/utils/format'
-import { authTemplateRegistry, type BalanceExtraItem } from '@/features/providers/auth-templates'
+import { type BalanceExtraItem } from '@/features/providers/auth-templates'
+import { formatBalanceExtraFromSchema, type CredentialsSchema } from '@/features/providers/auth-templates/schema-utils'
 
 const { error: showError, success: showSuccess } = useToast()
 const { confirmDanger } = useConfirm()
@@ -714,6 +715,28 @@ const priorityDialogOpen = ref(false)
 const priorityMode = ref<'provider' | 'global_key'>('provider')
 const providerDrawerOpen = ref(false)
 const selectedProviderId = ref<string | null>(null)
+
+// 架构 schema 缓存（用于 balance extra 格式化）
+const architectureSchemas = ref<Record<string, CredentialsSchema>>({})
+const architectureSchemasLoaded = ref(false)
+
+/** 加载架构 schema 缓存 */
+async function loadArchitectureSchemas() {
+  if (architectureSchemasLoaded.value) return
+  try {
+    const archs: ArchitectureInfo[] = await getArchitectures()
+    const schemas: Record<string, CredentialsSchema> = {}
+    for (const arch of archs) {
+      if (arch.credentials_schema) {
+        schemas[arch.architecture_id] = arch.credentials_schema as CredentialsSchema
+      }
+    }
+    architectureSchemas.value = schemas
+    architectureSchemasLoaded.value = true
+  } catch {
+    // 加载失败不影响主流程
+  }
+}
 
 // 扩展操作配置对话框
 const opsConfigDialogOpen = ref(false)
@@ -1109,11 +1132,11 @@ function getProviderBalanceExtra(providerId: string, architectureId?: string): B
   const extra = data.extra
   if (!extra) return []
 
-  // 获取对应的模板
-  const template = authTemplateRegistry.get(architectureId)
-  if (!template?.formatBalanceExtra) return []
+  // 从 schema 缓存中获取格式化配置
+  const schema = architectureSchemas.value[architectureId]
+  if (!schema) return []
 
-  return template.formatBalanceExtra(extra)
+  return formatBalanceExtraFromSchema(schema, extra)
 }
 
 
@@ -1313,6 +1336,7 @@ onMounted(() => {
   loadProviders()
   loadPriorityMode()
   loadGlobalModelList()
+  loadArchitectureSchemas()
   // 每秒更新一次倒计时
   tickInterval = setInterval(() => {
     tickCounter.value++
