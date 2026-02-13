@@ -1476,13 +1476,6 @@ class OpenAINormalizer(FormatNormalizer):
             },
         }
 
-    def _image_url_to_block(self, url: str) -> ImageBlock:
-        if url.startswith("data:") and ";base64," in url:
-            header, _, data = url.partition(",")
-            media_type = header.split(";")[0].split(":", 1)[-1]
-            return ImageBlock(data=data, media_type=media_type)
-        return ImageBlock(url=url)
-
     def _role_from_openai(self, role: str) -> Role:
         if role == "user":
             return Role.USER

@@ -8,7 +8,13 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .internal import FormatCapabilities, InternalError, InternalRequest, InternalResponse
+from .internal import (
+    FormatCapabilities,
+    ImageBlock,
+    InternalError,
+    InternalRequest,
+    InternalResponse,
+)
 from .internal_video import InternalVideoPollResult, InternalVideoRequest, InternalVideoTask
 from .stream_events import InternalStreamEvent
 from .stream_state import StreamState
@@ -97,6 +103,17 @@ class FormatNormalizer(ABC):
     def error_from_internal(self, internal: InternalError) -> dict[str, Any]:
         """将内部错误表示转换为格式特定错误"""
         raise NotImplementedError
+
+    # ============ 图片工具方法 ============
+
+    @staticmethod
+    def _image_url_to_block(url: str) -> ImageBlock:
+        """将 image_url 字符串转换为 ImageBlock（支持 data URL 和外部 URL）"""
+        if url.startswith("data:") and ";base64," in url:
+            header, _, data = url.partition(",")
+            media_type = header.split(";")[0].split(":", 1)[-1]
+            return ImageBlock(data=data, media_type=media_type)
+        return ImageBlock(url=url)
 
     # ============ 视频转换（可选） ============
 

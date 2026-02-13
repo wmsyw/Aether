@@ -24,6 +24,7 @@ from src.core.api_format.conversion.internal import (
     ContentType,
     ErrorType,
     FormatCapabilities,
+    ImageBlock,
     InstructionSegment,
     InternalError,
     InternalMessage,
@@ -1111,6 +1112,15 @@ class OpenAICliNormalizer(FormatNormalizer):
                 if text:
                     blocks.append(TextBlock(text=text))
                 continue
+            if ptype in ("input_image", "output_image"):
+                image_url = part.get("image_url") or part.get("url") or ""
+                if isinstance(image_url, str) and image_url:
+                    img = self._image_url_to_block(image_url)
+                    img.extra.update(self._extract_extra(part, {"type", "image_url", "url"}))
+                    blocks.append(img)
+                else:
+                    blocks.append(UnknownBlock(raw_type=ptype, payload=part))
+                continue
             blocks.append(UnknownBlock(raw_type=ptype or "unknown", payload=part))
         return blocks
 
@@ -1180,7 +1190,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             if system_to_developer and role == "system":
                 role = "developer"
             content_items: list[dict[str, Any]] = []
-            has_text = False
+            has_content = False
 
             for block in msg.content:
                 if isinstance(block, (ToolUseBlock, ToolResultBlock)):
@@ -1189,13 +1199,30 @@ class OpenAICliNormalizer(FormatNormalizer):
                     continue  # 已在上面处理
                 if isinstance(block, UnknownBlock):
                     continue  # 跳过其他未知块
+                if isinstance(block, ImageBlock):
+                    if block.data and block.media_type:
+                        image_url = f"data:{block.media_type};base64,{block.data}"
+                    elif block.url:
+                        image_url = block.url
+                    else:
+                        continue
+                    image_type = "output_image" if role == "assistant" else "input_image"
+                    item: dict[str, Any] = {
+                        "type": image_type,
+                        "image_url": image_url,
+                    }
+                    if block.extra.get("detail"):
+                        item["detail"] = block.extra["detail"]
+                    content_items.append(item)
+                    has_content = True
+                    continue
                 if isinstance(block, TextBlock) and block.text:
                     # assistant 角色使用 output_text，其他角色使用 input_text
                     text_type = "output_text" if role == "assistant" else "input_text"
                     content_items.append({"type": text_type, "text": block.text})
-                    has_text = True
+                    has_content = True
 
-            if has_text:
+            if has_content:
                 out.append({"type": "message", "role": role, "content": content_items})
 
         return out
