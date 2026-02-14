@@ -5,119 +5,26 @@
       variant="default"
     >
       <!-- 标题和操作栏 -->
-      <div class="px-4 sm:px-6 py-3 sm:py-3.5 border-b border-border/50">
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-          <!-- 左侧：标题 -->
-          <h3 class="text-sm sm:text-base font-semibold text-foreground shrink-0">
-            提供商管理
-          </h3>
-
-          <!-- 右侧：操作区 -->
-          <div class="flex flex-wrap items-center gap-2">
-            <!-- 搜索框 -->
-            <div class="relative">
-              <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/70 z-10 pointer-events-none" />
-              <Input
-                id="provider-search"
-                v-model="searchQuery"
-                type="text"
-                placeholder="搜索提供商..."
-                class="w-32 sm:w-44 pl-8 pr-3 h-8 text-sm bg-muted/30 border-border/50 focus:border-primary/50 transition-colors"
-              />
-            </div>
-
-            <!-- 状态筛选 -->
-            <Select v-model="filterStatus">
-              <SelectTrigger class="w-20 sm:w-28 h-8 text-xs border-border/60">
-                <SelectValue placeholder="全部状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="status in statusFilters"
-                  :key="status.value"
-                  :value="status.value"
-                >
-                  {{ status.label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-
-            <!-- API 格式筛选 -->
-            <Select v-model="filterApiFormat">
-              <SelectTrigger class="w-20 sm:w-28 h-8 text-xs border-border/60">
-                <SelectValue placeholder="全部格式" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="fmt in apiFormatFilters"
-                  :key="fmt.value"
-                  :value="fmt.value"
-                >
-                  {{ fmt.label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-
-            <!-- 模型筛选 -->
-            <Select v-model="filterModel">
-              <SelectTrigger class="w-20 sm:w-36 h-8 text-xs border-border/60">
-                <SelectValue placeholder="全部模型" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="model in modelFilters"
-                  :key="model.value"
-                  :value="model.value"
-                >
-                  {{ model.label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-
-            <!-- 重置筛选 -->
-            <Button
-              v-if="hasActiveFilters"
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="重置筛选"
-              @click="searchQuery = ''; filterStatus = 'all'; filterApiFormat = 'all'; filterModel = 'all'"
-            >
-              <FilterX class="w-3.5 h-3.5" />
-            </Button>
-
-            <div class="hidden sm:block h-4 w-px bg-border" />
-
-            <!-- 调度策略 -->
-            <button
-              class="group inline-flex items-center gap-1.5 px-2.5 h-8 rounded-md border border-border/50 bg-muted/20 hover:bg-muted/40 hover:border-primary/40 transition-all duration-200 text-xs"
-              title="点击调整调度策略"
-              @click="openPriorityDialog"
-            >
-              <span class="text-muted-foreground/80 hidden sm:inline">调度:</span>
-              <span class="font-medium text-foreground/90">{{ priorityModeConfig.label }}</span>
-              <ChevronDown class="w-3 h-3 text-muted-foreground/70 group-hover:text-foreground transition-colors" />
-            </button>
-
-            <div class="hidden sm:block h-4 w-px bg-border" />
-
-            <!-- 操作按钮 -->
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="新增提供商"
-              @click="openAddProviderDialog"
-            >
-              <Plus class="w-3.5 h-3.5" />
-            </Button>
-            <RefreshButton
-              :loading="loading"
-              @click="loadProviders"
-            />
-          </div>
-        </div>
-      </div>
+      <ProviderTableHeader
+        :search-query="searchQuery"
+        :filter-status="filterStatus"
+        :filter-api-format="filterApiFormat"
+        :filter-model="filterModel"
+        :status-filters="statusFilters"
+        :api-format-filters="apiFormatFilters"
+        :model-filters="modelFilters"
+        :has-active-filters="hasActiveFilters"
+        :priority-mode-label="priorityModeConfig.label"
+        :loading="loading"
+        @update:search-query="searchQuery = $event"
+        @update:filter-status="filterStatus = $event"
+        @update:filter-api-format="filterApiFormat = $event"
+        @update:filter-model="filterModel = $event"
+        @reset-filters="resetFilters"
+        @open-priority-dialog="openPriorityDialog"
+        @add-provider="openAddProviderDialog"
+        @refresh="loadProviders"
+      />
 
       <!-- 加载状态 -->
       <div
@@ -144,7 +51,7 @@
           v-if="hasActiveFilters"
           variant="outline"
           size="sm"
-          @click="searchQuery = ''; filterStatus = 'all'; filterApiFormat = 'all'; filterModel = 'all'"
+          @click="resetFilters"
         >
           清除筛选
         </Button>
@@ -179,315 +86,32 @@
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow
+            <ProviderTableRow
               v-for="provider in paginatedProviders"
               :key="provider.id"
-              class="border-b border-border/30 hover:bg-muted/20 transition-colors cursor-pointer"
+              :provider="provider"
+              :editing-description-id="editingDescriptionId"
+              :is-balance-loading="isBalanceLoading"
+              :get-provider-balance="getProviderBalance"
+              :get-provider-balance-breakdown="getProviderBalanceBreakdown"
+              :get-provider-balance-error="getProviderBalanceError"
+              :get-provider-checkin="getProviderCheckin"
+              :get-provider-cookie-expired="getProviderCookieExpired"
+              :get-provider-balance-extra="getProviderBalanceExtra"
+              :format-balance-display="formatBalanceDisplay"
+              :format-reset-countdown="formatResetCountdown"
+              :get-quota-used-color-class="getQuotaUsedColorClass"
               @mousedown="handleMouseDown"
-              @click="handleRowClick($event, provider.id)"
-            >
-              <TableCell class="py-3.5">
-                <div class="space-y-0.5">
-                  <div class="flex items-center gap-1.5">
-                    <span class="text-sm font-medium text-foreground">{{ provider.name }}</span>
-                    <a
-                      v-if="provider.website"
-                      :href="provider.website"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="text-muted-foreground hover:text-primary transition-colors shrink-0"
-                      :title="provider.website"
-                      @click.stop
-                    >
-                      <ExternalLink class="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                  <!-- 内联编辑备注 -->
-                  <div
-                    v-if="editingDescriptionId === provider.id"
-                    data-desc-editor
-                    class="flex items-center gap-1 max-w-[220px]"
-                    @click.stop
-                  >
-                    <input
-                      v-model="editingDescriptionValue"
-                      v-auto-focus
-                      class="flex-1 min-w-0 text-xs px-1.5 py-0.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                      placeholder="输入备注..."
-                      @keydown="handleDescriptionKeydown($event, provider)"
-                    />
-                    <button
-                      class="shrink-0 p-0.5 rounded hover:bg-muted text-primary"
-                      title="保存"
-                      @click="saveDescription($event, provider)"
-                    >
-                      <Check class="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      class="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground"
-                      title="取消"
-                      @click="cancelEditDescription($event)"
-                    >
-                      <X class="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <span
-                    v-else-if="provider.description"
-                    class="text-xs text-muted-foreground truncate block max-w-[200px] group/desc cursor-pointer hover:text-foreground/70 transition-colors"
-                    :title="provider.description"
-                    @click="startEditDescription($event, provider)"
-                  >{{ provider.description }} <Pencil class="w-3 h-3 inline-block opacity-0 group-hover/desc:opacity-50 transition-opacity" /></span>
-                  <span
-                    v-else
-                    class="text-xs text-muted-foreground cursor-pointer hover:text-foreground/70 transition-colors"
-                    @click="startEditDescription($event, provider)"
-                  >添加备注</span>
-                </div>
-              </TableCell>
-              <TableCell class="py-3.5">
-                <!-- 余额正在加载中 -->
-                <div
-                  v-if="provider.ops_configured && isBalanceLoading(provider.id)"
-                  class="flex items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Loader2 class="h-3 w-3 animate-spin" />
-                  <span>加载中...</span>
-                </div>
-                <!-- 显示从上游 API 查询的余额 -->
-                <div
-                  v-else-if="provider.ops_configured && getProviderBalance(provider.id)"
-                  class="flex items-center gap-2 text-xs"
-                >
-                  <!-- 余额文字：balance + points 分开显示，或普通余额 -->
-                  <template
-                    v-for="bd in [getProviderBalanceBreakdown(provider.id)]"
-                    key="bd"
-                  >
-                    <div
-                      v-if="bd"
-                      class="min-w-[4.5rem] tabular-nums leading-tight"
-                    >
-                      <div class="font-semibold text-foreground/90">
-                        ${{ bd.balance.toFixed(2) }}
-                      </div>
-                      <div class="text-muted-foreground/70 text-[10px]">
-                        ${{ bd.points.toFixed(2) }}
-                      </div>
-                    </div>
-                    <span
-                      v-else
-                      class="font-semibold text-foreground/90 min-w-[4.5rem] tabular-nums"
-                    >
-                      {{ formatBalanceDisplay(getProviderBalance(provider.id)) }}
-                    </span>
-                  </template>
-                  <!-- 窗口限额 + 签到状态 + Cookie 失效警告 -->
-                  <div
-                    v-if="getProviderBalanceExtra(provider.id, provider.ops_architecture_id).length > 0 || getProviderCheckin(provider.id) || getProviderCookieExpired(provider.id)"
-                    class="text-muted-foreground/70 space-y-0.5"
-                  >
-                    <!-- 限额（进度条 + 倒计时，每行一个） -->
-                    <template
-                      v-for="item in getProviderBalanceExtra(provider.id, provider.ops_architecture_id)"
-                      :key="item.label"
-                    >
-                      <div
-                        :title="item.tooltip"
-                        class="flex items-center gap-1"
-                      >
-                        <span class="text-[10px] text-muted-foreground/60 w-4">{{ item.label }}</span>
-                        <div class="w-12 h-1.5 bg-border rounded-full overflow-hidden">
-                          <div
-                            class="h-full rounded-full"
-                            :class="[
-                              item.percent !== undefined && item.percent >= 50 ? 'bg-green-500' :
-                              item.percent !== undefined && item.percent >= 20 ? 'bg-amber-500' : 'bg-red-500'
-                            ]"
-                            :style="{ width: `${item.percent ?? 0}%` }"
-                          />
-                        </div>
-                        <span class="text-[10px] text-muted-foreground/50 w-7 text-right tabular-nums">{{ item.value }}</span>
-                        <span
-                          v-if="item.resetsAt"
-                          class="text-[10px] text-muted-foreground/40 w-14 text-right tabular-nums"
-                        >{{ formatResetCountdown(item.resetsAt) }}</span>
-                      </div>
-                    </template>
-                    <!-- Cookie 失效警告 -->
-                    <div
-                      v-if="getProviderCookieExpired(provider.id)"
-                      class="flex items-center gap-1"
-                    >
-                      <span
-                        class="text-[10px] text-amber-600 dark:text-amber-500"
-                        :title="getProviderCookieExpired(provider.id)?.message"
-                      >签到 Cookie 已失效</span>
-                    </div>
-                    <!-- 签到状态 -->
-                    <div
-                      v-else-if="getProviderCheckin(provider.id)"
-                      class="flex items-center gap-1.5"
-                    >
-                      <span
-                        v-if="getProviderCheckin(provider.id)?.success !== false"
-                        class="text-[10px] text-muted-foreground/60"
-                        :title="getProviderCheckin(provider.id)?.message"
-                      >已签到</span>
-                      <span
-                        v-else
-                        class="text-[10px] text-destructive/70"
-                        :title="getProviderCheckin(provider.id)?.message"
-                      >签到失败</span>
-                    </div>
-                  </div>
-                </div>
-                <!-- 余额查询失败时显示错误 -->
-                <div
-                  v-else-if="provider.ops_configured && getProviderBalanceError(provider.id)"
-                  class="text-xs text-destructive/80"
-                  :title="getProviderBalanceError(provider.id)?.message"
-                >
-                  {{ getProviderBalanceError(provider.id)?.message }}
-                </div>
-                <!-- 显示本地配置的月度配额 -->
-                <div
-                  v-else-if="provider.billing_type === 'monthly_quota'"
-                  class="space-y-0.5 text-xs"
-                >
-                  <Badge
-                    variant="outline"
-                    class="text-[10px] font-normal border-border/50"
-                  >
-                    {{ formatBillingType(provider.billing_type) }}
-                  </Badge>
-                  <div class="text-muted-foreground/70 pt-0.5">
-                    <span
-                      class="font-semibold"
-                      :class="getQuotaUsedColorClass(provider)"
-                    >${{ (provider.monthly_used_usd ?? 0).toFixed(2) }}</span> / <span class="font-medium">${{ (provider.monthly_quota_usd ?? 0).toFixed(2) }}</span>
-                  </div>
-                </div>
-                <span
-                  v-else
-                  class="text-xs text-muted-foreground/50"
-                >-</span>
-              </TableCell>
-              <TableCell class="py-3.5 text-center">
-                <div class="space-y-0.5 text-xs">
-                  <div class="flex items-center justify-center gap-1.5">
-                    <span class="text-muted-foreground/70">端点:</span>
-                    <span class="font-medium text-foreground/90">{{ provider.active_endpoints }}</span>
-                    <span class="text-muted-foreground/50">/{{ provider.total_endpoints }}</span>
-                  </div>
-                  <div class="flex items-center justify-center gap-1.5">
-                    <span class="text-muted-foreground/70">密钥:</span>
-                    <span class="font-medium text-foreground/90">{{ provider.active_keys }}</span>
-                    <span class="text-muted-foreground/50">/{{ provider.total_keys }}</span>
-                  </div>
-                  <div class="flex items-center justify-center gap-1.5">
-                    <span class="text-muted-foreground/70">模型:</span>
-                    <span class="font-medium text-foreground/90">{{ provider.active_models }}</span>
-                    <span class="text-muted-foreground/50">/{{ provider.total_models }}</span>
-                  </div>
-                </div>
-              </TableCell>
-              <TableCell class="py-3.5 align-middle">
-                <div
-                  v-if="provider.endpoint_health_details && provider.endpoint_health_details.length > 0"
-                  class="grid grid-cols-3 gap-x-3 gap-y-2 max-w-[240px]"
-                >
-                  <div
-                    v-for="endpoint in sortEndpoints(provider.endpoint_health_details)"
-                    :key="endpoint.api_format"
-                    class="flex flex-col gap-1.5"
-                    :title="getEndpointTooltip(endpoint)"
-                  >
-                    <!-- 上排：缩写 + 百分比 -->
-                    <div class="flex items-center justify-between text-[10px] leading-none">
-                      <span class="font-medium text-muted-foreground/80">
-                        {{ API_FORMAT_SHORT[endpoint.api_format] || endpoint.api_format.substring(0,2) }}
-                      </span>
-                      <span class="font-medium text-muted-foreground/80">
-                        {{ isEndpointAvailable(endpoint) ? `${(endpoint.health_score * 100).toFixed(0)}%` : '-' }}
-                      </span>
-                    </div>
-
-                    <!-- 下排：进度条 -->
-                    <div class="h-1.5 w-full bg-border dark:bg-border/80 rounded-full overflow-hidden">
-                      <div
-                        class="h-full rounded-full transition-all duration-300"
-                        :class="getEndpointDotColor(endpoint)"
-                        :style="{ width: isEndpointAvailable(endpoint) ? `${Math.max(endpoint.health_score * 100, 5)}%` : '100%' }"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <span
-                  v-else
-                  class="text-xs text-muted-foreground/50"
-                >暂无端点</span>
-              </TableCell>
-              <TableCell class="py-3.5 text-center">
-                <Badge
-                  :variant="provider.is_active ? 'success' : 'secondary'"
-                  class="text-xs"
-                >
-                  {{ provider.is_active ? '活跃' : '已停用' }}
-                </Badge>
-              </TableCell>
-              <TableCell
-                class="py-3.5"
-                @click.stop
-              >
-                <div class="flex items-center justify-center gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-7 w-7 text-muted-foreground/70 hover:text-foreground"
-                    title="查看详情"
-                    @click="openProviderDrawer(provider.id)"
-                  >
-                    <Eye class="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-7 w-7 text-muted-foreground/70 hover:text-foreground"
-                    title="编辑提供商"
-                    @click="openEditProviderDialog(provider)"
-                  >
-                    <Edit class="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-7 w-7 text-muted-foreground/70 hover:text-foreground"
-                    title="扩展操作配置"
-                    @click="openOpsConfigDialog(provider)"
-                  >
-                    <KeyRound class="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-7 w-7 text-muted-foreground/70 hover:text-foreground"
-                    :title="provider.is_active ? '停用提供商' : '启用提供商'"
-                    @click="toggleProviderStatus(provider)"
-                  >
-                    <Power class="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-7 w-7 text-muted-foreground/70 hover:text-destructive"
-                    title="删除提供商"
-                    @click="handleDeleteProvider(provider)"
-                  >
-                    <Trash2 class="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
+              @row-click="handleRowClick"
+              @view-detail="openProviderDrawer"
+              @edit-provider="openEditProviderDialog"
+              @open-ops-config="openOpsConfigDialog"
+              @toggle-status="toggleProviderStatus"
+              @delete-provider="handleDeleteProvider"
+              @start-edit-description="startEditDescription"
+              @save-description="saveDescription"
+              @cancel-edit-description="cancelEditDescription"
+            />
           </TableBody>
         </Table>
       </div>
@@ -497,227 +121,27 @@
         v-if="!loading && filteredProviders.length > 0"
         class="xl:hidden divide-y divide-border/40"
       >
-        <div
+        <ProviderMobileCard
           v-for="provider in paginatedProviders"
           :key="provider.id"
-          class="p-4 space-y-3 hover:bg-muted/20 transition-colors cursor-pointer"
-          @click="openProviderDrawer(provider.id)"
-        >
-          <!-- 第一行：名称 + 状态 + 操作 -->
-          <div class="flex items-start justify-between gap-3">
-            <div class="flex-1 min-w-0 space-y-0.5">
-              <div class="flex items-center gap-1.5">
-                <span class="font-medium text-foreground truncate">{{ provider.name }}</span>
-                <a
-                  v-if="provider.website"
-                  :href="provider.website"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-muted-foreground hover:text-primary transition-colors shrink-0"
-                  :title="provider.website"
-                  @click.stop
-                >
-                  <ExternalLink class="w-3.5 h-3.5" />
-                </a>
-                <Badge
-                  :variant="provider.is_active ? 'success' : 'secondary'"
-                  class="text-xs shrink-0"
-                >
-                  {{ provider.is_active ? '活跃' : '停用' }}
-                </Badge>
-              </div>
-              <!-- 内联编辑备注 (移动端) -->
-              <div
-                v-if="editingDescriptionId === provider.id"
-                data-desc-editor
-                class="flex items-center gap-1 max-w-[180px]"
-                @click.stop
-              >
-                <input
-                  v-model="editingDescriptionValue"
-                  v-auto-focus
-                  class="flex-1 min-w-0 text-xs px-1.5 py-0.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                  placeholder="输入备注..."
-                  @keydown="handleDescriptionKeydown($event, provider)"
-                />
-                <button
-                  class="shrink-0 p-0.5 rounded hover:bg-muted text-primary"
-                  title="保存"
-                  @click="saveDescription($event, provider)"
-                >
-                  <Check class="w-3.5 h-3.5" />
-                </button>
-                <button
-                  class="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground"
-                  title="取消"
-                  @click="cancelEditDescription($event)"
-                >
-                  <X class="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <span
-                v-else-if="provider.description"
-                class="text-xs text-muted-foreground truncate block max-w-[120px] group/desc cursor-pointer hover:text-foreground/70 transition-colors"
-                :title="provider.description"
-                @click="startEditDescription($event, provider)"
-              >{{ provider.description }} <Pencil class="w-3 h-3 inline-block opacity-0 group-hover/desc:opacity-50 transition-opacity" /></span>
-              <span
-                v-else
-                class="text-xs text-muted-foreground cursor-pointer hover:text-foreground/70 transition-colors"
-                @click="startEditDescription($event, provider)"
-              >添加备注</span>
-            </div>
-            <div
-              class="flex items-center gap-0.5 shrink-0"
-              @click.stop
-            >
-              <Button
-                variant="ghost"
-                size="icon"
-                class="h-7 w-7"
-                title="查看详情"
-                @click="openProviderDrawer(provider.id)"
-              >
-                <Eye class="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="h-7 w-7"
-                title="编辑"
-                @click="openEditProviderDialog(provider)"
-              >
-                <Edit class="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="h-7 w-7"
-                title="扩展操作配置"
-                @click="openOpsConfigDialog(provider)"
-              >
-                <KeyRound class="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="h-7 w-7"
-                @click="toggleProviderStatus(provider)"
-              >
-                <Power class="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="h-7 w-7"
-                @click="handleDeleteProvider(provider)"
-              >
-                <Trash2 class="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-
-          <!-- 第二行：计费类型 + 余额/配额 + 资源统计 -->
-          <div class="flex flex-wrap items-center gap-3 text-xs">
-            <Badge
-              variant="outline"
-              class="text-xs font-normal border-border/50"
-            >
-              {{ formatBillingType(provider.billing_type || 'pay_as_you_go') }}
-            </Badge>
-            <!-- 余额加载中 -->
-            <span
-              v-if="provider.ops_configured && isBalanceLoading(provider.id)"
-              class="text-muted-foreground flex items-center gap-1"
-            >
-              <Loader2 class="h-3 w-3 animate-spin" />
-              加载中...
-            </span>
-            <!-- 余额（从上游 API 查询） -->
-            <span
-              v-else-if="provider.ops_configured && getProviderBalance(provider.id)"
-              class="text-muted-foreground"
-            >
-              余额 <span class="font-semibold text-foreground/90">{{ formatBalanceDisplay(getProviderBalance(provider.id)) }}</span>
-              <!-- Cookie 失效警告 -->
-              <span
-                v-if="getProviderCookieExpired(provider.id)"
-                class="ml-1 text-amber-600 dark:text-amber-500"
-                :title="getProviderCookieExpired(provider.id)?.message"
-              >签到 Cookie 已失效</span>
-              <!-- 签到状态显示 -->
-              <span
-                v-else-if="getProviderCheckin(provider.id) && getProviderCheckin(provider.id)?.success !== false"
-                class="ml-1 text-muted-foreground"
-                :title="getProviderCheckin(provider.id)?.message"
-              >已签到</span>
-              <span
-                v-else-if="getProviderCheckin(provider.id)?.success === false"
-                class="ml-1 text-destructive/70"
-                :title="getProviderCheckin(provider.id)?.message"
-              >签到失败</span>
-            </span>
-            <!-- 余额查询失败时显示错误 -->
-            <span
-              v-else-if="provider.ops_configured && getProviderBalanceError(provider.id)"
-              class="text-destructive/80"
-              :title="getProviderBalanceError(provider.id)?.message"
-            >
-              {{ getProviderBalanceError(provider.id)?.message }}
-            </span>
-            <!-- 本地配额 -->
-            <span
-              v-else-if="provider.billing_type === 'monthly_quota'"
-              class="text-muted-foreground"
-            >
-              配额 <span
-                class="font-semibold"
-                :class="getQuotaUsedColorClass(provider)"
-              >${{ (provider.monthly_used_usd ?? 0).toFixed(2) }}</span>/<span class="font-medium">${{ (provider.monthly_quota_usd ?? 0).toFixed(2) }}</span>
-            </span>
-            <span class="text-muted-foreground">
-              端点 {{ provider.active_endpoints }}/{{ provider.total_endpoints }}
-            </span>
-            <span class="text-muted-foreground">
-              密钥 {{ provider.active_keys }}/{{ provider.total_keys }}
-            </span>
-            <span class="text-muted-foreground">
-              模型 {{ provider.active_models }}/{{ provider.total_models }}
-            </span>
-          </div>
-
-          <!-- 第三行：端点健康 -->
-          <div
-            v-if="provider.endpoint_health_details && provider.endpoint_health_details.length > 0"
-            class="grid grid-cols-3 gap-x-3 gap-y-2 max-w-[240px]"
-          >
-            <div
-              v-for="endpoint in sortEndpoints(provider.endpoint_health_details)"
-              :key="endpoint.api_format"
-              class="flex flex-col gap-1.5"
-              :title="getEndpointTooltip(endpoint)"
-            >
-              <!-- 上排：缩写 + 百分比 -->
-              <div class="flex items-center justify-between text-[10px] leading-none">
-                <span class="font-medium text-muted-foreground/80">
-                  {{ API_FORMAT_SHORT[endpoint.api_format] || endpoint.api_format.substring(0,2) }}
-                </span>
-                <span class="font-medium text-muted-foreground/80">
-                  {{ isEndpointAvailable(endpoint) ? `${(endpoint.health_score * 100).toFixed(0)}%` : '-' }}
-                </span>
-              </div>
-
-              <!-- 下排：进度条 -->
-              <div class="h-1.5 w-full bg-border dark:bg-border/80 rounded-full overflow-hidden">
-                <div
-                  class="h-full rounded-full transition-all duration-300"
-                  :class="getEndpointDotColor(endpoint)"
-                  :style="{ width: isEndpointAvailable(endpoint) ? `${Math.max(endpoint.health_score * 100, 5)}%` : '100%' }"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
+          :provider="provider"
+          :editing-description-id="editingDescriptionId"
+          :is-balance-loading="isBalanceLoading"
+          :get-provider-balance="getProviderBalance"
+          :get-provider-balance-error="getProviderBalanceError"
+          :get-provider-checkin="getProviderCheckin"
+          :get-provider-cookie-expired="getProviderCookieExpired"
+          :format-balance-display="formatBalanceDisplay"
+          :get-quota-used-color-class="getQuotaUsedColorClass"
+          @view-detail="openProviderDrawer"
+          @edit-provider="openEditProviderDialog"
+          @open-ops-config="openOpsConfigDialog"
+          @toggle-status="toggleProviderStatus"
+          @delete-provider="handleDeleteProvider"
+          @start-edit-description="startEditDescription"
+          @save-description="saveDescription"
+          @cancel-edit-description="cancelEditDescription"
+        />
       </div>
 
       <!-- 分页 -->
@@ -766,62 +190,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import {
-  Plus,
-  Search,
-  Edit,
-  Eye,
-  Trash2,
-  ChevronDown,
-  Power,
-  KeyRound,
-  Loader2,
-  FilterX,
-  ExternalLink,
-  Pencil,
-  Check,
-  X
-} from 'lucide-vue-next'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import Button from '@/components/ui/button.vue'
-import Badge from '@/components/ui/badge.vue'
 import Card from '@/components/ui/card.vue'
-import Input from '@/components/ui/input.vue'
 import Table from '@/components/ui/table.vue'
 import TableHeader from '@/components/ui/table-header.vue'
 import TableBody from '@/components/ui/table-body.vue'
 import TableRow from '@/components/ui/table-row.vue'
 import TableHead from '@/components/ui/table-head.vue'
-import TableCell from '@/components/ui/table-cell.vue'
 import Pagination from '@/components/ui/pagination.vue'
-import RefreshButton from '@/components/ui/refresh-button.vue'
-import Select from '@/components/ui/select.vue'
-import SelectTrigger from '@/components/ui/select-trigger.vue'
-import SelectValue from '@/components/ui/select-value.vue'
-import SelectContent from '@/components/ui/select-content.vue'
-import SelectItem from '@/components/ui/select-item.vue'
 import { ProviderFormDialog, PriorityManagementDialog, ProviderAuthDialog } from '@/features/providers/components'
 import ProviderDetailDrawer from '@/features/providers/components/ProviderDetailDrawer.vue'
+import ProviderTableHeader from '@/features/providers/components/ProviderTableHeader.vue'
+import ProviderTableRow from '@/features/providers/components/ProviderTableRow.vue'
+import ProviderMobileCard from '@/features/providers/components/ProviderMobileCard.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useRowClick } from '@/composables/useRowClick'
+import { useProviderFilters } from '@/features/providers/composables/useProviderFilters'
+import { useProviderBalance } from '@/features/providers/composables/useProviderBalance'
 import {
   getProvidersSummary,
   deleteProvider,
   updateProvider,
   getGlobalModels,
   type ProviderWithEndpointsSummary,
-  API_FORMAT_SHORT
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
-import { batchQueryBalance, getArchitectures, type ActionResultResponse, type ArchitectureInfo } from '@/api/providerOps'
-import { formatBillingType } from '@/utils/format'
-import { type BalanceExtraItem } from '@/features/providers/auth-templates'
-import { formatBalanceExtraFromSchema, type CredentialsSchema } from '@/features/providers/auth-templates/schema-utils'
-
-const vAutoFocus = {
-  mounted: (el: HTMLElement) => el.focus()
-}
 
 const { error: showError, success: showSuccess } = useToast()
 const { confirmDanger } = useConfirm()
@@ -836,27 +231,45 @@ const priorityMode = ref<'provider' | 'global_key'>('provider')
 const providerDrawerOpen = ref(false)
 const selectedProviderId = ref<string | null>(null)
 
-// 架构 schema 缓存（用于 balance extra 格式化）
-const architectureSchemas = ref<Record<string, CredentialsSchema>>({})
-const architectureSchemasLoaded = ref(false)
+// 全局模型数据（用于模型筛选下拉）
+const globalModels = ref<{ id: string; name: string }[]>([])
 
-/** 加载架构 schema 缓存 */
-async function loadArchitectureSchemas() {
-  if (architectureSchemasLoaded.value) return
-  try {
-    const archs: ArchitectureInfo[] = await getArchitectures()
-    const schemas: Record<string, CredentialsSchema> = {}
-    for (const arch of archs) {
-      if (arch.credentials_schema) {
-        schemas[arch.architecture_id] = arch.credentials_schema as CredentialsSchema
-      }
-    }
-    architectureSchemas.value = schemas
-    architectureSchemasLoaded.value = true
-  } catch {
-    // 加载失败不影响主流程
-  }
-}
+// Composables
+const {
+  searchQuery,
+  filterStatus,
+  filterApiFormat,
+  filterModel,
+  statusFilters,
+  apiFormatFilters,
+  modelFilters,
+  hasActiveFilters,
+  filteredProviders,
+  currentPage,
+  pageSize,
+  paginatedProviders,
+  resetFilters,
+} = useProviderFilters(
+  () => providers.value,
+  () => globalModels.value,
+)
+
+const {
+  loadArchitectureSchemas,
+  loadBalances,
+  getProviderBalance,
+  getProviderBalanceBreakdown,
+  getProviderBalanceError,
+  isBalanceLoading,
+  getProviderCheckin,
+  getProviderCookieExpired,
+  formatBalanceDisplay,
+  formatResetCountdown,
+  getProviderBalanceExtra,
+  getQuotaUsedColorClass,
+  startTick,
+  stopTick,
+} = useProviderBalance()
 
 // 扩展操作配置对话框
 const opsConfigDialogOpen = ref(false)
@@ -865,35 +278,29 @@ const opsConfigProviderWebsite = ref('')
 
 // 内联编辑备注
 const editingDescriptionId = ref<string | null>(null)
-const editingDescriptionValue = ref('')
 
-function startEditDescription(event: Event, provider: ProviderWithEndpointsSummary) {
-  event.stopPropagation()
+function startEditDescription(_event: Event, provider: ProviderWithEndpointsSummary) {
   editingDescriptionId.value = provider.id
-  editingDescriptionValue.value = provider.description || ''
 }
 
-function cancelEditDescription(event?: Event) {
-  event?.stopPropagation()
+function cancelEditDescription(_event?: Event) {
   editingDescriptionId.value = null
-  editingDescriptionValue.value = ''
 }
 
-async function saveDescription(event: Event, provider: ProviderWithEndpointsSummary) {
-  event.stopPropagation()
-  const newValue = editingDescriptionValue.value.trim()
+async function saveDescription(_event: Event, provider: ProviderWithEndpointsSummary, newValue: string) {
+  const trimmed = newValue.trim()
   const oldValue = provider.description || ''
-  if (newValue === oldValue) {
+  if (trimmed === oldValue) {
     cancelEditDescription()
     return
   }
   try {
-    await updateProvider(provider.id, { description: newValue || null })
-    provider.description = newValue || undefined
+    await updateProvider(provider.id, { description: trimmed || null })
+    provider.description = trimmed || undefined
     // 同步更新 providers 数组
     const target = providers.value.find(p => p.id === provider.id)
     if (target) {
-      target.description = newValue || undefined
+      target.description = trimmed || undefined
     }
     cancelEditDescription()
   } catch (err: any) {
@@ -901,136 +308,20 @@ async function saveDescription(event: Event, provider: ProviderWithEndpointsSumm
   }
 }
 
-function handleDescriptionKeydown(event: KeyboardEvent, provider: ProviderWithEndpointsSummary) {
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    saveDescription(event, provider)
-  } else if (event.key === 'Escape') {
-    cancelEditDescription(event)
-  }
-}
-
-// 余额数据缓存 {providerId: ActionResultResponse}
-const balanceCache = ref<Record<string, ActionResultResponse>>({})
-// 余额加载请求版本计数器（用于防止竞态条件）
-// 使用普通变量而非 ref，因为不需要响应式，仅用于比较请求版本
-let balanceLoadVersion = 0
-
-// 搜索与筛选
-const searchQuery = ref('')
-const filterStatus = ref('all')
-const filterApiFormat = ref('all')
-const filterModel = ref('all')
-
-// 全局模型数据（用于模型筛选下拉）
-const globalModels = ref<{ id: string; name: string }[]>([])
-
-const statusFilters = [
-  { value: 'all', label: '全部状态' },
-  { value: 'active', label: '活跃' },
-  { value: 'inactive', label: '已停用' },
-]
-
-const apiFormatFilters = [
-  { value: 'all', label: '全部格式' },
-  { value: 'claude:chat', label: 'Claude Chat' },
-  { value: 'claude:cli', label: 'Claude CLI' },
-  { value: 'openai:chat', label: 'OpenAI Chat' },
-  { value: 'openai:cli', label: 'OpenAI CLI' },
-  { value: 'gemini:chat', label: 'Gemini Chat' },
-  { value: 'gemini:cli', label: 'Gemini CLI' },
-]
-
-// 动态计算模型筛选选项：只展示当前提供商列表中实际关联的全局模型
-const modelFilters = computed(() => {
-  const usedIds = new Set(providers.value.flatMap(p => p.global_model_ids || []))
-  const items = globalModels.value
-    .filter(m => usedIds.has(m.id))
-    .map(m => ({ value: m.id, label: m.name }))
-    .sort((a, b) => a.label.localeCompare(b.label))
-  return [{ value: 'all', label: '全部模型' }, ...items]
-})
-
-const hasActiveFilters = computed(() => {
-  return searchQuery.value !== '' || filterStatus.value !== 'all' || filterApiFormat.value !== 'all' || filterModel.value !== 'all'
-})
-
-// 分页
-const currentPage = ref(1)
-const pageSize = ref(20)
-
 // 优先级模式配置
 const priorityModeConfig = computed(() => {
   return {
-    label: priorityMode.value === 'global_key' ? '全局 Key 优先' : '提供商优先'
+    label: priorityMode.value === 'global_key' ? '全局 Key 优先' : '提供商优先',
   }
 })
 
 // 当前已有提供商的最大优先级
 const maxProviderPriority = computed(() => {
   if (providers.value.length === 0) return undefined
-  const priorities = providers.value.map(p => p.provider_priority).filter(v => typeof v === 'number' && Number.isFinite(v))
+  const priorities = providers.value
+    .map(p => p.provider_priority)
+    .filter(v => typeof v === 'number' && Number.isFinite(v))
   return priorities.length > 0 ? Math.max(...priorities) : undefined
-})
-
-// 筛选后的提供商列表
-const filteredProviders = computed(() => {
-  let result = [...providers.value]
-
-  // 搜索筛选（支持空格分隔的多关键词 AND 搜索）
-  if (searchQuery.value.trim()) {
-    const keywords = searchQuery.value.toLowerCase().split(/\s+/).filter(k => k.length > 0)
-    result = result.filter(p => {
-      const searchableText = `${p.name}`.toLowerCase()
-      return keywords.every(keyword => searchableText.includes(keyword))
-    })
-  }
-
-  // 状态筛选
-  if (filterStatus.value !== 'all') {
-    const isActive = filterStatus.value === 'active'
-    result = result.filter(p => p.is_active === isActive)
-  }
-
-  // API 格式筛选
-  if (filterApiFormat.value !== 'all') {
-    result = result.filter(p =>
-      p.api_formats && p.api_formats.includes(filterApiFormat.value)
-    )
-  }
-
-  // 模型筛选
-  if (filterModel.value !== 'all') {
-    result = result.filter(p =>
-      p.global_model_ids && p.global_model_ids.includes(filterModel.value)
-    )
-  }
-
-  // 排序
-  return result.sort((a, b) => {
-    // 1. 优先显示活跃的提供商
-    if (a.is_active !== b.is_active) {
-      return a.is_active ? -1 : 1
-    }
-    // 2. 按优先级排序
-    if (a.provider_priority !== b.provider_priority) {
-      return a.provider_priority - b.provider_priority
-    }
-    // 3. 按名称排序
-    return a.name.localeCompare(b.name)
-  })
-})
-
-// 分页
-const paginatedProviders = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return filteredProviders.value.slice(start, end)
-})
-
-// 搜索/筛选时重置分页
-watch([searchQuery, filterStatus, filterApiFormat, filterModel], () => {
-  currentPage.value = 1
 })
 
 // 加载优先级模式
@@ -1058,349 +349,15 @@ async function loadGlobalModelList() {
 // 加载提供商列表
 async function loadProviders() {
   loading.value = true
-  // 清空旧的余额缓存，避免数据累积
-  balanceCache.value = {}
   try {
     providers.value = await getProvidersSummary()
     // 异步加载配置了 ops 的 provider 的余额数据
-    loadBalances()
+    loadBalances(providers.value)
   } catch (err: any) {
     showError(err.response?.data?.detail || '加载提供商列表失败', '错误')
   } finally {
     loading.value = false
   }
-}
-
-// 异步加载余额数据（使用批量接口）
-async function loadBalances() {
-  const currentVersion = ++balanceLoadVersion
-  try {
-    const opsProviderIds = providers.value
-      .filter(p => p.ops_configured)
-      .map(p => p.id)
-    if (opsProviderIds.length === 0) return
-
-    const results = await batchQueryBalance(opsProviderIds)
-
-    // 检查是否有新的请求已经开始，如果有则丢弃当前结果
-    if (currentVersion !== balanceLoadVersion) return
-
-    // 收集需要重试的 provider IDs
-    const pendingProviderIds: string[] = []
-
-    // 将结果存入缓存（包括 pending 状态）
-    for (const [providerId, result] of Object.entries(results)) {
-      // 存入缓存：success, auth_expired (带有效数据), pending
-      if (result.status === 'success' || result.status === 'auth_expired' || result.status === 'pending') {
-        balanceCache.value[providerId] = result
-      }
-      // 收集 pending 状态的 provider，稍后重试
-      if (result.status === 'pending') {
-        pendingProviderIds.push(providerId)
-      }
-    }
-
-    // 如果有 pending 状态的 provider，3秒后自动重试
-    if (pendingProviderIds.length > 0) {
-      const timerId = setTimeout(() => {
-        pendingTimers.delete(timerId)
-        // 检查版本号，确保没有新的加载请求
-        if (currentVersion === balanceLoadVersion) {
-          retryPendingBalances(pendingProviderIds, currentVersion, 0)
-        }
-      }, 3000)
-      pendingTimers.add(timerId)
-    }
-  } catch (e) {
-    console.warn('[loadBalances] 加载余额数据失败:', e)
-  }
-}
-
-// 重试加载 pending 状态的余额
-const MAX_BALANCE_RETRIES = 3
-
-// 追踪待处理的定时器，用于组件卸载时清理
-const pendingTimers = new Set<ReturnType<typeof setTimeout>>()
-
-async function retryPendingBalances(providerIds: string[], loadVersion: number, retryCount: number) {
-  try {
-    const results = await batchQueryBalance(providerIds)
-    const stillPending: string[] = []
-
-    for (const [providerId, result] of Object.entries(results)) {
-      if (result.status !== 'pending') {
-        balanceCache.value[providerId] = result
-      } else {
-        stillPending.push(providerId)
-      }
-    }
-
-    // 如果还有 pending 且未达到最大重试次数，继续重试（指数退避）
-    if (stillPending.length > 0 && retryCount < MAX_BALANCE_RETRIES) {
-      const delay = 3000 * Math.pow(1.5, retryCount) // 3s, 4.5s, 6.75s
-      const timerId = setTimeout(() => {
-        pendingTimers.delete(timerId)
-        // 检查版本号，确保没有新的加载请求
-        if (loadVersion === balanceLoadVersion) {
-          retryPendingBalances(stillPending, loadVersion, retryCount + 1)
-        }
-      }, delay)
-      pendingTimers.add(timerId)
-    }
-  } catch (e) {
-    console.warn('[retryPendingBalances] 重试加载余额失败:', e)
-  }
-}
-
-/**
- * 类型守卫：检查是否为 BalanceInfo（简化版）
- * 只检查余额显示所需的字段，完整的 BalanceInfo 还包含 total_granted, total_used, expires_at, extra
- */
-function isBalanceInfo(data: unknown): data is { total_available: number | null; currency: string } {
-  if (typeof data !== 'object' || data === null) return false
-  if (!('total_available' in data) || !('currency' in data)) return false
-  const d = data as Record<string, unknown>
-  // total_available 必须是 number 或 null
-  if (d.total_available !== null && typeof d.total_available !== 'number') return false
-  // currency 必须是 string
-  if (typeof d.currency !== 'string') return false
-  return true
-}
-
-// 获取 provider 的余额显示
-function getProviderBalance(providerId: string): { available: number | null; currency: string } | null {
-  const result = balanceCache.value[providerId]
-  // auth_expired 时余额数据仍有效（只是签到 Cookie 失效）
-  if (!result || (result.status !== 'success' && result.status !== 'auth_expired') || !result.data) {
-    return null
-  }
-  if (!isBalanceInfo(result.data)) {
-    return null
-  }
-  return {
-    available: result.data.total_available,
-    currency: result.data.currency || 'USD'
-  }
-}
-
-// 获取 provider 余额明细（balance + points 分开显示）
-function getProviderBalanceBreakdown(providerId: string): { balance: number; points: number; currency: string } | null {
-  const result = balanceCache.value[providerId]
-  if (!result || (result.status !== 'success' && result.status !== 'auth_expired') || !result.data) {
-    return null
-  }
-  const data = result.data as Record<string, any>
-  const extra = data.extra
-  if (!extra || extra.balance === undefined || extra.points === undefined) {
-    return null
-  }
-  return {
-    balance: extra.balance,
-    points: extra.points,
-    currency: data.currency || 'USD',
-  }
-}
-
-// 获取 provider 余额查询的错误状态
-function getProviderBalanceError(providerId: string): { status: string; message: string } | null {
-  const result = balanceCache.value[providerId]
-  if (!result) {
-    return null
-  }
-  // pending 状态不是错误，正在加载中
-  if (result.status === 'pending') {
-    return null
-  }
-  // 认证失败或过期
-  if (result.status === 'auth_failed' || result.status === 'auth_expired') {
-    return {
-      status: result.status,
-      message: result.message || '认证失败'
-    }
-  }
-  // 其他错误
-  if (result.status !== 'success') {
-    return {
-      status: result.status,
-      message: result.message || '查询失败'
-    }
-  }
-  return null
-}
-
-// 检查余额是否正在加载中
-function isBalanceLoading(providerId: string): boolean {
-  const result = balanceCache.value[providerId]
-  return result?.status === 'pending'
-}
-
-// 获取 provider 的签到信息（从 extra 字段）
-function getProviderCheckin(providerId: string): { success: boolean | null; message: string } | null {
-  const result = balanceCache.value[providerId]
-  if (!result || result.status !== 'success' || !result.data) {
-    return null
-  }
-  const data = result.data as Record<string, any>
-  const extra = data.extra
-  if (!extra || extra.checkin_success === undefined) {
-    return null
-  }
-  return {
-    success: extra.checkin_success,
-    message: extra.checkin_message || ''
-  }
-}
-
-// 获取 provider 的 Cookie 失效状态（从 extra 字段）
-function getProviderCookieExpired(providerId: string): { expired: boolean; message: string } | null {
-  const result = balanceCache.value[providerId]
-  if (!result || !result.data) {
-    return null
-  }
-  // 支持 status 为 'success' 或 'auth_expired'（Cookie 失效时状态会变为 auth_expired）
-  if (result.status !== 'success' && result.status !== 'auth_expired') {
-    return null
-  }
-  const data = result.data as Record<string, any>
-  const extra = data.extra
-  if (!extra || !extra.cookie_expired) {
-    return null
-  }
-  return {
-    expired: true,
-    message: extra.cookie_expired_message || 'Cookie 已失效'
-  }
-}
-
-// 格式化余额显示
-function formatBalanceDisplay(balance: { available: number | null; currency: string } | null): string {
-  if (!balance || balance.available == null) {
-    return '-'
-  }
-  const symbol = balance.currency === 'USD' ? '$' : balance.currency
-  return `${symbol}${balance.available.toFixed(2)}`
-}
-
-// 格式化重置倒计时（从 Unix 时间戳）
-function formatResetCountdown(resetsAt: number): string {
-  // 依赖 tickCounter 触发响应式更新
-  void tickCounter.value
-
-  const now = Date.now() / 1000
-  const diff = resetsAt - now
-
-  if (diff <= 0) return '即将重置'
-
-  const totalHours = Math.floor(diff / 3600)
-  const minutes = Math.floor((diff % 3600) / 60)
-  const seconds = Math.floor(diff % 60)
-
-  const pad = (n: number) => n.toString().padStart(2, '0')
-
-  if (totalHours > 0) {
-    return `${totalHours}:${pad(minutes)}:${pad(seconds)}`
-  }
-  return `${minutes}:${pad(seconds)}`
-}
-
-// 获取 provider 余额的额外信息（如窗口限额）
-function getProviderBalanceExtra(providerId: string, architectureId?: string): BalanceExtraItem[] {
-  if (!architectureId) return []
-
-  const result = balanceCache.value[providerId]
-  // auth_expired 时余额数据仍有效（只是签到 Cookie 失效）
-  if (!result || (result.status !== 'success' && result.status !== 'auth_expired') || !result.data) {
-    return []
-  }
-
-  const data = result.data as Record<string, any>
-  const extra = data.extra
-  if (!extra) return []
-
-  // 从 schema 缓存中获取格式化配置
-  const schema = architectureSchemas.value[architectureId]
-  if (!schema) return []
-
-  return formatBalanceExtraFromSchema(schema, extra)
-}
-
-
-// 端点排序
-function sortEndpoints(endpoints: any[]) {
-  return [...endpoints].sort((a, b) => {
-    const order = ['claude:chat', 'claude:cli', 'openai:chat', 'openai:cli', 'gemini:chat', 'gemini:cli', 'openai:video', 'gemini:video']
-    return order.indexOf(a.api_format) - order.indexOf(b.api_format)
-  })
-}
-
-// 端点状态枚举
-type EndpointStatus = 'disabled' | 'no_keys' | 'keys_disabled' | 'available'
-
-// 获取端点状态
-function getEndpointStatus(endpoint: any): EndpointStatus {
-  if (endpoint.is_active === false) {
-    return 'disabled'
-  }
-  if ((endpoint.active_keys ?? 0) === 0) {
-    return (endpoint.total_keys ?? 0) > 0 ? 'keys_disabled' : 'no_keys'
-  }
-  return 'available'
-}
-
-// 判断端点是否可用
-function isEndpointAvailable(endpoint: any): boolean {
-  return getEndpointStatus(endpoint) === 'available'
-}
-
-// 根据健康分数获取颜色
-function getHealthScoreColor(score: number | undefined | null): string {
-  if (score === undefined || score === null) {
-    return 'bg-muted-foreground/40'
-  }
-  if (score >= 0.8) return 'bg-green-500'
-  if (score >= 0.5) return 'bg-amber-500'
-  return 'bg-red-500'
-}
-
-// 端点不可用时进度条颜色
-function getEndpointDotColor(endpoint: any): string {
-  if (!isEndpointAvailable(endpoint)) {
-    return 'bg-muted-foreground/40'
-  }
-  return getHealthScoreColor(endpoint.health_score)
-}
-
-// 端点提示文本
-function getEndpointTooltip(endpoint: any): string {
-  const format = endpoint.api_format
-  const status = getEndpointStatus(endpoint)
-
-  switch (status) {
-    case 'disabled':
-      return `${format}: 端点已禁用`
-    case 'no_keys':
-      return `${format}: 未配置密钥`
-    case 'keys_disabled':
-      return `${format}: 无可用密钥`
-    case 'available': {
-      const score = endpoint.health_score
-      if (score === undefined || score === null) {
-        return `${format}: 暂无健康数据`
-      }
-      return `${format}: 健康度 ${(score * 100).toFixed(0)}%`
-    }
-  }
-}
-
-// 配额已用颜色（根据使用比例）
-function getQuotaUsedColorClass(provider: ProviderWithEndpointsSummary): string {
-  const used = provider.monthly_used_usd ?? 0
-  const quota = provider.monthly_quota_usd ?? 0
-  if (quota <= 0) return 'text-foreground'
-  const ratio = used / quota
-  if (ratio >= 0.9) return 'text-red-600 dark:text-red-400'
-  if (ratio >= 0.7) return 'text-amber-600 dark:text-amber-400'
-  return 'text-foreground'
 }
 
 // 使用复用的行点击逻辑
@@ -1468,7 +425,7 @@ function handleProviderAdded() {
 async function handleDeleteProvider(provider: ProviderWithEndpointsSummary) {
   const confirmed = await confirmDanger(
     '删除提供商',
-    `确定要删除提供商 "${provider.name}" 吗？\n\n这将同时删除其所有端点、密钥和配置。此操作不可恢复！`
+    `确定要删除提供商 "${provider.name}" 吗？\n\n这将同时删除其所有端点、密钥和配置。此操作不可恢复！`,
   )
 
   if (!confirmed) return
@@ -1511,10 +468,6 @@ function handleGlobalClick(event: MouseEvent) {
   cancelEditDescription()
 }
 
-// 用于触发倒计时更新的响应式计数器
-const tickCounter = ref(0)
-let tickInterval: ReturnType<typeof setInterval> | null = null
-
 onMounted(() => {
   loadProviders()
   loadPriorityMode()
@@ -1522,18 +475,11 @@ onMounted(() => {
   loadArchitectureSchemas()
   document.addEventListener('click', handleGlobalClick, true)
   // 每秒更新一次倒计时
-  tickInterval = setInterval(() => {
-    tickCounter.value++
-  }, 1000)
+  startTick()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleGlobalClick, true)
-  if (tickInterval) {
-    clearInterval(tickInterval)
-  }
-  // 清理余额重试的待处理定时器
-  pendingTimers.forEach(clearTimeout)
-  pendingTimers.clear()
+  stopTick()
 })
 </script>

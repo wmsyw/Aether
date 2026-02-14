@@ -53,6 +53,7 @@ from src.utils.timeout import read_first_chunk_with_ttfb_timeout
 from .cli_sse_helpers import _format_converted_events_to_sse
 
 if TYPE_CHECKING:
+    from src.api.handlers.base.cli_protocol import CliHandlerProtocol
     from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
 
 
@@ -60,7 +61,7 @@ class CliStreamMixin:
     """流式处理核心方法的 Mixin"""
 
     async def process_stream(
-        self,
+        self: CliHandlerProtocol,
         original_request_body: dict[str, Any],
         original_headers: dict[str, str],
         query_params: dict[str, str] | None = None,

@@ -158,12 +158,26 @@ class ModuleRegistry:
 
     # ========== 激活状态检查 ==========
 
-    def is_active(self, name: str, db: Session) -> bool:
+    def is_active(self, name: str, db: Session, _visited: set[str] | None = None) -> bool:
         """
         检查模块是否最终激活
 
         激活条件：available && enabled && 依赖模块都激活
+
+        Args:
+            name: 模块名称
+            db: 数据库会话
+            _visited: 内部递归防御，防止循环依赖导致无限递归
         """
+        if _visited is None:
+            _visited = set()
+
+        if name in _visited:
+            logger.warning(f"Circular dependency detected in module activation chain: {name}")
+            return False
+
+        _visited.add(name)
+
         if not self.is_available(name):
             return False
         if not self.is_enabled(name, db):
@@ -172,7 +186,7 @@ class ModuleRegistry:
         # 检查依赖模块
         module = self._modules[name]
         for dep in module.metadata.dependencies:
-            if not self.is_active(dep, db):
+            if not self.is_active(dep, db, _visited):
                 return False
 
         return True
@@ -205,6 +219,28 @@ class ModuleRegistry:
             logger.warning(f"Module [{name}] config validation error: {e}")
             return False, f"配置验证出错: {str(e)}"
 
+    def reconcile_module_state(self, name: str, db: Session) -> None:
+        """
+        修复模块启用状态与配置的一致性
+
+        如果模块已启用但配置验证失败（例如依赖的 Provider Key 被删除），
+        则自动禁用该模块以保证状态一致性。
+
+        此方法是显式的写操作，应在需要状态修复的场景中调用，
+        而非在纯查询方法中隐式执行。
+        """
+        if name not in self._modules:
+            return
+        if not self.is_available(name):
+            return
+
+        config_validated, config_error = self.validate_config(name, db)
+        if self.is_enabled(name, db) and not config_validated:
+            self.set_enabled(name, False, db)
+            logger.info(
+                f"Module [{name}] auto-disabled: config validation failed" f" ({config_error})"
+            )
+
     # ========== 状态查询 ==========
 
     def get_module_status(
@@ -235,14 +271,6 @@ class ModuleRegistry:
 
         # 获取启用状态
         enabled = self.is_enabled(name, db) if available else False
-
-        # 配置验证失败时自动禁用模块
-        # 注意：此处故意在 get_status() 中写入，以确保模块状态与配置同步
-        # 场景：用户删除了模块所依赖的 Provider Key 后，模块应自动关闭
-        # 权衡：查询方法中的写操作副作用 vs 状态一致性保证
-        if enabled and not config_validated:
-            self.set_enabled(name, False, db)
-            enabled = False
 
         # 计算激活状态：available && enabled && config_validated && 依赖模块都激活
         is_active = self.is_active(name, db) if available else False
@@ -293,6 +321,7 @@ class ModuleRegistry:
         if name not in self._modules:
             return None
 
+        self.reconcile_module_state(name, db)
         health = await self.check_health(name) if self.is_available(name) else ModuleHealth.UNKNOWN
         return self.get_module_status(name, db, health=health)
 
@@ -309,6 +338,7 @@ class ModuleRegistry:
         """获取所有模块状态（同步版本，不含健康检查）"""
         result = {}
         for name in self._modules:
+            self.reconcile_module_state(name, db)
             status = self.get_module_status(name, db)
             if status:
                 result[name] = status

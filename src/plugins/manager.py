@@ -434,7 +434,7 @@ class PluginManager:
         # 创建插件名称到插件对象的映射
         plugin_map = {plugin.name: plugin for plugin in plugins}
 
-        # 计算每个插件的入度（被依赖的次数）
+        # 计算每个插件的入度（未满足的依赖数量）
         in_degree = {plugin.name: 0 for plugin in plugins}
 
         # 构建依赖图

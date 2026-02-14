@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import Request
@@ -24,6 +24,9 @@ from src.core.logger import logger
 from src.database import get_db
 from src.models.database import User
 from src.services.provider.behavior import get_provider_behavior
+
+if TYPE_CHECKING:
+    from src.api.handlers.base.cli_protocol import CliHandlerProtocol
 
 
 class CliMonitorMixin:
@@ -157,7 +160,7 @@ class CliMonitorMixin:
             raise
 
     async def _record_stream_stats(
-        self,
+        self: CliHandlerProtocol,
         ctx: StreamContext,
         original_headers: dict[str, str],
         original_request_body: dict[str, Any],

@@ -38,8 +38,9 @@ async def test_build_candidates_allows_cross_format_when_endpoint_accepts_and_ov
     register_default_normalizers()
 
     scheduler = CacheAwareScheduler()
-    scheduler._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
-    scheduler._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
+    builder = scheduler._candidate_builder
+    builder._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
+    builder._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
 
     provider = MagicMock()
     provider.name = "p1"
@@ -52,7 +53,7 @@ async def test_build_candidates_allows_cross_format_when_endpoint_accepts_and_ov
     ]
     provider.api_keys = [_mock_key("k1", ["openai:chat"])]
 
-    candidates = await scheduler._build_candidates(
+    candidates = await builder._build_candidates(
         db=MagicMock(),
         providers=[provider],
         client_format="claude:chat",
@@ -75,8 +76,9 @@ async def test_build_candidates_allows_cross_format_when_global_off_but_endpoint
     register_default_normalizers()
 
     scheduler = CacheAwareScheduler()
-    scheduler._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
-    scheduler._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
+    builder = scheduler._candidate_builder
+    builder._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
+    builder._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
 
     provider = MagicMock()
     provider.name = "p1"
@@ -89,7 +91,7 @@ async def test_build_candidates_allows_cross_format_when_global_off_but_endpoint
     ]
     provider.api_keys = [_mock_key("k1", ["openai:chat"])]
 
-    candidates = await scheduler._build_candidates(
+    candidates = await builder._build_candidates(
         db=MagicMock(),
         providers=[provider],
         client_format="claude:chat",
@@ -114,8 +116,9 @@ async def test_build_candidates_blocks_cross_format_when_global_off_and_endpoint
     register_default_normalizers()
 
     scheduler = CacheAwareScheduler()
-    scheduler._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
-    scheduler._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
+    builder = scheduler._candidate_builder
+    builder._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
+    builder._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
 
     provider = MagicMock()
     provider.name = "p1"
@@ -123,7 +126,7 @@ async def test_build_candidates_blocks_cross_format_when_global_off_and_endpoint
     provider.endpoints = [_mock_endpoint("openai:chat", None)]  # 端点未配置格式接受策略
     provider.api_keys = [_mock_key("k1", ["openai:chat"])]
 
-    candidates = await scheduler._build_candidates(
+    candidates = await builder._build_candidates(
         db=MagicMock(),
         providers=[provider],
         client_format="claude:chat",
@@ -141,8 +144,9 @@ async def test_build_candidates_includes_cross_format_when_enabled() -> None:
     register_default_normalizers()
 
     scheduler = CacheAwareScheduler()
-    scheduler._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
-    scheduler._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
+    builder = scheduler._candidate_builder
+    builder._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
+    builder._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
 
     provider = MagicMock()
     provider.name = "p1"
@@ -153,7 +157,7 @@ async def test_build_candidates_includes_cross_format_when_enabled() -> None:
     ]
     provider.api_keys = [_mock_key("k1", ["openai:chat"])]
 
-    candidates = await scheduler._build_candidates(
+    candidates = await builder._build_candidates(
         db=MagicMock(),
         providers=[provider],
         client_format="claude:chat",
@@ -172,8 +176,9 @@ async def test_exact_matches_rank_before_convertible() -> None:
     register_default_normalizers()
 
     scheduler = CacheAwareScheduler()
-    scheduler._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
-    scheduler._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
+    builder = scheduler._candidate_builder
+    builder._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
+    builder._check_key_availability = MagicMock(return_value=(True, None, None))  # type: ignore[method-assign]
 
     provider = MagicMock()
     provider.name = "p1"
@@ -191,7 +196,7 @@ async def test_exact_matches_rank_before_convertible() -> None:
         _mock_key("k_claude", ["claude:chat"]),
     ]
 
-    candidates = await scheduler._build_candidates(
+    candidates = await builder._build_candidates(
         db=MagicMock(),
         providers=[provider],
         client_format="claude:chat",

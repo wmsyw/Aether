@@ -22,7 +22,7 @@ class TestCheckModelSupportForGlobalModel:
     """测试 _check_model_support_for_global_model 方法"""
 
     @pytest.mark.asyncio
-    async def test_provider_without_model_should_return_false(self):
+    async def test_provider_without_model_should_return_false(self) -> None:
         """Provider 没有配置对应的 Model 时应该返回 False"""
         scheduler = CacheAwareScheduler()
 
@@ -45,7 +45,7 @@ class TestCheckModelSupportForGlobalModel:
 
         with patch("sqlalchemy.inspect", return_value=mock_inspect):
             is_supported, skip_reason, caps, provider_model_names = (
-                await scheduler._check_model_support_for_global_model(
+                await scheduler._candidate_builder._check_model_support_for_global_model(
                     db=db,
                     provider=provider,
                     global_model=global_model,
@@ -59,7 +59,7 @@ class TestCheckModelSupportForGlobalModel:
         assert provider_model_names is None
 
     @pytest.mark.asyncio
-    async def test_provider_with_different_model_should_return_false(self):
+    async def test_provider_with_different_model_should_return_false(self) -> None:
         """Provider 配置了其他模型但没有目标模型时应该返回 False"""
         scheduler = CacheAwareScheduler()
 
@@ -93,7 +93,7 @@ class TestCheckModelSupportForGlobalModel:
 
         with patch("sqlalchemy.inspect", return_value=mock_inspect):
             is_supported, skip_reason, caps, provider_model_names = (
-                await scheduler._check_model_support_for_global_model(
+                await scheduler._candidate_builder._check_model_support_for_global_model(
                     db=db,
                     provider=provider,
                     global_model=global_model,
@@ -105,7 +105,7 @@ class TestCheckModelSupportForGlobalModel:
         assert skip_reason == "Provider 未实现此模型"
 
     @pytest.mark.asyncio
-    async def test_provider_with_matching_model_should_return_true(self):
+    async def test_provider_with_matching_model_should_return_true(self) -> None:
         """Provider 配置了目标模型时应该返回 True"""
         scheduler = CacheAwareScheduler()
 
@@ -136,7 +136,7 @@ class TestCheckModelSupportForGlobalModel:
 
         with patch("sqlalchemy.inspect", return_value=mock_inspect):
             is_supported, skip_reason, caps, provider_model_names = (
-                await scheduler._check_model_support_for_global_model(
+                await scheduler._candidate_builder._check_model_support_for_global_model(
                     db=db,
                     provider=provider,
                     global_model=global_model,
@@ -150,7 +150,7 @@ class TestCheckModelSupportForGlobalModel:
         assert provider_model_names == {"claude-3-haiku-20240307"}
 
     @pytest.mark.asyncio
-    async def test_provider_with_inactive_model_should_return_false(self):
+    async def test_provider_with_inactive_model_should_return_false(self) -> None:
         """Provider 的模型未激活时应该返回 False"""
         scheduler = CacheAwareScheduler()
 
@@ -179,7 +179,7 @@ class TestCheckModelSupportForGlobalModel:
 
         with patch("sqlalchemy.inspect", return_value=mock_inspect):
             is_supported, skip_reason, caps, provider_model_names = (
-                await scheduler._check_model_support_for_global_model(
+                await scheduler._candidate_builder._check_model_support_for_global_model(
                     db=db,
                     provider=provider,
                     global_model=global_model,

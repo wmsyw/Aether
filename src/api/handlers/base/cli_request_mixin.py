@@ -11,6 +11,7 @@ from src.api.handlers.base.utils import get_format_converter_registry
 from src.core.logger import logger
 
 if TYPE_CHECKING:
+    from src.api.handlers.base.cli_protocol import CliHandlerProtocol
     from src.core.api_format import EndpointDefinition
 
 
@@ -63,7 +64,7 @@ class CliRequestMixin:
         return None
 
     def extract_model_from_request(
-        self,
+        self: CliHandlerProtocol,
         request_body: dict[str, Any],
         path_params: dict[str, Any] | None = None,  # noqa: ARG002 - 子类使用
     ) -> str:

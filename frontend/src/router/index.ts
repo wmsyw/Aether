@@ -4,6 +4,12 @@ import { useAuthStore } from '@/stores/auth'
 import { useModuleStore } from '@/stores/modules'
 import { importWithRetry } from '@/utils/importRetry'
 import { log } from '@/utils/logger'
+import {
+  ensureUserLoaded,
+  resolveHomeRedirect,
+  checkAdminAccess,
+  checkModuleAccess
+} from './guards'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -255,111 +261,39 @@ const router = createRouter({
   routes
 })
 
-/**
- * 判断错误是否为网络错误
- */
-function isNetworkError(error: any): boolean {
-  return !error.response || error.message?.includes('Network') || error.message?.includes('timeout')
-}
-
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   const moduleStore = useModuleStore()
 
   try {
-    // 如果有token但没有用户信息,尝试获取用户信息
-    if (authStore.token && !authStore.user) {
-      try {
-        await authStore.fetchCurrentUser()
-      } catch (error: any) {
-        // 区分网络错误和认证错误
-        if (isNetworkError(error)) {
-          log.warn('Network error while fetching user info, keeping session', { error: error?.message })
-        } else if (error.response?.status === 401) {
-          log.info('Authentication failed, clearing session')
-          authStore.logout()
-        } else {
-          log.warn('Failed to fetch user info, but keeping session', { error: error?.message })
-        }
-      }
-    }
+    const isAuthenticated = await ensureUserLoaded(authStore)
 
-    // 检查整个路由匹配记录链中的 meta
+    // 首页重定向
+    const homeRedirect = resolveHomeRedirect(to, from, authStore)
+    if (homeRedirect !== null) return next(homeRedirect === '' ? undefined : homeRedirect)
+
+    // 需要认证但未认证
     const requiresAuth = to.matched.some(record => record.meta.requiresAuth !== false)
-    const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
-    const moduleName = to.matched.find(record => record.meta.module)?.meta.module as string | undefined
-
-    // 如果需要认证但没有token,跳转到首页
-    if (requiresAuth && !authStore.token) {
+    if (requiresAuth && !isAuthenticated) {
       sessionStorage.setItem('redirectPath', to.fullPath)
       log.debug('No valid token found, redirecting to home')
-      next('/')
-    } else if (to.path === '/' && authStore.isAuthenticated && (to.query.returnTo || from.path.startsWith('/dashboard') || from.path.startsWith('/admin') || from.path === '/')) {
-      // 已登录用户如果是从dashboard返回首页、刷新首页、或者有returnTo参数,允许访问首页
-      next()
-    } else if (authStore.isAuthenticated && to.path === '/' && !to.query.returnTo) {
-      // 已登录用户首次访问首页(非返回/刷新场景),根据角色跳转到对应仪表盘
-      const isAdmin = authStore.user?.role === 'admin'
-      const redirectPath = sessionStorage.getItem('redirectPath')
-      if (redirectPath && redirectPath !== '/') {
-        sessionStorage.removeItem('redirectPath')
-        next(redirectPath)
-      } else {
-        next(isAdmin ? '/admin/dashboard' : '/dashboard')
-      }
-    } else if (requiresAdmin) {
-      // 需要管理员权限的页面
-      const isAdmin = authStore.user?.role === 'admin'
-      if (!isAdmin) {
-        log.warn('Non-admin user attempted to access admin page, redirecting to user dashboard')
-        next('/dashboard')
-      } else {
-        // 检查模块可用性
-        if (moduleName) {
-          // 确保模块状态已加载
-          if (!moduleStore.loaded) {
-            try {
-              await moduleStore.fetchModules()
-            } catch (error) {
-              // fail-close: 获取模块状态失败时拒绝访问
-              log.warn('Failed to fetch modules status, denying access', { error })
-              next('/admin/dashboard')
-              return
-            }
-          }
-          // 如果模块不可用（未部署），重定向到管理员首页
-          // 注意：只检查 available，不检查 enabled/active，允许管理员配置未启用的模块
-          if (!moduleStore.isAvailable(moduleName)) {
-            log.warn(`Module ${moduleName} is not available, redirecting to admin dashboard`)
-            next('/admin/dashboard')
-            return
-          }
-        }
-        next()
-      }
-    } else if (moduleName) {
-      // 非管理员页面但需要模块的路由（如用户侧访问令牌）
-      // 确保模块状态已加载
-      if (!moduleStore.loaded) {
-        try {
-          await moduleStore.fetchModules()
-        } catch (error) {
-          // fail-close: 获取模块状态失败时拒绝访问
-          log.warn('Failed to fetch modules status, denying access', { error })
-          next('/dashboard')
-          return
-        }
-      }
-      // 用户侧需要检查模块是否激活（active），而不仅仅是可用（available）
-      if (!moduleStore.isActive(moduleName)) {
-        log.warn(`Module ${moduleName} is not active, redirecting to user dashboard`)
-        next('/dashboard')
-        return
-      }
-      next()
-    } else {
-      next()
+      return next('/')
     }
+
+    // 管理端检查
+    const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
+    if (requiresAdmin) {
+      const adminRedirect = await checkAdminAccess(to, authStore, moduleStore)
+      if (adminRedirect) return next(adminRedirect)
+    }
+
+    // 非管理端的模块检查
+    if (!requiresAdmin) {
+      const moduleRedirect = await checkModuleAccess(to, moduleStore)
+      if (moduleRedirect) return next(moduleRedirect)
+    }
+
+    next()
   } catch (error) {
     log.error('Router guard error', error)
     // 发生错误时,直接放行,不要乱跳转

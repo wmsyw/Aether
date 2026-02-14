@@ -1,0 +1,240 @@
+import { ref } from 'vue'
+import { useToast } from '@/composables/useToast'
+import {
+  adminApi,
+  type ConfigExportData,
+  type ConfigImportResponse,
+  type UsersExportData,
+  type UsersImportResponse,
+} from '@/api/admin'
+import { log } from '@/utils/logger'
+import type { SystemConfig } from './useSystemConfig'
+
+// 文件大小限制 (10MB)
+const MAX_FILE_SIZE = 10 * 1024 * 1024
+
+export function useConfigExportImport(systemConfig: { value: SystemConfig }) {
+  const { success, error } = useToast()
+
+  // 配置导出/导入相关
+  const exportLoading = ref(false)
+  const importLoading = ref(false)
+  const importDialogOpen = ref(false)
+  const importResultDialogOpen = ref(false)
+  const configFileInput = ref<HTMLInputElement | null>(null)
+  const importPreview = ref<ConfigExportData | null>(null)
+  const importResult = ref<ConfigImportResponse | null>(null)
+  const mergeMode = ref<'skip' | 'overwrite' | 'error'>('skip')
+  const mergeModeSelectOpen = ref(false)
+
+  // 用户数据导出/导入相关
+  const exportUsersLoading = ref(false)
+  const importUsersLoading = ref(false)
+  const importUsersDialogOpen = ref(false)
+  const importUsersResultDialogOpen = ref(false)
+  const usersFileInput = ref<HTMLInputElement | null>(null)
+  const importUsersPreview = ref<UsersExportData | null>(null)
+  const importUsersResult = ref<UsersImportResponse | null>(null)
+  const usersMergeMode = ref<'skip' | 'overwrite' | 'error'>('skip')
+  const usersMergeModeSelectOpen = ref(false)
+
+  // 导出配置
+  async function handleExportConfig() {
+    exportLoading.value = true
+    try {
+      const data = await adminApi.exportConfig()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${systemConfig.value.site_name.toLowerCase()}-config-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      success('配置已导出')
+    } catch (err) {
+      error('导出配置失败')
+      log.error('导出配置失败:', err)
+    } finally {
+      exportLoading.value = false
+    }
+  }
+
+  // 触发文件选择
+  function triggerConfigFileSelect() {
+    configFileInput.value?.click()
+  }
+
+  // 处理文件选择
+  function handleConfigFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    if (file.size > MAX_FILE_SIZE) {
+      error('文件大小不能超过 10MB')
+      input.value = ''
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string
+        const data = JSON.parse(content) as ConfigExportData
+
+        if (!data.version) {
+          error('无效的配置文件：缺少版本信息')
+          return
+        }
+
+        importPreview.value = data
+        mergeMode.value = 'skip'
+        importDialogOpen.value = true
+      } catch (err) {
+        error('解析配置文件失败，请确保是有效的 JSON 文件')
+        log.error('解析配置文件失败:', err)
+      }
+    }
+    reader.readAsText(file)
+
+    input.value = ''
+  }
+
+  // 确认导入
+  async function confirmImport() {
+    if (!importPreview.value) return
+
+    importLoading.value = true
+    try {
+      const result = await adminApi.importConfig({
+        ...importPreview.value,
+        merge_mode: mergeMode.value,
+      })
+      importResult.value = result
+      importDialogOpen.value = false
+      mergeModeSelectOpen.value = false
+      importResultDialogOpen.value = true
+      success('配置导入成功')
+    } catch (err: any) {
+      error(err.response?.data?.detail || '导入配置失败')
+      log.error('导入配置失败:', err)
+    } finally {
+      importLoading.value = false
+    }
+  }
+
+  // 导出用户数据
+  async function handleExportUsers() {
+    exportUsersLoading.value = true
+    try {
+      const data = await adminApi.exportUsers()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${systemConfig.value.site_name.toLowerCase()}-users-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      success('用户数据已导出')
+    } catch (err) {
+      error('导出用户数据失败')
+      log.error('导出用户数据失败:', err)
+    } finally {
+      exportUsersLoading.value = false
+    }
+  }
+
+  // 触发用户数据文件选择
+  function triggerUsersFileSelect() {
+    usersFileInput.value?.click()
+  }
+
+  // 处理用户数据文件选择
+  function handleUsersFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    if (file.size > MAX_FILE_SIZE) {
+      error('文件大小不能超过 10MB')
+      input.value = ''
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string
+        const data = JSON.parse(content) as UsersExportData
+
+        importUsersPreview.value = data
+        usersMergeMode.value = 'skip'
+        importUsersDialogOpen.value = true
+      } catch (err) {
+        error('解析用户数据文件失败，请确保是有效的 JSON 文件')
+        log.error('解析用户数据文件失败:', err)
+      }
+    }
+    reader.readAsText(file)
+
+    input.value = ''
+  }
+
+  // 确认导入用户数据
+  async function confirmImportUsers() {
+    if (!importUsersPreview.value) return
+
+    importUsersLoading.value = true
+    try {
+      const result = await adminApi.importUsers({
+        ...importUsersPreview.value,
+        merge_mode: usersMergeMode.value,
+      })
+      importUsersResult.value = result
+      importUsersDialogOpen.value = false
+      usersMergeModeSelectOpen.value = false
+      importUsersResultDialogOpen.value = true
+      success('用户数据导入成功')
+    } catch (err: any) {
+      error(err.response?.data?.detail || '导入用户数据失败')
+      log.error('导入用户数据失败:', err)
+    } finally {
+      importUsersLoading.value = false
+    }
+  }
+
+  return {
+    // 配置导出/导入
+    exportLoading,
+    importLoading,
+    importDialogOpen,
+    importResultDialogOpen,
+    configFileInput,
+    importPreview,
+    importResult,
+    mergeMode,
+    mergeModeSelectOpen,
+    handleExportConfig,
+    triggerConfigFileSelect,
+    handleConfigFileSelect,
+    confirmImport,
+    // 用户数据导出/导入
+    exportUsersLoading,
+    importUsersLoading,
+    importUsersDialogOpen,
+    importUsersResultDialogOpen,
+    usersFileInput,
+    importUsersPreview,
+    importUsersResult,
+    usersMergeMode,
+    usersMergeModeSelectOpen,
+    handleExportUsers,
+    triggerUsersFileSelect,
+    handleUsersFileSelect,
+    confirmImportUsers,
+  }
+}

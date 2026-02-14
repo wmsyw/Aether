@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.api.handlers.base.parsers import get_parser_for_format
 from src.api.handlers.base.stream_context import StreamContext
@@ -18,12 +18,15 @@ from .cli_sse_helpers import (
     _parse_sse_event_data_line,
 )
 
+if TYPE_CHECKING:
+    from src.api.handlers.base.cli_protocol import CliHandlerProtocol
+
 
 class CliEventMixin:
     """SSE 事件处理和格式转换相关方法的 Mixin"""
 
     def _handle_sse_event(
-        self,
+        self: CliHandlerProtocol,
         ctx: StreamContext,
         event_name: str | None,
         data_str: str,

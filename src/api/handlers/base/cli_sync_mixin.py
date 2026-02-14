@@ -39,6 +39,7 @@ from src.services.provider.stream_policy import (
 from src.services.provider.transport import build_provider_url
 
 if TYPE_CHECKING:
+    from src.api.handlers.base.cli_protocol import CliHandlerProtocol
     from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
 
 
@@ -46,7 +47,7 @@ class CliSyncMixin:
     """同步处理相关方法的 Mixin"""
 
     async def process_sync(
-        self,
+        self: CliHandlerProtocol,
         original_request_body: dict[str, Any],
         original_headers: dict[str, str],
         query_params: dict[str, str] | None = None,

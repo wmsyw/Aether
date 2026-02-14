@@ -29,6 +29,7 @@ from src.utils.sse_parser import SSEEventParser
 from src.utils.timeout import read_first_chunk_with_ttfb_timeout
 
 if TYPE_CHECKING:
+    from src.api.handlers.base.cli_protocol import CliHandlerProtocol
     from src.models.database import Provider, ProviderEndpoint
 
 
@@ -136,7 +137,7 @@ class CliPrefetchMixin:
             )
 
     async def _prefetch_and_check_embedded_error(
-        self,
+        self: CliHandlerProtocol,
         byte_iterator: Any,
         provider: "Provider",
         endpoint: "ProviderEndpoint",

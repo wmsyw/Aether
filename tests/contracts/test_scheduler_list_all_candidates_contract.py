@@ -69,7 +69,7 @@ async def test_list_all_candidates_returns_provider_batch_count_even_when_candid
     global_model = _make_global_model(gid="gm1", name="gpt-4o")
 
     with patch.object(scheduler, "_ensure_initialized", new=AsyncMock(return_value=None)):
-        with patch.object(scheduler, "_query_providers", return_value=providers):
+        with patch.object(scheduler._candidate_builder, "_query_providers", return_value=providers):
             with patch(
                 "src.services.cache.aware_scheduler.ModelCacheService.get_global_model_by_name",
                 new=AsyncMock(return_value=global_model),
@@ -106,7 +106,7 @@ async def test_list_all_candidates_returns_zero_provider_batch_count_when_provid
     global_model = _make_global_model(gid="gm1", name="gpt-4o")
 
     with patch.object(scheduler, "_ensure_initialized", new=AsyncMock(return_value=None)):
-        with patch.object(scheduler, "_query_providers", return_value=[]):
+        with patch.object(scheduler._candidate_builder, "_query_providers", return_value=[]):
             with patch(
                 "src.services.cache.aware_scheduler.ModelCacheService.get_global_model_by_name",
                 new=AsyncMock(return_value=global_model),
