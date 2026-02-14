@@ -202,11 +202,46 @@
                       <ExternalLink class="w-3.5 h-3.5" />
                     </a>
                   </div>
+                  <!-- 内联编辑备注 -->
+                  <div
+                    v-if="editingDescriptionId === provider.id"
+                    data-desc-editor
+                    class="flex items-center gap-1 max-w-[220px]"
+                    @click.stop
+                  >
+                    <input
+                      v-model="editingDescriptionValue"
+                      v-auto-focus
+                      class="flex-1 min-w-0 text-xs px-1.5 py-0.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      placeholder="输入备注..."
+                      @keydown="handleDescriptionKeydown($event, provider)"
+                    />
+                    <button
+                      class="shrink-0 p-0.5 rounded hover:bg-muted text-primary"
+                      title="保存"
+                      @click="saveDescription($event, provider)"
+                    >
+                      <Check class="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      class="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground"
+                      title="取消"
+                      @click="cancelEditDescription($event)"
+                    >
+                      <X class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <span
-                    v-if="provider.description"
-                    class="text-xs text-muted-foreground truncate block max-w-[200px]"
+                    v-else-if="provider.description"
+                    class="text-xs text-muted-foreground truncate block max-w-[200px] group/desc cursor-pointer hover:text-foreground/70 transition-colors"
                     :title="provider.description"
-                  >{{ provider.description }}</span>
+                    @click="startEditDescription($event, provider)"
+                  >{{ provider.description }} <Pencil class="w-3 h-3 inline-block opacity-0 group-hover/desc:opacity-50 transition-opacity" /></span>
+                  <span
+                    v-else
+                    class="text-xs text-muted-foreground cursor-pointer hover:text-foreground/70 transition-colors"
+                    @click="startEditDescription($event, provider)"
+                  >添加备注</span>
                 </div>
               </TableCell>
               <TableCell class="py-3.5">
@@ -491,11 +526,46 @@
                   {{ provider.is_active ? '活跃' : '停用' }}
                 </Badge>
               </div>
+              <!-- 内联编辑备注 (移动端) -->
+              <div
+                v-if="editingDescriptionId === provider.id"
+                data-desc-editor
+                class="flex items-center gap-1 max-w-[180px]"
+                @click.stop
+              >
+                <input
+                  v-model="editingDescriptionValue"
+                  v-auto-focus
+                  class="flex-1 min-w-0 text-xs px-1.5 py-0.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  placeholder="输入备注..."
+                  @keydown="handleDescriptionKeydown($event, provider)"
+                />
+                <button
+                  class="shrink-0 p-0.5 rounded hover:bg-muted text-primary"
+                  title="保存"
+                  @click="saveDescription($event, provider)"
+                >
+                  <Check class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  class="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground"
+                  title="取消"
+                  @click="cancelEditDescription($event)"
+                >
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
               <span
-                v-if="provider.description"
-                class="text-xs text-muted-foreground truncate block max-w-[120px]"
+                v-else-if="provider.description"
+                class="text-xs text-muted-foreground truncate block max-w-[120px] group/desc cursor-pointer hover:text-foreground/70 transition-colors"
                 :title="provider.description"
-              >{{ provider.description }}</span>
+                @click="startEditDescription($event, provider)"
+              >{{ provider.description }} <Pencil class="w-3 h-3 inline-block opacity-0 group-hover/desc:opacity-50 transition-opacity" /></span>
+              <span
+                v-else
+                class="text-xs text-muted-foreground cursor-pointer hover:text-foreground/70 transition-colors"
+                @click="startEditDescription($event, provider)"
+              >添加备注</span>
             </div>
             <div
               class="flex items-center gap-0.5 shrink-0"
@@ -708,7 +778,10 @@ import {
   KeyRound,
   Loader2,
   FilterX,
-  ExternalLink
+  ExternalLink,
+  Pencil,
+  Check,
+  X
 } from 'lucide-vue-next'
 import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
@@ -745,6 +818,10 @@ import { batchQueryBalance, getArchitectures, type ActionResultResponse, type Ar
 import { formatBillingType } from '@/utils/format'
 import { type BalanceExtraItem } from '@/features/providers/auth-templates'
 import { formatBalanceExtraFromSchema, type CredentialsSchema } from '@/features/providers/auth-templates/schema-utils'
+
+const vAutoFocus = {
+  mounted: (el: HTMLElement) => el.focus()
+}
 
 const { error: showError, success: showSuccess } = useToast()
 const { confirmDanger } = useConfirm()
@@ -785,6 +862,53 @@ async function loadArchitectureSchemas() {
 const opsConfigDialogOpen = ref(false)
 const opsConfigProviderId = ref('')
 const opsConfigProviderWebsite = ref('')
+
+// 内联编辑备注
+const editingDescriptionId = ref<string | null>(null)
+const editingDescriptionValue = ref('')
+
+function startEditDescription(event: Event, provider: ProviderWithEndpointsSummary) {
+  event.stopPropagation()
+  editingDescriptionId.value = provider.id
+  editingDescriptionValue.value = provider.description || ''
+}
+
+function cancelEditDescription(event?: Event) {
+  event?.stopPropagation()
+  editingDescriptionId.value = null
+  editingDescriptionValue.value = ''
+}
+
+async function saveDescription(event: Event, provider: ProviderWithEndpointsSummary) {
+  event.stopPropagation()
+  const newValue = editingDescriptionValue.value.trim()
+  const oldValue = provider.description || ''
+  if (newValue === oldValue) {
+    cancelEditDescription()
+    return
+  }
+  try {
+    await updateProvider(provider.id, { description: newValue || null })
+    provider.description = newValue || undefined
+    // 同步更新 providers 数组
+    const target = providers.value.find(p => p.id === provider.id)
+    if (target) {
+      target.description = newValue || undefined
+    }
+    cancelEditDescription()
+  } catch (err: any) {
+    showError(err.response?.data?.detail || '更新备注失败', '错误')
+  }
+}
+
+function handleDescriptionKeydown(event: KeyboardEvent, provider: ProviderWithEndpointsSummary) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    saveDescription(event, provider)
+  } else if (event.key === 'Escape') {
+    cancelEditDescription(event)
+  }
+}
 
 // 余额数据缓存 {providerId: ActionResultResponse}
 const balanceCache = ref<Record<string, ActionResultResponse>>({})
@@ -1379,6 +1503,14 @@ async function toggleProviderStatus(provider: ProviderWithEndpointsSummary) {
   }
 }
 
+// 点击外部自动取消编辑备注
+function handleGlobalClick(event: MouseEvent) {
+  if (!editingDescriptionId.value) return
+  const target = event.target as HTMLElement
+  if (target.closest('[data-desc-editor]')) return
+  cancelEditDescription()
+}
+
 // 用于触发倒计时更新的响应式计数器
 const tickCounter = ref(0)
 let tickInterval: ReturnType<typeof setInterval> | null = null
@@ -1388,6 +1520,7 @@ onMounted(() => {
   loadPriorityMode()
   loadGlobalModelList()
   loadArchitectureSchemas()
+  document.addEventListener('click', handleGlobalClick, true)
   // 每秒更新一次倒计时
   tickInterval = setInterval(() => {
     tickCounter.value++
@@ -1395,6 +1528,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('click', handleGlobalClick, true)
   if (tickInterval) {
     clearInterval(tickInterval)
   }
