@@ -100,9 +100,6 @@
           class="w-full px-3 py-2 text-sm rounded-lg border border-[#3d3929]/5 dark:border-white/5 bg-white/50 dark:bg-white/5 text-[#191919] dark:text-white placeholder-[#91918d] focus:outline-none focus:ring-2 focus:ring-[#cc785c]/30 transition"
           placeholder="https://your-aether.com"
         >
-        <p class="mt-1.5 text-[10px] text-muted-foreground/50">
-          代码示例将使用此 URL
-        </p>
       </div>
     </template>
 
