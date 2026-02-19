@@ -155,7 +155,7 @@ class CliHandlerProtocol(Protocol):
         mapped_model: str | None,
     ) -> str | None: ...
 
-    def _convert_request_for_cross_format(
+    async def _convert_request_for_cross_format(
         self,
         request_body: dict[str, Any],
         client_api_format: str,
@@ -165,6 +165,7 @@ class CliHandlerProtocol(Protocol):
         is_stream: bool,
         *,
         target_variant: str | None = ...,
+        output_limit: int | None = ...,
     ) -> tuple[dict[str, Any], str]: ...
 
     def _extract_response_metadata(

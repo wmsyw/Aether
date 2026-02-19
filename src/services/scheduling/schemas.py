@@ -28,6 +28,7 @@ class ProviderCandidate:
     mapping_matched_model: str | None = None  # 通过映射匹配到的模型名（用于实际请求）
     needs_conversion: bool = False  # 是否需要格式转换
     provider_api_format: str = ""  # Provider 端点实际格式（用于健康度/熔断 bucket）
+    output_limit: int | None = None  # GlobalModel 配置的模型输出上限
 
     def _stable_order_key(self) -> tuple[int, int, str, str, str]:
         """

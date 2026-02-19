@@ -12,6 +12,7 @@ Gemini (GenerateContent / streamGenerateContent) Normalizer
 """
 
 import json
+import re
 from typing import Any
 
 from src.core.api_format.conversion.field_mappings import (
@@ -21,9 +22,11 @@ from src.core.api_format.conversion.field_mappings import (
     USAGE_FIELD_MAPPINGS,
 )
 from src.core.api_format.conversion.internal import (
+    AudioBlock,
     ContentBlock,
     ContentType,
     ErrorType,
+    FileBlock,
     FormatCapabilities,
     ImageBlock,
     InstructionSegment,
@@ -31,10 +34,12 @@ from src.core.api_format.conversion.internal import (
     InternalMessage,
     InternalRequest,
     InternalResponse,
+    ResponseFormatConfig,
     Role,
     StopReason,
     TextBlock,
     ThinkingBlock,
+    ThinkingConfig,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -129,6 +134,60 @@ def compact_gemini_contents(contents: list[dict[str, Any]]) -> list[dict[str, An
             merged.append(c)
 
     return merged
+
+
+# Gemini 内置工具名称映射（输入侧：camelCase/snake_case key -> 标准化 ToolDefinition name）
+_BUILTIN_TOOL_KEYS: dict[str, str] = {
+    "googleSearch": "googleSearch",
+    "google_search": "googleSearch",
+    "codeExecution": "codeExecution",
+    "code_execution": "codeExecution",
+    "urlContext": "urlContext",
+    "url_context": "urlContext",
+}
+
+# Gemini 内置工具名称集合（输出侧：ToolDefinition.name -> 特殊处理）
+_GEMINI_BUILTIN_TOOLS: frozenset[str] = frozenset(
+    {
+        "google_search",
+        "googleSearch",
+        "code_execution",
+        "codeExecution",
+        "url_context",
+        "urlContext",
+    }
+)
+
+
+# Markdown 内嵌 base64 图片正则：![alt](data:image/xxx;base64,...)
+# 使用 [^)]+ 贪婪匹配至右括号，避免字符类量词的回溯风险
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(data:(image/[a-zA-Z0-9.+-]+);base64,([^)]+)\)")
+
+
+def _extract_markdown_images(
+    text: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """从文本中提取 Markdown 内嵌 base64 图片，返回 (剩余文本, inlineData parts)。
+
+    如果没有匹配到任何内嵌图片，返回 (原文本, [])。
+    """
+    # 快速预检：避免对纯文本执行正则
+    if "data:image/" not in text:
+        return text, []
+
+    image_parts: list[dict[str, Any]] = []
+
+    def _collect(m: re.Match[str]) -> str:
+        mime_type = m.group(1)
+        b64_data = m.group(2).replace("\n", "").replace(" ", "")
+        image_parts.append({"inline_data": {"mime_type": mime_type, "data": b64_data}})
+        return ""
+
+    remaining = _MD_IMAGE_RE.sub(_collect, text)
+    if not image_parts:
+        return text, []
+
+    return remaining, image_parts
 
 
 class GeminiNormalizer(FormatNormalizer):
@@ -226,9 +285,28 @@ class GeminiNormalizer(FormatNormalizer):
 
         # 保留 generationConfig 中的特殊字段（responseModalities, thinkingConfig 等）
         # 这些字段在 _get_generation_config 中已提取，需要单独存储以便转换时使用
+        thinking: ThinkingConfig | None = None
+        n: int | None = None
+        response_format: ResponseFormatConfig | None = None
+
         if isinstance(generation_config, dict):
             response_modalities = generation_config.get("response_modalities")
             thinking_config = generation_config.get("thinking_config")
+
+            # 解析 thinkingConfig -> ThinkingConfig
+            if isinstance(thinking_config, dict):
+                include_thoughts = thinking_config.get(
+                    "include_thoughts", thinking_config.get("includeThoughts")
+                )
+                thinking_budget = thinking_config.get(
+                    "thinking_budget", thinking_config.get("thinkingBudget")
+                )
+                thinking = ThinkingConfig(
+                    enabled=bool(include_thoughts) if include_thoughts is not None else True,
+                    budget_tokens=self._optional_int(thinking_budget),
+                    extra={"gemini_thinking_config": thinking_config},
+                )
+
             if response_modalities or thinking_config:
                 google_extra: dict[str, Any] = {}
                 if response_modalities:
@@ -236,6 +314,32 @@ class GeminiNormalizer(FormatNormalizer):
                 if thinking_config:
                     google_extra["thinking_config"] = thinking_config
                 extra["google"] = google_extra
+
+            # 解析 candidateCount -> n
+            n = self._optional_int(
+                generation_config.get("candidate_count", generation_config.get("candidateCount"))
+            )
+
+            # 解析 response_format (responseMimeType / responseSchema)
+            resp_mime = generation_config.get(
+                "response_mime_type", generation_config.get("responseMimeType")
+            )
+            resp_schema = generation_config.get(
+                "response_schema", generation_config.get("responseSchema")
+            )
+            if resp_mime or resp_schema:
+                if resp_schema and isinstance(resp_schema, dict):
+                    response_format = ResponseFormatConfig(
+                        type="json_schema",
+                        json_schema=resp_schema,
+                        extra={"response_mime_type": resp_mime} if resp_mime else {},
+                    )
+                elif resp_mime and "json" in str(resp_mime).lower():
+                    response_format = ResponseFormatConfig(type="json_object")
+                elif resp_mime:
+                    response_format = ResponseFormatConfig(
+                        type="text", extra={"response_mime_type": resp_mime}
+                    )
 
         internal = InternalRequest(
             model=model,
@@ -250,6 +354,9 @@ class GeminiNormalizer(FormatNormalizer):
             stream=bool(request.get("stream") or False),
             tools=tools,
             tool_choice=tool_choice,
+            thinking=thinking,
+            n=n,
+            response_format=response_format,
             extra=extra,
         )
 
@@ -276,21 +383,36 @@ class GeminiNormalizer(FormatNormalizer):
         )
 
         # tools/tool_choice — clean unsupported JSON Schema fields from parameters
+        # Gemini 特殊内置工具名称需要单独处理
         tools = None
         if internal.tools:
             func_decls: list[dict[str, Any]] = []
+            builtin_tools: list[dict[str, Any]] = []
             for t in internal.tools:
+                # 检测 Gemini 内置工具
+                if t.name in _GEMINI_BUILTIN_TOOLS:
+                    canonical = _BUILTIN_TOOL_KEYS.get(t.name, t.name)
+                    builtin_tools.append({canonical: {}})
+                    continue
+
                 params = dict(t.parameters) if t.parameters else {}
                 if params:
                     _clean_gemini_schema(params)
                 decl: dict[str, Any] = {
                     "name": t.name,
-                    "description": t.description,
                     "parameters": params,
                     **(t.extra.get("gemini_function_declaration") or {}),
                 }
+                if t.description is not None:
+                    decl["description"] = t.description
                 func_decls.append(decl)
-            tools = [{"function_declarations": func_decls}]
+            if func_decls:
+                tools = [{"function_declarations": func_decls}]
+            else:
+                tools = []
+            tools.extend(builtin_tools)
+            if not tools:
+                tools = None
 
         tool_config = None
         if internal.tool_choice:
@@ -308,12 +430,40 @@ class GeminiNormalizer(FormatNormalizer):
         if internal.stop_sequences:
             generation_config["stop_sequences"] = list(internal.stop_sequences)
 
+        # 从 internal.thinking 输出 thinkingConfig（跨格式转换的标准路径）
+        if (
+            internal.thinking
+            and internal.thinking.enabled
+            and "thinkingConfig" not in generation_config
+        ):
+            gemini_tc: dict[str, Any] = {"includeThoughts": True}
+            if internal.thinking.budget_tokens is not None:
+                gemini_tc["thinkingBudget"] = internal.thinking.budget_tokens
+            generation_config["thinkingConfig"] = gemini_tc
+
+        # 从 internal.response_format 输出 responseMimeType / responseSchema
+        if internal.response_format and "responseMimeType" not in generation_config:
+            if (
+                internal.response_format.type == "json_schema"
+                and internal.response_format.json_schema
+            ):
+                generation_config["responseMimeType"] = "application/json"
+                schema = dict(internal.response_format.json_schema)
+                _clean_gemini_schema(schema)
+                generation_config["responseSchema"] = schema
+            elif internal.response_format.type == "json_object":
+                generation_config["responseMimeType"] = "application/json"
+
+        # 从 internal.n 输出 candidateCount
+        if internal.n is not None and internal.n > 1 and "candidateCount" not in generation_config:
+            generation_config["candidateCount"] = internal.n
+
         # 从 internal.extra["google"] 读取 OpenAI extra_body.google 透传的配置
         google_extra = internal.extra.get("google", {})
         if isinstance(google_extra, dict):
-            # 处理 thinking_config -> thinkingConfig
+            # 处理 thinking_config -> thinkingConfig（仅当上面标准路径未设置时）
             thinking_config = google_extra.get("thinking_config")
-            if isinstance(thinking_config, dict):
+            if isinstance(thinking_config, dict) and "thinkingConfig" not in generation_config:
                 # snake_case -> camelCase 转换
                 gemini_thinking: dict[str, Any] = {}
                 if "thinking_budget" in thinking_config:
@@ -472,6 +622,13 @@ class GeminiNormalizer(FormatNormalizer):
     ) -> dict[str, Any]:
         parts: list[dict[str, Any]] = []
         for b in internal.content:
+            if isinstance(b, ThinkingBlock):
+                if b.thinking:
+                    thought_part: dict[str, Any] = {"text": b.thinking, "thought": True}
+                    if b.signature:
+                        thought_part["thoughtSignature"] = b.signature
+                    parts.append(thought_part)
+                continue
             if isinstance(b, TextBlock):
                 if b.text:
                     parts.append({"text": b.text})
@@ -497,7 +654,28 @@ class GeminiNormalizer(FormatNormalizer):
                         }
                     )
                 elif b.url:
-                    parts.append({"text": f"[Image: {b.url}]"})
+                    parts.append(
+                        {"fileData": {"fileUri": b.url, "mimeType": b.media_type or "image/jpeg"}}
+                    )
+                continue
+            if isinstance(b, FileBlock):
+                if b.data and b.media_type:
+                    parts.append({"inlineData": {"mimeType": b.media_type, "data": b.data}})
+                elif b.file_url:
+                    parts.append(
+                        {
+                            "fileData": {
+                                "fileUri": b.file_url,
+                                "mimeType": b.media_type or "application/octet-stream",
+                            }
+                        }
+                    )
+                continue
+            if isinstance(b, AudioBlock):
+                if b.data and b.media_type:
+                    parts.append({"inlineData": {"mimeType": b.media_type, "data": b.data}})
+                elif b.data and b.format:
+                    parts.append({"inlineData": {"mimeType": f"audio/{b.format}", "data": b.data}})
                 continue
             # Unknown/ToolResult 默认丢弃
 
@@ -1319,12 +1497,41 @@ class GeminiNormalizer(FormatNormalizer):
                 )
                 data = inline.get("data")
                 if isinstance(mime_type, str) and mime_type and isinstance(data, str) and data:
-                    blocks.append(ImageBlock(data=data, media_type=mime_type))
+                    if mime_type.startswith("audio/"):
+                        # 音频 -> AudioBlock
+                        fmt = mime_type.split("/", 1)[1] if "/" in mime_type else None
+                        blocks.append(AudioBlock(data=data, media_type=mime_type, format=fmt))
+                    elif mime_type.startswith("image/"):
+                        blocks.append(ImageBlock(data=data, media_type=mime_type))
+                    else:
+                        # 其他类型 (PDF 等) -> FileBlock
+                        blocks.append(FileBlock(data=data, media_type=mime_type))
                 else:
                     dropped["gemini_inline_data_invalid"] = (
                         dropped.get("gemini_inline_data_invalid", 0) + 1
                     )
                     blocks.append(UnknownBlock(raw_type="inline_data", payload=part))
+                continue
+
+            # fileData / file_data
+            file_data = part.get("fileData")
+            if file_data is None:
+                file_data = part.get("file_data")
+            if isinstance(file_data, dict):
+                file_uri = file_data.get("fileUri") or file_data.get("file_uri") or ""
+                file_mime = file_data.get("mimeType") or file_data.get("mime_type") or ""
+                if isinstance(file_mime, str) and file_mime.startswith("image/"):
+                    # 图片 MIME -> ImageBlock
+                    blocks.append(ImageBlock(url=str(file_uri), media_type=file_mime))
+                else:
+                    # 非图片 -> FileBlock
+                    blocks.append(
+                        FileBlock(
+                            file_url=str(file_uri),
+                            media_type=str(file_mime) if file_mime else None,
+                            extra={"gemini": part},
+                        )
+                    )
                 continue
 
             func_call = part.get("function_call")
@@ -1457,14 +1664,47 @@ class GeminiNormalizer(FormatNormalizer):
 
             if isinstance(b, TextBlock):
                 if b.text:
-                    parts.append({"text": b.text})
+                    # 检测 Markdown 内嵌 base64 图片并提取为独立 inlineData part
+                    remaining_text, image_parts = _extract_markdown_images(b.text)
+                    if image_parts:
+                        if remaining_text.strip():
+                            parts.append({"text": remaining_text})
+                        parts.extend(image_parts)
+                    else:
+                        parts.append({"text": b.text})
                 continue
 
             if isinstance(b, ImageBlock):
                 if b.data and b.media_type:
                     parts.append({"inline_data": {"mime_type": b.media_type, "data": b.data}})
                 elif b.url:
-                    parts.append({"text": f"[Image: {b.url}]"})
+                    # Gemini 支持 fileData URI 引用
+                    parts.append(
+                        {"fileData": {"fileUri": b.url, "mimeType": b.media_type or "image/jpeg"}}
+                    )
+                continue
+
+            if isinstance(b, FileBlock):
+                if b.data and b.media_type:
+                    parts.append({"inline_data": {"mime_type": b.media_type, "data": b.data}})
+                elif b.file_url:
+                    parts.append(
+                        {
+                            "fileData": {
+                                "fileUri": b.file_url,
+                                "mimeType": b.media_type or "application/octet-stream",
+                            }
+                        }
+                    )
+                continue
+
+            if isinstance(b, AudioBlock):
+                if b.data and b.media_type:
+                    parts.append({"inline_data": {"mime_type": b.media_type, "data": b.data}})
+                elif b.data and b.format:
+                    parts.append(
+                        {"inline_data": {"mime_type": f"audio/{b.format}", "data": b.data}}
+                    )
                 continue
 
             if isinstance(b, ToolUseBlock) and role == "model":
@@ -1646,6 +1886,19 @@ class GeminiNormalizer(FormatNormalizer):
         if thinking_config:
             normalized["thinking_config"] = thinking_config
 
+        # 保留 candidateCount
+        candidate_count = pick("candidate_count", "candidateCount")
+        if candidate_count is not None:
+            normalized["candidate_count"] = candidate_count
+
+        # 保留 responseMimeType / responseSchema
+        resp_mime = pick("response_mime_type", "responseMimeType")
+        if resp_mime is not None:
+            normalized["response_mime_type"] = resp_mime
+        resp_schema = pick("response_schema", "responseSchema")
+        if resp_schema is not None:
+            normalized["response_schema"] = resp_schema
+
         return {k: v for k, v in normalized.items() if v is not None}
 
     def _gemini_tools_to_internal(self, tools: Any) -> list[ToolDefinition] | None:
@@ -1657,35 +1910,49 @@ class GeminiNormalizer(FormatNormalizer):
             if not isinstance(tool, dict):
                 continue
 
-            decls = tool.get("function_declarations")
-            if decls is None:
-                decls = tool.get("functionDeclarations")
-
-            if not isinstance(decls, list):
-                continue
-
-            for decl in decls:
-                if not isinstance(decl, dict):
-                    continue
-                name = str(decl.get("name") or "")
-                if not name:
-                    continue
-                out.append(
-                    ToolDefinition(
-                        name=name,
-                        description=decl.get("description"),
-                        parameters=(
-                            decl.get("parameters")
-                            if isinstance(decl.get("parameters"), dict)
-                            else None
-                        ),
-                        extra={
-                            "gemini_function_declaration": self._extract_extra(
-                                decl, {"name", "description", "parameters"}
-                            )
-                        },
+            # 检测 Gemini 内置工具（如 {"googleSearch": {}}, {"codeExecution": {}}）
+            for key, canonical_name in _BUILTIN_TOOL_KEYS.items():
+                if key in tool:
+                    out.append(
+                        ToolDefinition(
+                            name=canonical_name,
+                            description=None,
+                            parameters=None,
+                            extra={"gemini_builtin_tool": True},
+                        )
                     )
-                )
+                    break
+            else:
+                # 非内置工具：解析 functionDeclarations
+                decls = tool.get("function_declarations")
+                if decls is None:
+                    decls = tool.get("functionDeclarations")
+
+                if not isinstance(decls, list):
+                    continue
+
+                for decl in decls:
+                    if not isinstance(decl, dict):
+                        continue
+                    name = str(decl.get("name") or "")
+                    if not name:
+                        continue
+                    out.append(
+                        ToolDefinition(
+                            name=name,
+                            description=decl.get("description"),
+                            parameters=(
+                                decl.get("parameters")
+                                if isinstance(decl.get("parameters"), dict)
+                                else None
+                            ),
+                            extra={
+                                "gemini_function_declaration": self._extract_extra(
+                                    decl, {"name", "description", "parameters"}
+                                )
+                            },
+                        )
+                    )
 
         return out or None
 
@@ -1783,38 +2050,6 @@ class GeminiNormalizer(FormatNormalizer):
             return ErrorType(value)
         except ValueError:
             return ErrorType.UNKNOWN
-
-    def _optional_int(self, value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _optional_float(self, value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _coerce_str_list(self, value: Any) -> list[str] | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, list):
-            return [str(x) for x in value if x is not None]
-        return None
-
-    def _extract_extra(self, payload: dict[str, Any], known_keys: set[str]) -> dict[str, Any]:
-        return {k: v for k, v in payload.items() if k not in known_keys}
-
-    def _merge_dropped(self, target: dict[str, int], source: dict[str, int]) -> None:
-        for k, v in source.items():
-            target[k] = target.get(k, 0) + int(v)
 
 
 __all__ = ["GeminiNormalizer"]

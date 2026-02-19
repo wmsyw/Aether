@@ -1343,22 +1343,6 @@ class OpenAICliNormalizer(FormatNormalizer):
             return "tool"
         return "user"
 
-    def _optional_int(self, value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _optional_float(self, value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
     def _coerce_str_list(self, value: Any) -> list[str] | None:
         if value is None:
             return None

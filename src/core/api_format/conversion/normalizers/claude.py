@@ -14,12 +14,18 @@ from src.core.api_format.conversion.field_mappings import (
     ERROR_TYPE_MAPPINGS,
     RETRYABLE_ERROR_TYPES,
     STOP_REASON_MAPPINGS,
+    THINKING_BUDGET_TOKENS_MIN,
+    THINKING_BUDGET_TOKENS_PERCENTAGE,
     USAGE_FIELD_MAPPINGS,
+    WEB_SEARCH_CONTEXT_SIZE_TO_MAX_USES,
+    get_claude_default_max_tokens,
 )
 from src.core.api_format.conversion.internal import (
+    AudioBlock,
     ContentBlock,
     ContentType,
     ErrorType,
+    FileBlock,
     FormatCapabilities,
     ImageBlock,
     InstructionSegment,
@@ -31,6 +37,7 @@ from src.core.api_format.conversion.internal import (
     StopReason,
     TextBlock,
     ThinkingBlock,
+    ThinkingConfig,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -97,9 +104,12 @@ class ClaudeNormalizer(FormatNormalizer):
 
         # 顶层 system 先进入 instructions（保持确定性优先级）
         sys_value = request.get("system")
-        sys_text, sys_dropped = self._collapse_claude_system(sys_value)
+        sys_text, sys_dropped, sys_segments = self._collapse_claude_system(sys_value)
         self._merge_dropped(dropped, sys_dropped)
-        if sys_text:
+        if sys_segments:
+            # 数组格式含 cache_control：保留逐段 InstructionSegment
+            instructions.extend(sys_segments)
+        elif sys_text:
             instructions.append(InstructionSegment(role=Role.SYSTEM, text=sys_text))
 
         messages: list[InternalMessage] = []
@@ -112,7 +122,7 @@ class ClaudeNormalizer(FormatNormalizer):
 
             # 兼容：少数客户端可能把 system/developer 混进 messages[]
             if role in ("system", "developer"):
-                text, md = self._collapse_claude_system(msg.get("content"))
+                text, md, _ = self._collapse_claude_system(msg.get("content"))
                 self._merge_dropped(dropped, md)
                 if text:
                     instructions.append(
@@ -134,6 +144,19 @@ class ClaudeNormalizer(FormatNormalizer):
         tools = self._claude_tools_to_internal(request.get("tools"))
         tool_choice = self._claude_tool_choice_to_internal(request.get("tool_choice"))
 
+        # 解析 Claude 原生 thinking 配置
+        thinking: ThinkingConfig | None = None
+        thinking_raw = request.get("thinking")
+        if isinstance(thinking_raw, dict):
+            thinking_type = str(thinking_raw.get("type") or "")
+            if thinking_type in ("enabled", "adaptive"):
+                budget = self._optional_int(thinking_raw.get("budget_tokens"))
+                thinking = ThinkingConfig(
+                    enabled=True,
+                    budget_tokens=budget,
+                    extra={"claude_thinking": thinking_raw},
+                )
+
         internal = InternalRequest(
             model=model,
             messages=messages,
@@ -147,6 +170,7 @@ class ClaudeNormalizer(FormatNormalizer):
             stream=bool(request.get("stream") or False),
             tools=tools,
             tool_choice=tool_choice,
+            thinking=thinking,
             extra={"claude": self._extract_extra(request, {"messages"})},
         )
 
@@ -161,7 +185,26 @@ class ClaudeNormalizer(FormatNormalizer):
         *,
         target_variant: str | None = None,
     ) -> dict[str, Any]:
-        system_text = internal.system or self._join_instructions(internal.instructions)
+        # system: 如果任一 InstructionSegment 有 cache_control，输出数组格式
+        has_cache_control = any(seg.extra.get("cache_control") for seg in internal.instructions)
+        if has_cache_control and internal.instructions:
+            system_value: str | list[dict[str, Any]] | None = [
+                {
+                    "type": "text",
+                    "text": seg.text,
+                    **(
+                        {"cache_control": seg.extra["cache_control"]}
+                        if seg.extra.get("cache_control")
+                        else {}
+                    ),
+                }
+                for seg in internal.instructions
+                if seg.text
+            ]
+            if not system_value:
+                system_value = None
+        else:
+            system_value = internal.system or self._join_instructions(internal.instructions)
 
         # Claude Messages API: messages[] 仅允许 user/assistant，且需要交替；这里做最小修复
         fixed_messages = self._coerce_claude_message_sequence(internal.messages)
@@ -170,14 +213,23 @@ class ClaudeNormalizer(FormatNormalizer):
             self._internal_message_to_claude(m) for m in fixed_messages
         ]
 
+        # max_tokens: 优先使用请求中的值, 其次 GlobalModel.output_limit, 最后硬编码默认值
+        effective_max_tokens: int
+        if internal.max_tokens is not None:
+            effective_max_tokens = internal.max_tokens
+        elif internal.output_limit is not None:
+            effective_max_tokens = internal.output_limit
+        else:
+            effective_max_tokens = get_claude_default_max_tokens(internal.model)
+
         result: dict[str, Any] = {
             "model": internal.model,
             "messages": out_messages,
-            "max_tokens": internal.max_tokens if internal.max_tokens is not None else 4096,
+            "max_tokens": effective_max_tokens,
         }
 
-        if system_text:
-            result["system"] = system_text
+        if system_value:
+            result["system"] = system_value
 
         if internal.temperature is not None:
             result["temperature"] = internal.temperature
@@ -191,18 +243,75 @@ class ClaudeNormalizer(FormatNormalizer):
             result["stream"] = True
 
         if internal.tools:
-            result["tools"] = [
-                {
+            claude_tools: list[dict[str, Any]] = []
+            for t in internal.tools:
+                # 跳过 Gemini 内置工具（在 Claude 中无对应物）
+                if t.extra.get("gemini_builtin_tool"):
+                    continue
+                tool_def: dict[str, Any] = {
                     "name": t.name,
-                    "description": t.description,
                     "input_schema": t.parameters or {},
                     **(t.extra.get("claude") or {}),
                 }
-                for t in internal.tools
-            ]
+                if t.description is not None:
+                    tool_def["description"] = t.description
+                claude_tools.append(tool_def)
+            if claude_tools:
+                result["tools"] = claude_tools
 
         if internal.tool_choice:
-            result["tool_choice"] = self._tool_choice_to_claude(internal.tool_choice)
+            tc = self._tool_choice_to_claude(internal.tool_choice)
+            # parallel_tool_calls=False -> disable_parallel_tool_use=True
+            if internal.parallel_tool_calls is False and tc.get("type") != "none":
+                tc["disable_parallel_tool_use"] = True
+            result["tool_choice"] = tc
+
+        # thinking 配置
+        if internal.thinking and internal.thinking.enabled:
+            # 优先使用原始 Claude thinking 配置（round-trip 透传）
+            claude_thinking = internal.thinking.extra.get("claude_thinking")
+            if isinstance(claude_thinking, dict):
+                result["thinking"] = claude_thinking
+            else:
+                thinking_out: dict[str, Any] = {"type": "enabled"}
+                # Claude API 要求 budget_tokens 必须提供
+                # 跨格式时 internal.model 可能是非 Claude 模型名，
+                # 仅当模型名以 claude- 开头时用模型感知默认值，否则用固定安全值
+                if internal.thinking.budget_tokens is not None:
+                    thinking_out["budget_tokens"] = internal.thinking.budget_tokens
+                else:
+                    # 基于 effective_max_tokens 计算兜底 budget，避免覆盖用户显式指定的 max_tokens
+                    thinking_out["budget_tokens"] = max(
+                        int(effective_max_tokens * THINKING_BUDGET_TOKENS_PERCENTAGE),
+                        THINKING_BUDGET_TOKENS_MIN,
+                    )
+                # 确保 budget_tokens >= 最小值（参考 new-api: 1280）
+                bt = thinking_out["budget_tokens"]
+                if bt < THINKING_BUDGET_TOKENS_MIN:
+                    thinking_out["budget_tokens"] = THINKING_BUDGET_TOKENS_MIN
+                    bt = THINKING_BUDGET_TOKENS_MIN
+                # Claude API 要求 budget_tokens < max_tokens，确保不违反约束
+                max_t = result.get("max_tokens")
+                if max_t is not None and bt >= max_t:
+                    result["max_tokens"] = bt + 1
+                result["thinking"] = thinking_out
+
+        # web_search_options -> Claude web_search tool
+        web_search_opts = internal.extra.get("web_search_options") if internal.extra else None
+        if isinstance(web_search_opts, dict):
+            context_size = str(web_search_opts.get("search_context_size") or "medium")
+            max_uses = WEB_SEARCH_CONTEXT_SIZE_TO_MAX_USES.get(context_size, 5)
+            ws_tool: dict[str, Any] = {
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": max_uses,
+            }
+            user_location = web_search_opts.get("user_location")
+            if isinstance(user_location, dict):
+                ws_tool["user_location"] = user_location
+            if "tools" not in result:
+                result["tools"] = []
+            result["tools"].append(ws_tool)
 
         # 恢复 Claude 特有字段（如 metadata）
         claude_extra = internal.extra.get("claude") if isinstance(internal.extra, dict) else None
@@ -296,7 +405,45 @@ class ClaudeNormalizer(FormatNormalizer):
                         }
                     )
                 elif b.url:
-                    content.append({"type": "text", "text": f"[Image: {b.url}]"})
+                    content.append(
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": b.url},
+                        }
+                    )
+                continue
+            if isinstance(b, FileBlock):
+                if b.data and b.media_type:
+                    content.append(
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": b.media_type,
+                                "data": b.data,
+                            },
+                        }
+                    )
+                elif b.file_url:
+                    content.append(
+                        {
+                            "type": "document",
+                            "source": {"type": "url", "url": b.file_url},
+                        }
+                    )
+                continue
+            if isinstance(b, AudioBlock):
+                if b.data and b.media_type:
+                    content.append(
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": b.media_type,
+                                "data": b.data,
+                            },
+                        }
+                    )
                 continue
             # Unknown/ToolResult 默认丢弃
 
@@ -740,9 +887,12 @@ class ClaudeNormalizer(FormatNormalizer):
             if btype == "text":
                 text = str(block.get("text") or "")
                 if text:
-                    blocks.append(
-                        TextBlock(text=text, extra=self._extract_extra(block, {"type", "text"}))
-                    )
+                    block_extra = self._extract_extra(block, {"type", "text"})
+                    # cache_control 透传
+                    cc = block.get("cache_control")
+                    if isinstance(cc, dict):
+                        block_extra["cache_control"] = cc
+                    blocks.append(TextBlock(text=text, extra=block_extra))
                 continue
 
             if btype == "image":
@@ -760,8 +910,40 @@ class ClaudeNormalizer(FormatNormalizer):
                     ):
                         blocks.append(ImageBlock(data=data, media_type=media_type))
                         continue
+                elif stype == "url":
+                    url = src.get("url")
+                    if isinstance(url, str) and url:
+                        blocks.append(ImageBlock(url=url))
+                        continue
                 dropped["claude_image_unsupported"] = dropped.get("claude_image_unsupported", 0) + 1
                 blocks.append(UnknownBlock(raw_type="image", payload=block))
+                continue
+
+            if btype == "document":
+                doc_src = block.get("source") or {}
+                if isinstance(doc_src, dict):
+                    doc_stype = doc_src.get("type")
+                    if doc_stype == "base64":
+                        blocks.append(
+                            FileBlock(
+                                data=doc_src.get("data"),
+                                media_type=doc_src.get("media_type"),
+                                extra=self._extract_extra(block, {"type", "source"}),
+                            )
+                        )
+                        continue
+                    elif doc_stype == "url":
+                        blocks.append(
+                            FileBlock(
+                                file_url=doc_src.get("url"),
+                                media_type=doc_src.get("media_type"),
+                                extra=self._extract_extra(block, {"type", "source"}),
+                            )
+                        )
+                        continue
+                dropped_key = f"claude_block:{btype}"
+                dropped[dropped_key] = dropped.get(dropped_key, 0) + 1
+                blocks.append(UnknownBlock(raw_type=btype, payload=block))
                 continue
 
             if btype == "tool_use":
@@ -862,15 +1044,21 @@ class ClaudeNormalizer(FormatNormalizer):
             extra={"claude": raw_block},
         )
 
-    def _collapse_claude_system(self, system_value: Any) -> tuple[str | None, dict[str, int]]:
+    def _collapse_claude_system(
+        self, system_value: Any
+    ) -> tuple[str | None, dict[str, int], list[InstructionSegment] | None]:
+        """解析 Claude system 字段。返回 (text, dropped, segments)。
+        segments 仅在 system 为数组且含 cache_control 时非空。"""
         dropped: dict[str, int] = {}
         if system_value is None:
-            return None, dropped
+            return None, dropped, None
         if isinstance(system_value, str):
-            return (system_value or None), dropped
+            return (system_value or None), dropped, None
 
         if isinstance(system_value, list):
             texts: list[str] = []
+            segments: list[InstructionSegment] = []
+            has_cache_control = False
             for item in system_value:
                 if not isinstance(item, dict):
                     dropped["claude_system_item_non_dict"] = (
@@ -881,14 +1069,26 @@ class ClaudeNormalizer(FormatNormalizer):
                     text = item.get("text")
                     if text:
                         texts.append(str(text))
+                        seg_extra: dict[str, Any] = {}
+                        cc = item.get("cache_control")
+                        if isinstance(cc, dict):
+                            seg_extra["cache_control"] = cc
+                            has_cache_control = True
+                        segments.append(
+                            InstructionSegment(role=Role.SYSTEM, text=str(text), extra=seg_extra)
+                        )
                 else:
                     dropped_key = f"claude_system_item:{item.get('type')}"
                     dropped[dropped_key] = dropped.get(dropped_key, 0) + 1
             joined = "\n\n".join(texts)
-            return (joined or None), dropped
+            return (
+                (joined or None),
+                dropped,
+                segments if has_cache_control else None,
+            )
 
         dropped["claude_system_unsupported"] = dropped.get("claude_system_unsupported", 0) + 1
-        return None, dropped
+        return None, dropped, None
 
     def _join_instructions(self, instructions: list[InstructionSegment]) -> str | None:
         parts = [seg.text for seg in instructions if seg.text]
@@ -957,6 +1157,11 @@ class ClaudeNormalizer(FormatNormalizer):
     def _internal_message_to_claude(self, msg: InternalMessage) -> dict[str, Any]:
         role = "user" if msg.role == Role.USER else "assistant"
 
+        # 预扫描：如果任一 TextBlock 带 cache_control，所有 TextBlock 都走结构化路径以保持顺序
+        force_structured_text = any(
+            isinstance(b, TextBlock) and b.extra.get("cache_control") for b in msg.content
+        )
+
         blocks: list[dict[str, Any]] = []
         text_parts: list[str] = []
 
@@ -966,7 +1171,14 @@ class ClaudeNormalizer(FormatNormalizer):
 
             if isinstance(b, TextBlock):
                 if b.text:
-                    text_parts.append(b.text)
+                    if force_structured_text:
+                        text_block: dict[str, Any] = {"type": "text", "text": b.text}
+                        cc = b.extra.get("cache_control") if b.extra else None
+                        if isinstance(cc, dict):
+                            text_block["cache_control"] = cc
+                        blocks.append(text_block)
+                    else:
+                        text_parts.append(b.text)
                 continue
 
             if isinstance(b, ImageBlock):
@@ -989,7 +1201,52 @@ class ClaudeNormalizer(FormatNormalizer):
                         }
                     )
                 elif b.url:
-                    text_parts.append(f"[Image: {b.url}]")
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": b.url},
+                        }
+                    )
+                continue
+
+            if isinstance(b, FileBlock):
+                if b.data and b.media_type:
+                    blocks.append(
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": b.media_type,
+                                "data": b.data,
+                            },
+                        }
+                    )
+                elif b.file_url:
+                    blocks.append(
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "url",
+                                "url": b.file_url,
+                            },
+                        }
+                    )
+                elif b.file_id:
+                    text_parts.append(f"[File: {b.file_id}]")
+                continue
+
+            if isinstance(b, AudioBlock):
+                if b.data and b.media_type:
+                    blocks.append(
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": b.media_type,
+                                "data": b.data,
+                            },
+                        }
+                    )
                 continue
 
             if isinstance(b, ToolUseBlock) and role == "assistant":
@@ -1062,7 +1319,11 @@ class ClaudeNormalizer(FormatNormalizer):
 
         mapping = USAGE_FIELD_MAPPINGS.get("CLAUDE", {})
         fields: dict[str, int] = {}
-        extra = self._extract_extra(usage, set(mapping.keys()))
+        extra = self._extract_extra(
+            usage,
+            set(mapping.keys())
+            | {"cache_creation_input_tokens_5m", "cache_creation_input_tokens_1h"},
+        )
 
         for provider_key, internal_key in mapping.items():
             if provider_key in usage and usage.get(provider_key) is not None:
@@ -1075,6 +1336,21 @@ class ClaudeNormalizer(FormatNormalizer):
             fields["total_tokens"] = int(
                 fields.get("input_tokens", 0) + fields.get("output_tokens", 0)
             )
+
+        # Claude cache_creation 5m/1h 细分（存入 extra）
+        cache_details: dict[str, int] = {}
+        for detail_key in (
+            "cache_creation_input_tokens_5m",
+            "cache_creation_input_tokens_1h",
+        ):
+            val = usage.get(detail_key)
+            if val is not None:
+                try:
+                    cache_details[detail_key] = int(val)
+                except (TypeError, ValueError):
+                    pass
+        if cache_details:
+            extra["cache_creation_details"] = cache_details
 
         return UsageInfo(
             input_tokens=int(fields.get("input_tokens", 0)),
@@ -1094,6 +1370,16 @@ class ClaudeNormalizer(FormatNormalizer):
             result["cache_read_input_tokens"] = int(usage.cache_read_tokens)
         if usage.cache_write_tokens:
             result["cache_creation_input_tokens"] = int(usage.cache_write_tokens)
+        # 回写 5m/1h 细分
+        claude_extra = usage.extra.get("claude", {})
+        if isinstance(claude_extra, dict):
+            cache_details = claude_extra.get("cache_creation_details")
+            if isinstance(cache_details, dict):
+                for k, v in cache_details.items():
+                    try:
+                        result[k] = int(v)
+                    except (TypeError, ValueError):
+                        pass
         return result
 
     def _error_type_from_value(self, value: str) -> ErrorType:
@@ -1101,38 +1387,6 @@ class ClaudeNormalizer(FormatNormalizer):
             return ErrorType(value)
         except ValueError:
             return ErrorType.UNKNOWN
-
-    def _optional_int(self, value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _optional_float(self, value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _coerce_str_list(self, value: Any) -> list[str] | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, list):
-            return [str(x) for x in value if x is not None]
-        return None
-
-    def _extract_extra(self, payload: dict[str, Any], known_keys: set[str]) -> dict[str, Any]:
-        return {k: v for k, v in payload.items() if k not in known_keys}
-
-    def _merge_dropped(self, target: dict[str, int], source: dict[str, int]) -> None:
-        for k, v in source.items():
-            target[k] = target.get(k, 0) + int(v)
 
 
 __all__ = ["ClaudeNormalizer"]

@@ -28,6 +28,8 @@ class ContentType(str, Enum):
     TEXT = "text"
     THINKING = "thinking"
     IMAGE = "image"
+    FILE = "file"
+    AUDIO = "audio"
     TOOL_USE = "tool_use"
     TOOL_RESULT = "tool_result"
     UNKNOWN = "unknown"
@@ -116,6 +118,30 @@ class ToolResultBlock:
 
 
 @dataclass
+class FileBlock:
+    """文件内容块（PDF、文档等）"""
+
+    type: ContentType = field(default=ContentType.FILE, init=False)
+    data: str | None = None  # base64 编码
+    media_type: str | None = None
+    file_id: str | None = None  # OpenAI file reference
+    file_url: str | None = None  # Gemini fileData URI
+    filename: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AudioBlock:
+    """音频内容块"""
+
+    type: ContentType = field(default=ContentType.AUDIO, init=False)
+    data: str | None = None  # base64 编码
+    media_type: str | None = None  # 完整 MIME（如 audio/mp3）
+    format: str | None = None  # 简短格式名（如 mp3, wav）
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class UnknownBlock:
     """未知内容块（用于前向兼容）"""
 
@@ -126,7 +152,14 @@ class UnknownBlock:
 
 
 ContentBlock = (
-    TextBlock | ThinkingBlock | ImageBlock | ToolUseBlock | ToolResultBlock | UnknownBlock
+    TextBlock
+    | ThinkingBlock
+    | ImageBlock
+    | FileBlock
+    | AudioBlock
+    | ToolUseBlock
+    | ToolResultBlock
+    | UnknownBlock
 )
 
 
@@ -175,6 +208,24 @@ class InstructionSegment:
 
 
 @dataclass
+class ThinkingConfig:
+    """统一的思考/推理配置（对齐 Claude thinking / Gemini thinkingConfig / OpenAI reasoning_effort）"""
+
+    enabled: bool = False
+    budget_tokens: int | None = None  # None = provider 默认
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ResponseFormatConfig:
+    """统一的响应格式配置（JSON mode / structured output）"""
+
+    type: str = "text"  # "text" | "json_object" | "json_schema"
+    json_schema: dict[str, Any] | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class InternalRequest:
     """统一的请求表示"""
 
@@ -195,6 +246,27 @@ class InternalRequest:
     stream: bool = False
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = None  # auto/none/required 或指定 tool_name
+
+    # 思考/推理配置
+    thinking: ThinkingConfig | None = None
+
+    # 并行工具调用控制
+    parallel_tool_calls: bool | None = None
+
+    # 采样参数
+    n: int | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    seed: int | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
+
+    # 响应格式
+    response_format: ResponseFormatConfig | None = None
+
+    # 模型输出上限（来自 GlobalModel.config.output_limit，用于跨格式转换时的 max_tokens 默认值）
+    output_limit: int | None = None
+
     extra: dict[str, Any] = field(default_factory=dict)  # 未识别字段透传
 
     def to_debug_dict(self) -> dict[str, Any]:
@@ -293,6 +365,8 @@ __all__ = [
     "TextBlock",
     "ThinkingBlock",
     "ImageBlock",
+    "FileBlock",
+    "AudioBlock",
     "ToolUseBlock",
     "ToolResultBlock",
     "UnknownBlock",
@@ -301,6 +375,8 @@ __all__ = [
     "InstructionSegment",
     "ToolDefinition",
     "ToolChoice",
+    "ThinkingConfig",
+    "ResponseFormatConfig",
     "InternalRequest",
     "UsageInfo",
     "InternalResponse",

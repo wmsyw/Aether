@@ -30,6 +30,8 @@ STOP_REASON_MAPPINGS: dict[str, dict[str, str]] = {
         "max_tokens": "max_tokens",
         "stop_sequence": "stop_sequence",
         "tool_use": "tool_use",
+        "pause_turn": "end_turn",
+        "refusal": "end_turn",
         # Claude 通常以错误/阻断体现，这里仅兜底
         "content_filtered": "end_turn",
         "unknown": "end_turn",
@@ -40,6 +42,8 @@ STOP_REASON_MAPPINGS: dict[str, dict[str, str]] = {
         "stop_sequence": "stop",
         "tool_use": "tool_calls",
         "content_filtered": "content_filter",
+        "refusal": "content_filter",
+        "pause_turn": "stop",
         "unknown": "stop",
     },
     "GEMINI": {
@@ -49,6 +53,8 @@ STOP_REASON_MAPPINGS: dict[str, dict[str, str]] = {
         # Gemini finishReason 对工具调用并没有稳定等价枚举，这里保守兜底为 STOP
         "tool_use": "STOP",
         "content_filtered": "SAFETY",
+        "refusal": "SAFETY",
+        "pause_turn": "OTHER",
         "unknown": "OTHER",
     },
 }
@@ -118,10 +124,77 @@ RETRYABLE_ERROR_TYPES: set[str] = {
 }
 
 
+# OpenAI reasoning_effort -> thinking budget_tokens
+# 参考 new-api relay-claude.go:178-196
+REASONING_EFFORT_TO_THINKING_BUDGET: dict[str, int] = {
+    "low": 1280,
+    "medium": 2048,
+    "high": 4096,
+}
+
+# thinking budget_tokens -> OpenAI reasoning_effort（反向映射，取最近区间）
+THINKING_BUDGET_TO_REASONING_EFFORT: list[tuple[int, str]] = [
+    (1664, "low"),  # <= 1664 -> low  (midpoint of 1280..2048)
+    (3072, "medium"),  # <= 3072 -> medium  (midpoint of 2048..4096)
+    (2**31, "high"),  # > 3072 -> high
+]
+
+
+# OpenAI web_search_options.search_context_size -> Claude web_search max_uses
+WEB_SEARCH_CONTEXT_SIZE_TO_MAX_USES: dict[str, int] = {
+    "low": 1,
+    "medium": 5,
+    "high": 10,
+}
+
+
+# Claude max_tokens 兜底默认值（仅在 GlobalModel.output_limit 和请求 max_tokens 均为空时使用）
+# 参考 new-api setting/model_setting/claude.go 的 DefaultMaxTokens["default"]
+CLAUDE_DEFAULT_MAX_TOKENS: int = 8192
+
+
+def get_claude_default_max_tokens(_model: str) -> int:
+    """获取 Claude 的 max_tokens 兜底默认值。
+
+    正常情况下应优先使用 GlobalModel.config.output_limit（通过 InternalRequest.output_limit 传入），
+    此函数仅在 output_limit 不可用时作为最终兜底。
+    """
+    return CLAUDE_DEFAULT_MAX_TOKENS
+
+
+# thinking budget_tokens 占 max_tokens 的比例（参考 new-api: 0.8）
+THINKING_BUDGET_TOKENS_PERCENTAGE: float = 0.8
+
+# thinking budget_tokens 最小值（Claude API 要求 >= 1024）
+THINKING_BUDGET_TOKENS_MIN: int = 1280
+
+
+def get_claude_default_thinking_budget(model: str) -> int:
+    """根据模型名称计算 thinking budget_tokens 默认值。
+
+    budget = max(max_tokens * THINKING_BUDGET_TOKENS_PERCENTAGE, THINKING_BUDGET_TOKENS_MIN)
+    """
+    max_tokens = get_claude_default_max_tokens(model)
+    return max(int(max_tokens * THINKING_BUDGET_TOKENS_PERCENTAGE), THINKING_BUDGET_TOKENS_MIN)
+
+
+# 跨格式 thinking 转换时，非 Claude 模型的默认 budget_tokens 安全值
+CROSS_FORMAT_THINKING_BUDGET_DEFAULT: int = 8192
+
+
 __all__ = [
     "ROLE_MAPPINGS",
     "STOP_REASON_MAPPINGS",
     "USAGE_FIELD_MAPPINGS",
     "ERROR_TYPE_MAPPINGS",
     "RETRYABLE_ERROR_TYPES",
+    "REASONING_EFFORT_TO_THINKING_BUDGET",
+    "THINKING_BUDGET_TO_REASONING_EFFORT",
+    "WEB_SEARCH_CONTEXT_SIZE_TO_MAX_USES",
+    "CLAUDE_DEFAULT_MAX_TOKENS",
+    "THINKING_BUDGET_TOKENS_PERCENTAGE",
+    "THINKING_BUDGET_TOKENS_MIN",
+    "CROSS_FORMAT_THINKING_BUDGET_DEFAULT",
+    "get_claude_default_max_tokens",
+    "get_claude_default_thinking_budget",
 ]

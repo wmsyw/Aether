@@ -14,12 +14,16 @@ from typing import Any
 
 from src.core.api_format.conversion.field_mappings import (
     ERROR_TYPE_MAPPINGS,
+    REASONING_EFFORT_TO_THINKING_BUDGET,
     RETRYABLE_ERROR_TYPES,
+    THINKING_BUDGET_TO_REASONING_EFFORT,
 )
 from src.core.api_format.conversion.internal import (
+    AudioBlock,
     ContentBlock,
     ContentType,
     ErrorType,
+    FileBlock,
     FormatCapabilities,
     ImageBlock,
     InstructionSegment,
@@ -27,10 +31,12 @@ from src.core.api_format.conversion.internal import (
     InternalMessage,
     InternalRequest,
     InternalResponse,
+    ResponseFormatConfig,
     Role,
     StopReason,
     TextBlock,
     ThinkingBlock,
+    ThinkingConfig,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -86,6 +92,8 @@ class OpenAINormalizer(FormatNormalizer):
         StopReason.STOP_SEQUENCE: "stop",
         StopReason.TOOL_USE: "tool_calls",
         StopReason.CONTENT_FILTERED: "content_filter",
+        StopReason.REFUSAL: "content_filter",
+        StopReason.PAUSE_TURN: "stop",
         StopReason.UNKNOWN: "stop",
     }
 
@@ -181,6 +189,52 @@ class OpenAINormalizer(FormatNormalizer):
             if isinstance(google_extra, dict) and google_extra:
                 extra["google"] = google_extra
 
+        # reasoning_effort -> ThinkingConfig
+        thinking: ThinkingConfig | None = None
+        reasoning_effort = request.get("reasoning_effort")
+        if (
+            isinstance(reasoning_effort, str)
+            and reasoning_effort in REASONING_EFFORT_TO_THINKING_BUDGET
+        ):
+            thinking = ThinkingConfig(
+                enabled=True,
+                budget_tokens=REASONING_EFFORT_TO_THINKING_BUDGET[reasoning_effort],
+                extra={"reasoning_effort": reasoning_effort},
+            )
+
+        # web_search_options 存入 extra 供目标 normalizer 使用
+        web_search_options = request.get("web_search_options")
+        if isinstance(web_search_options, dict):
+            extra["web_search_options"] = web_search_options
+
+        # parallel_tool_calls
+        parallel_tool_calls: bool | None = None
+        ptc = request.get("parallel_tool_calls")
+        if ptc is not None:
+            parallel_tool_calls = bool(ptc)
+
+        # 采样参数
+        n_value = self._optional_int(request.get("n"))
+        presence_penalty = self._optional_float(request.get("presence_penalty"))
+        frequency_penalty = self._optional_float(request.get("frequency_penalty"))
+        seed = self._optional_int(request.get("seed"))
+        logprobs = request.get("logprobs")
+        logprobs_val: bool | None = bool(logprobs) if logprobs is not None else None
+        top_logprobs = self._optional_int(request.get("top_logprobs"))
+
+        # response_format
+        response_format: ResponseFormatConfig | None = None
+        rf = request.get("response_format")
+        if isinstance(rf, dict):
+            rf_type = str(rf.get("type") or "text")
+            rf_schema = rf.get("json_schema") if isinstance(rf.get("json_schema"), dict) else None
+            if rf_type != "text":
+                response_format = ResponseFormatConfig(
+                    type=rf_type,
+                    json_schema=rf_schema,
+                    extra=self._extract_extra(rf, {"type", "json_schema"}),
+                )
+
         internal = InternalRequest(
             model=model,
             messages=messages,
@@ -193,6 +247,15 @@ class OpenAINormalizer(FormatNormalizer):
             stream=bool(request.get("stream") or False),
             tools=tools,
             tool_choice=tool_choice,
+            thinking=thinking,
+            parallel_tool_calls=parallel_tool_calls,
+            n=n_value,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            seed=seed,
+            logprobs=logprobs_val,
+            top_logprobs=top_logprobs,
+            response_format=response_format,
             extra=extra,
         )
 
@@ -240,24 +303,67 @@ class OpenAINormalizer(FormatNormalizer):
             result["stream_options"] = {"include_usage": True}
 
         if internal.tools:
-            result["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters or {},
-                        **(t.extra.get("openai_function") or {}),
-                    },
-                    **(t.extra.get("openai_tool") or {}),
+            openai_tools: list[dict[str, Any]] = []
+            for t in internal.tools:
+                # 跳过 Gemini 内置工具（在 OpenAI 中无对应物）
+                if t.extra.get("gemini_builtin_tool"):
+                    continue
+                func: dict[str, Any] = {
+                    "name": t.name,
+                    "parameters": t.parameters or {},
+                    **(t.extra.get("openai_function") or {}),
                 }
-                for t in internal.tools
-            ]
+                if t.description is not None:
+                    func["description"] = t.description
+                openai_tools.append(
+                    {
+                        "type": "function",
+                        "function": func,
+                        **(t.extra.get("openai_tool") or {}),
+                    }
+                )
+            if openai_tools:
+                result["tools"] = openai_tools
 
         if internal.tool_choice:
             result["tool_choice"] = self._tool_choice_to_openai(internal.tool_choice)
 
-        # 其余字段：保留在 internal.extra 中，但不默认回写到 OpenAI body（兼容优先）
+        # thinking -> reasoning_effort
+        if internal.thinking and internal.thinking.enabled:
+            effort = internal.thinking.extra.get("reasoning_effort")
+            if not effort and internal.thinking.budget_tokens is not None:
+                for threshold, level in THINKING_BUDGET_TO_REASONING_EFFORT:
+                    if internal.thinking.budget_tokens <= threshold:
+                        effort = level
+                        break
+            if effort:
+                result["reasoning_effort"] = effort
+
+        # parallel_tool_calls
+        if internal.parallel_tool_calls is not None:
+            result["parallel_tool_calls"] = internal.parallel_tool_calls
+
+        # 采样参数
+        if internal.n is not None and internal.n > 1:
+            result["n"] = internal.n
+        for attr, key in (
+            ("presence_penalty", "presence_penalty"),
+            ("frequency_penalty", "frequency_penalty"),
+            ("seed", "seed"),
+            ("logprobs", "logprobs"),
+            ("top_logprobs", "top_logprobs"),
+        ):
+            val = getattr(internal, attr, None)
+            if val is not None:
+                result[key] = val
+
+        # response_format
+        if internal.response_format and internal.response_format.type != "text":
+            rf: dict[str, Any] = {"type": internal.response_format.type}
+            if internal.response_format.json_schema:
+                rf["json_schema"] = internal.response_format.json_schema
+            result["response_format"] = rf
+
         return result
 
     # =========================
@@ -344,6 +450,8 @@ class OpenAINormalizer(FormatNormalizer):
         content_value = self._blocks_to_openai_content(content_blocks)
         if content_value is not None:
             message["content"] = content_value
+        else:
+            message["content"] = None
 
         if tool_blocks:
             message["tool_calls"] = [
@@ -366,11 +474,23 @@ class OpenAINormalizer(FormatNormalizer):
             total = internal.usage.total_tokens or (
                 internal.usage.input_tokens + internal.usage.output_tokens
             )
-            out["usage"] = {
+            usage_out: dict[str, Any] = {
                 "prompt_tokens": int(internal.usage.input_tokens),
                 "completion_tokens": int(internal.usage.output_tokens),
                 "total_tokens": int(total),
             }
+            # 回写 prompt_tokens_details（cached_tokens）
+            if internal.usage.cache_read_tokens:
+                usage_out["prompt_tokens_details"] = {
+                    "cached_tokens": int(internal.usage.cache_read_tokens),
+                }
+            # 回写 completion_tokens_details
+            openai_extra = internal.usage.extra.get("openai", {})
+            if isinstance(openai_extra, dict):
+                ctd = openai_extra.get("completion_tokens_details")
+                if isinstance(ctd, dict):
+                    usage_out["completion_tokens_details"] = ctd
+            out["usage"] = usage_out
 
         return out
 
@@ -1061,6 +1181,45 @@ class OpenAINormalizer(FormatNormalizer):
                     blocks.append(UnknownBlock(raw_type="image_url", payload=part))
                 continue
 
+            if ptype == "file":
+                file_data = part.get("file_data")
+                file_id = part.get("file_id")
+                if isinstance(file_data, dict):
+                    blocks.append(
+                        FileBlock(
+                            data=file_data.get("data"),
+                            media_type=file_data.get("mime_type"),
+                            filename=file_data.get("filename"),
+                            extra=self._extract_extra(part, {"type", "file_data"}),
+                        )
+                    )
+                elif isinstance(file_id, str) and file_id:
+                    blocks.append(
+                        FileBlock(
+                            file_id=file_id,
+                            extra=self._extract_extra(part, {"type", "file_id"}),
+                        )
+                    )
+                else:
+                    blocks.append(UnknownBlock(raw_type="file", payload=part))
+                continue
+
+            if ptype == "input_audio":
+                audio_data = part.get("input_audio") or {}
+                if isinstance(audio_data, dict):
+                    audio_fmt = str(audio_data.get("format") or "")
+                    blocks.append(
+                        AudioBlock(
+                            data=audio_data.get("data"),
+                            media_type=f"audio/{audio_fmt}" if audio_fmt else None,
+                            format=audio_fmt or None,
+                            extra=self._extract_extra(part, {"type", "input_audio"}),
+                        )
+                    )
+                else:
+                    blocks.append(UnknownBlock(raw_type="input_audio", payload=part))
+                continue
+
             # 其他类型：UnknownBlock
             dropped_key = f"openai_part:{ptype}"
             dropped[dropped_key] = dropped.get(dropped_key, 0) + 1
@@ -1288,14 +1447,35 @@ class OpenAINormalizer(FormatNormalizer):
         if input_tokens == 0 and output_tokens == 0 and total_tokens_int == 0:
             return None
 
+        # prompt_tokens_details -> cache_read_tokens
+        cache_read = 0
+        ptd = usage.get("prompt_tokens_details")
+        if isinstance(ptd, dict):
+            cache_read = int(ptd.get("cached_tokens") or 0)
+
+        # completion_tokens_details（reasoning_tokens 等存入 extra）
+        ctd = usage.get("completion_tokens_details")
+
         extra = self._extract_extra(
             usage,
-            {"prompt_tokens", "completion_tokens", "total_tokens"},
+            {
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            },
         )
+
+        # 保留 completion_tokens_details 细分到 extra
+        if isinstance(ctd, dict):
+            extra["completion_tokens_details"] = ctd
+
         return UsageInfo(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens_int,
+            cache_read_tokens=cache_read,
             extra={"openai": extra} if extra else {},
         )
 
@@ -1326,9 +1506,47 @@ class OpenAINormalizer(FormatNormalizer):
                     parts.append({"type": "image_url", "image_url": {"url": b.url}})
                 continue
 
+            if isinstance(b, FileBlock):
+                if b.data and b.media_type:
+                    # OpenAI file content part
+                    file_part: dict[str, Any] = {
+                        "type": "file",
+                        "file_data": {
+                            "mime_type": b.media_type,
+                            "data": b.data,
+                        },
+                    }
+                    if b.filename:
+                        file_part["file_data"]["filename"] = b.filename
+                    parts.append(file_part)
+                elif b.file_id:
+                    parts.append({"type": "file", "file_id": b.file_id})
+                elif b.file_url:
+                    # 回退为文本描述
+                    text_parts.append(f"[File: {b.file_url}]")
+                continue
+
+            if isinstance(b, AudioBlock):
+                if b.data:
+                    audio_fmt = b.format or (
+                        b.media_type.split("/", 1)[1]
+                        if b.media_type and "/" in b.media_type
+                        else "mp3"
+                    )
+                    parts.append(
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": b.data,
+                                "format": audio_fmt,
+                            },
+                        }
+                    )
+                continue
+
             # Unknown / Tool blocks 不进入 OpenAI content
 
-        # 如果有 OpenAI 原生格式的图片（URL 引用），使用 multipart content
+        # 如果有 OpenAI 原生格式的图片/文件/音频（multipart content parts），使用 multipart content
         if parts:
             if text_parts:
                 parts = [{"type": "text", "text": "\n".join(text_parts)}] + parts
@@ -1355,10 +1573,10 @@ class OpenAINormalizer(FormatNormalizer):
                 tool_blocks.append(b)
                 continue
             if isinstance(b, ToolResultBlock):
-                # InternalResponse.content 不应该包含 tool_result；忽略
                 continue
             if isinstance(b, UnknownBlock):
                 continue
+            # TextBlock, ImageBlock, FileBlock, AudioBlock -> content
             content_blocks.append(b)
         return thinking_blocks, content_blocks, tool_blocks
 
@@ -1494,38 +1712,6 @@ class OpenAINormalizer(FormatNormalizer):
             return ErrorType(value)
         except ValueError:
             return ErrorType.UNKNOWN
-
-    def _optional_int(self, value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _optional_float(self, value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _coerce_str_list(self, value: Any) -> list[str] | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, list):
-            return [str(x) for x in value if x is not None]
-        return None
-
-    def _extract_extra(self, payload: dict[str, Any], known_keys: set[str]) -> dict[str, Any]:
-        return {k: v for k, v in payload.items() if k not in known_keys}
-
-    def _merge_dropped(self, target: dict[str, int], source: dict[str, int]) -> None:
-        for k, v in source.items():
-            target[k] = target.get(k, 0) + int(v)
 
     def _ensure_tool_block_index(self, ss: dict[str, Any], tool_key: str) -> int:
         mapping = ss.get("tool_id_to_block_index")

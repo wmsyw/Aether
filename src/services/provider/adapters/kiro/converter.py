@@ -20,41 +20,9 @@ from src.services.provider.adapters.kiro.constants import (
 
 
 def map_model(model: str) -> str | None:
-    """Map an Anthropic model name to a Kiro-compatible model ID.
-
-    Kiro upstream expects specific model IDs (e.g. ``claude-sonnet-4.5``).
-    If *model* already matches a Kiro ID it is returned as-is; otherwise we
-    attempt a best-effort fuzzy mapping.  Returns ``None`` when the model is
-    unrecognised.
-    """
+    """Pass through the model name as-is to Kiro upstream."""
     raw = str(model or "").strip()
-    if not raw:
-        return None
-
-    model_lower = raw.lower()
-
-    # Already a Kiro-native ID?
-    _KIRO_NATIVE_IDS = {
-        "claude-sonnet-4.5",
-        "claude-opus-4.5",
-        "claude-opus-4.6",
-        "claude-haiku-4.5",
-    }
-    if model_lower in _KIRO_NATIVE_IDS:
-        return model_lower
-
-    # Fuzzy mapping from Anthropic-style model names
-    if "sonnet" in model_lower:
-        return "claude-sonnet-4.5"
-    if "opus" in model_lower:
-        if "4-5" in model_lower or "4.5" in model_lower:
-            return "claude-opus-4.5"
-        return "claude-opus-4.6"
-    if "haiku" in model_lower:
-        return "claude-haiku-4.5"
-
-    # Unrecognised — pass through as-is (let the upstream decide)
-    return raw
+    return raw or None
 
 
 def _extract_session_id(user_id: str) -> str | None:

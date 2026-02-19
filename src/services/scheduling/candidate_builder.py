@@ -386,6 +386,17 @@ class CandidateBuilder:
         client_format_str = normalize_endpoint_signature(client_format)
         client_sig = parse_signature_key(client_format_str)
         client_family, client_kind = client_sig.api_family, client_sig.endpoint_kind
+
+        # 提取 GlobalModel 配置的 output_limit（用于跨格式转换时的 max_tokens 默认值）
+        output_limit: int | None = None
+        normalized_name = model_name.strip() if isinstance(model_name, str) else ""
+        if normalized_name:
+            gm = await ModelCacheService.get_global_model_by_name(db, normalized_name)
+            if gm and isinstance(gm.config, dict):
+                raw = gm.config.get("output_limit")
+                if isinstance(raw, int) and raw > 0:
+                    output_limit = raw
+
         # chat/cli 互相可回退（用于同协议族下的端点变体），video/image 等不跨类回退
         if client_kind in {EndpointKind.CHAT, EndpointKind.CLI}:
             allowed_kinds = {EndpointKind.CHAT, EndpointKind.CLI}
@@ -581,6 +592,7 @@ class CandidateBuilder:
                         mapping_matched_model=mapping_matched_model,
                         needs_conversion=needs_conversion,
                         provider_api_format=str(endpoint_format_str or ""),
+                        output_limit=output_limit,
                     )
 
                     if needs_conversion:

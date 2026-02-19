@@ -317,7 +317,7 @@ class CliStreamMixin:
 
         # 跨格式：先做请求体转换（失败触发 failover）
         if needs_conversion and provider_api_format:
-            request_body, url_model = self._convert_request_for_cross_format(
+            request_body, url_model = await self._convert_request_for_cross_format(
                 request_body,
                 client_api_format,
                 provider_api_format,
@@ -325,6 +325,7 @@ class CliStreamMixin:
                 ctx.model,
                 is_stream=upstream_is_stream,
                 target_variant=conversion_variant,
+                output_limit=candidate.output_limit if candidate else None,
             )
         else:
             # 同格式：按原逻辑做轻量清理（子类可覆盖）

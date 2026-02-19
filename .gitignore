@@ -1,9 +1,6 @@
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
 
-CLIProxyAPI/
-sub2api/
-
 # AI Assistant Configuration
 .claude/
 .serena/
@@ -235,4 +232,5 @@ src/_version.py
 
 # Analysis folder (third-party code for reference)
 analysis/
+new-api/
 /aether-proxy/target/

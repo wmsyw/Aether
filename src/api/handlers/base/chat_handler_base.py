@@ -706,11 +706,12 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         # 跨格式：先做请求体转换（失败触发 failover）
         registry = get_format_converter_registry()
         if needs_conversion:
-            request_body = registry.convert_request(
+            request_body = await registry.convert_request_async(
                 request_body,
                 str(client_api_format),
                 str(provider_api_format),
                 target_variant=cross_format_variant,
+                output_limit=candidate.output_limit if candidate else None,
             )
             # 格式转换后，为需要 model 字段的格式设置模型名
             self._set_model_after_conversion(

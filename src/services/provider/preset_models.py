@@ -36,6 +36,12 @@ PRESET_MODELS: dict[str, list[dict[str, Any]]] = {
             "display_name": "Claude Sonnet 4.5",
         },
         {
+            "id": "claude-sonnet-4.6",
+            "object": "model",
+            "owned_by": "anthropic",
+            "display_name": "Claude Sonnet 4.6",
+        },
+        {
             "id": "claude-opus-4.5",
             "object": "model",
             "owned_by": "anthropic",

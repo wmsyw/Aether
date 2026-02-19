@@ -147,6 +147,36 @@
                 @update:model-value="(v) => setConfigField('description', v || undefined)"
               />
             </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="space-y-1.5">
+                <Label
+                  for="model-output-limit"
+                  class="text-xs"
+                >最大输出 Token</Label>
+                <Input
+                  id="model-output-limit"
+                  :model-value="form.config?.output_limit ?? ''"
+                  type="number"
+                  min="1"
+                  placeholder="如 8192"
+                  @update:model-value="(v) => setConfigField('output_limit', parseNumberInput(v, { allowFloat: false }))"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label
+                  for="model-context-limit"
+                  class="text-xs"
+                >上下文窗口</Label>
+                <Input
+                  id="model-context-limit"
+                  :model-value="form.config?.context_limit ?? ''"
+                  type="number"
+                  min="1"
+                  placeholder="如 200000"
+                  @update:model-value="(v) => setConfigField('context_limit', parseNumberInput(v, { allowFloat: false }))"
+                />
+              </div>
+            </div>
           </section>
 
           <!-- Key 能力配置 -->

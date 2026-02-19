@@ -228,7 +228,7 @@ class CliRequestMixin:
             stream_options["include_usage"] = True
             request_body["stream_options"] = stream_options
 
-    def _convert_request_for_cross_format(
+    async def _convert_request_for_cross_format(
         self,
         request_body: dict[str, Any],
         client_api_format: str,
@@ -238,6 +238,7 @@ class CliRequestMixin:
         is_stream: bool,
         *,
         target_variant: str | None = None,
+        output_limit: int | None = None,
     ) -> tuple[dict[str, Any], str]:
         """
         跨格式请求转换的公共逻辑
@@ -252,16 +253,18 @@ class CliRequestMixin:
             fallback_model: 备用模型名（通常是原始请求的 model）
             is_stream: 是否流式请求
             target_variant: 目标变体（如 "codex"），用于同格式但有细微差异的上游
+            output_limit: GlobalModel 配置的模型输出上限
 
         Returns:
             (转换后的请求体, 用于 URL 的模型名)
         """
         registry = get_format_converter_registry()
-        converted_body = registry.convert_request(
+        converted_body = await registry.convert_request_async(
             request_body,
             str(client_api_format),
             str(provider_api_format),
             target_variant=target_variant,
+            output_limit=output_limit,
         )
 
         # 先计算 URL 模型（在清理 body 中的 model 字段之前）

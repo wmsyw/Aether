@@ -115,6 +115,40 @@ class FormatNormalizer(ABC):
             return ImageBlock(data=data, media_type=media_type)
         return ImageBlock(url=url)
 
+    # ============ 通用解析工具 ============
+
+    def _optional_int(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _optional_float(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_str_list(self, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return [str(x) for x in value if x is not None]
+        return None
+
+    def _extract_extra(self, payload: dict[str, Any], known_keys: set[str]) -> dict[str, Any]:
+        return {k: v for k, v in payload.items() if k not in known_keys}
+
+    def _merge_dropped(self, target: dict[str, int], source: dict[str, int]) -> None:
+        for k, v in source.items():
+            target[k] = target.get(k, 0) + int(v)
+
     # ============ 视频转换（可选） ============
 
     def video_request_to_internal(self, request: dict[str, Any]) -> InternalVideoRequest:

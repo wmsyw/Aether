@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from src.core.api_format.conversion.exceptions import FormatConversionError
+from src.core.api_format.conversion.image_resolver import resolve_image_urls
 from src.core.api_format.conversion.internal import InternalRequest, ToolResultBlock, ToolUseBlock
 from src.core.api_format.conversion.normalizer import FormatNormalizer
 from src.core.api_format.conversion.stream_state import StreamState
@@ -104,6 +105,7 @@ class FormatConversionRegistry:
         target_format: str,
         *,
         target_variant: str | None = None,
+        output_limit: int | None = None,
     ) -> dict[str, Any]:
         if str(source_format).upper() == str(target_format).upper() and not target_variant:
             return request
@@ -116,7 +118,39 @@ class FormatConversionRegistry:
         ):
             try:
                 internal = src.request_to_internal(request)
+                internal.output_limit = output_limit
                 self._repair_internal_tool_call_ids(internal)
+                return tgt.request_from_internal(internal, target_variant=target_variant)
+            except Exception as e:
+                raise FormatConversionError(source_format, target_format, str(e)) from e
+
+    async def convert_request_async(
+        self,
+        request: dict[str, Any],
+        source_format: str,
+        target_format: str,
+        *,
+        target_variant: str | None = None,
+        output_limit: int | None = None,
+    ) -> dict[str, Any]:
+        """异步版本的 convert_request，在 internal 阶段执行图片 URL 下载等异步操作。"""
+        if str(source_format).upper() == str(target_format).upper() and not target_variant:
+            return request
+
+        src = self._require_normalizer(source_format)
+        tgt = self._require_normalizer(target_format)
+
+        with _track_conversion_metrics(
+            "request", str(source_format).upper(), str(target_format).upper()
+        ):
+            try:
+                internal = src.request_to_internal(request)
+                internal.output_limit = output_limit
+                self._repair_internal_tool_call_ids(internal)
+
+                # 异步阶段：解析图片 URL -> base64（仅在目标格式需要时）
+                await resolve_image_urls(internal, str(target_format).upper())
+
                 return tgt.request_from_internal(internal, target_variant=target_variant)
             except Exception as e:
                 raise FormatConversionError(source_format, target_format, str(e)) from e
