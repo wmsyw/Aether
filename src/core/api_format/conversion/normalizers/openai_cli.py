@@ -300,7 +300,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                     "id": f"msg_{internal.id or 'stream'}",
                     "role": "assistant",
                     "status": "completed",
-                    "content": [{"type": "output_text", "text": text}],
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
                 }
             )
 
@@ -329,7 +329,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                     "id": f"msg_{internal.id or 'stream'}",
                     "role": "assistant",
                     "status": "completed",
-                    "content": [{"type": "output_text", "text": ""}],
+                    "content": [{"type": "output_text", "text": "", "annotations": []}],
                 }
             )
 
@@ -339,19 +339,55 @@ class OpenAICliNormalizer(FormatNormalizer):
             "output_tokens": usage.output_tokens,
             "total_tokens": usage.total_tokens or (usage.input_tokens + usage.output_tokens),
         }
+        # input_tokens_details（cached_tokens）
+        if usage.cache_read_tokens:
+            usage_obj["input_tokens_details"] = {"cached_tokens": usage.cache_read_tokens}
+        # output_tokens_details（reasoning_tokens）— 从原始 usage 中恢复
+        raw_usage = (usage.extra.get("openai_cli") or {}).get("usage") or {}
+        if isinstance(raw_usage, dict):
+            output_details = raw_usage.get("output_tokens_details")
+            if isinstance(output_details, dict) and output_details.get("reasoning_tokens"):
+                usage_obj["output_tokens_details"] = {
+                    "reasoning_tokens": int(output_details["reasoning_tokens"]),
+                }
 
         # 优先使用用户请求的原始模型名，回退到上游返回的模型名
         model_name = requested_model if requested_model else (internal.model or "")
 
-        return {
+        result: dict[str, Any] = {
             "id": internal.id or "resp",
             "object": "response",
-            "created": int(time.time()),
-            "model": model_name,
+            "created_at": int(time.time()),
             "status": "completed",
+            "model": model_name,
             "output": output_items,
             "usage": usage_obj,
+            "background": False,
+            "error": None,
+            "incomplete_details": None,
         }
+
+        # 回显原始请求字段（CLI 客户端可能依赖这些字段做状态管理）
+        openai_cli_extra = internal.extra.get("openai_cli", {})
+        for key in (
+            "instructions",
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "tool_choice",
+            "tools",
+            "store",
+            "metadata",
+            "previous_response_id",
+            "reasoning",
+            "truncation",
+            "service_tier",
+            "parallel_tool_calls",
+        ):
+            if key in openai_cli_extra and key not in result:
+                result[key] = openai_cli_extra[key]
+
+        return result
 
     # =========================
     # Stream conversion
@@ -639,19 +675,34 @@ class OpenAICliNormalizer(FormatNormalizer):
         ss.setdefault("text_started", False)
         ss.setdefault("next_output_index", 0)
         ss.setdefault("sent_in_progress", False)
+        ss.setdefault("seq", 0)
         response_obj = {
             "id": state.message_id,
             "object": "response",
-            "created": int(time.time()),
+            "created_at": int(time.time()),
             "model": state.model,
             "status": "in_progress",
+            "background": False,
+            "error": None,
             "output": [],
         }
-        out.append({"type": "response.created", "response": response_obj})
+        out.append(
+            {
+                "type": "response.created",
+                "sequence_number": self._next_seq(ss),
+                "response": response_obj,
+            }
+        )
         # OpenAI Responses API 常见的 in_progress 事件（可选，最佳努力）
         if not ss.get("sent_in_progress"):
             ss["sent_in_progress"] = True
-            out.append({"type": "response.in_progress", "response": response_obj})
+            out.append(
+                {
+                    "type": "response.in_progress",
+                    "sequence_number": self._next_seq(ss),
+                    "response": response_obj,
+                }
+            )
         return out
 
     def _emit_content_block_start(
@@ -684,6 +735,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             out.append(
                 {
                     "type": "response.output_item.added",
+                    "sequence_number": self._next_seq(ss),
                     "output_index": output_index,
                     "item": {
                         "type": "function_call",
@@ -710,6 +762,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             out.append(
                 {
                     "type": "response.function_call_arguments.delta",
+                    "sequence_number": self._next_seq(ss),
                     "delta": event.input_delta,
                     "item_id": tool_id,
                     "output_index": output_index,
@@ -729,9 +782,21 @@ class OpenAICliNormalizer(FormatNormalizer):
             tool_calls = ss.get("tool_calls", {})
             entry = tool_calls.get(tool_id, {})
             output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
+            # function_call_arguments.done
+            out.append(
+                {
+                    "type": "response.function_call_arguments.done",
+                    "sequence_number": self._next_seq(ss),
+                    "item_id": tool_id,
+                    "output_index": output_index,
+                    "arguments": entry.get("args") or "",
+                }
+            )
+            # output_item.done
             out.append(
                 {
                     "type": "response.output_item.done",
+                    "sequence_number": self._next_seq(ss),
                     "output_index": output_index,
                     "item": {
                         "type": "function_call",
@@ -771,6 +836,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                     out.append(
                         {
                             "type": "response.output_item.added",
+                            "sequence_number": self._next_seq(ss),
                             "output_index": reasoning_output_index,
                             "item": {
                                 "type": "reasoning",
@@ -783,6 +849,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                     out.append(
                         {
                             "type": "response.reasoning_summary_part.added",
+                            "sequence_number": self._next_seq(ss),
                             "item_id": reasoning_id,
                             "output_index": reasoning_output_index,
                             "summary_index": 0,
@@ -793,6 +860,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                 out.append(
                     {
                         "type": "response.reasoning_summary_text.delta",
+                        "sequence_number": self._next_seq(ss),
                         "item_id": ss.get("reasoning_id", ""),
                         "output_index": ss.get("reasoning_output_index", 0),
                         "summary_index": 0,
@@ -813,6 +881,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                 out.append(
                     {
                         "type": "response.output_item.added",
+                        "sequence_number": self._next_seq(ss),
                         "output_index": output_index,
                         "item": {
                             "type": "message",
@@ -823,9 +892,25 @@ class OpenAICliNormalizer(FormatNormalizer):
                         },
                     }
                 )
+                # content_part.added
+                out.append(
+                    {
+                        "type": "response.content_part.added",
+                        "sequence_number": self._next_seq(ss),
+                        "output_index": output_index,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": "", "annotations": []},
+                    }
+                )
             ss["text_started"] = True
             ss["collected_text"] = str(ss.get("collected_text") or "") + event.text_delta
-            out.append({"type": "response.output_text.delta", "delta": event.text_delta})
+            out.append(
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": self._next_seq(ss),
+                    "delta": event.text_delta,
+                }
+            )
         return out
 
     def _emit_message_stop(
@@ -842,6 +927,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             out.append(
                 {
                     "type": "response.reasoning_summary_text.done",
+                    "sequence_number": self._next_seq(ss),
                     "item_id": reasoning_id,
                     "output_index": reasoning_output_index,
                     "summary_index": 0,
@@ -851,6 +937,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             out.append(
                 {
                     "type": "response.reasoning_summary_part.done",
+                    "sequence_number": self._next_seq(ss),
                     "item_id": reasoning_id,
                     "output_index": reasoning_output_index,
                     "summary_index": 0,
@@ -860,6 +947,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             out.append(
                 {
                     "type": "response.output_item.done",
+                    "sequence_number": self._next_seq(ss),
                     "output_index": reasoning_output_index,
                     "item": {
                         "type": "reasoning",
@@ -875,15 +963,36 @@ class OpenAICliNormalizer(FormatNormalizer):
             "id": message_id,
             "role": "assistant",
             "status": "completed",
-            "content": ([{"type": "output_text", "text": final_text}] if final_text else []),
+            "content": (
+                [{"type": "output_text", "text": final_text, "annotations": []}]
+                if final_text
+                else []
+            ),
         }
         if ss.get("text_started"):
-            out.append({"type": "response.output_text.done", "text": final_text})
+            out.append(
+                {
+                    "type": "response.output_text.done",
+                    "sequence_number": self._next_seq(ss),
+                    "text": final_text,
+                }
+            )
+            # content_part.done
+            out.append(
+                {
+                    "type": "response.content_part.done",
+                    "sequence_number": self._next_seq(ss),
+                    "output_index": ss.get("message_output_index") or 0,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": final_text, "annotations": []},
+                }
+            )
         if ss.get("message_output_started"):
             output_index = ss.get("message_output_index") or 0
             out.append(
                 {
                     "type": "response.output_item.done",
+                    "sequence_number": self._next_seq(ss),
                     "output_index": output_index,
                     "item": message_item,
                 }
@@ -896,6 +1005,8 @@ class OpenAICliNormalizer(FormatNormalizer):
         if final_text:
             final_content.append(TextBlock(text=final_text))
 
+        # 传递 extra 以便 response_from_internal 能回显请求字段
+        resp_extra = state.extra.get("openai_cli_request_extra") or {}
         response_obj = self.response_from_internal(
             InternalResponse(
                 id=state.message_id or "resp",
@@ -903,13 +1014,20 @@ class OpenAICliNormalizer(FormatNormalizer):
                 content=final_content,
                 stop_reason=event.stop_reason or StopReason.END_TURN,
                 usage=event.usage or UsageInfo(),
+                extra={"openai_cli": resp_extra} if resp_extra else {},
             )
         )
         # 将工具调用添加到 output（最佳努力）
         output_items = self._build_final_output_items(message_item, ss)
         if output_items:
             response_obj["output"] = output_items
-        out.append({"type": "response.completed", "response": response_obj})
+        out.append(
+            {
+                "type": "response.completed",
+                "sequence_number": self._next_seq(ss),
+                "response": response_obj,
+            }
+        )
         return out
 
     def _build_final_output_items(
@@ -967,6 +1085,7 @@ class OpenAICliNormalizer(FormatNormalizer):
     ) -> list[dict[str, Any]]:
         err_payload = self.error_from_internal(event.error)
         err_payload["type"] = "response.failed"
+        err_payload["sequence_number"] = self._next_seq(ss)
         return [err_payload]
 
     # =========================
@@ -1006,6 +1125,13 @@ class OpenAICliNormalizer(FormatNormalizer):
     # =========================
     # Helpers
     # =========================
+
+    @staticmethod
+    def _next_seq(ss: dict[str, Any]) -> int:
+        """递增并返回下一个 sequence_number"""
+        seq = int(ss.get("seq") or 0) + 1
+        ss["seq"] = seq
+        return seq
 
     def _unwrap_response_object(self, response: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(response, dict):
@@ -1094,10 +1220,18 @@ class OpenAICliNormalizer(FormatNormalizer):
         input_tokens = int(usage.get("input_tokens") or 0)
         output_tokens = int(usage.get("output_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+
+        # input_tokens_details.cached_tokens
+        cache_read_tokens = 0
+        input_details = usage.get("input_tokens_details")
+        if isinstance(input_details, dict):
+            cache_read_tokens = int(input_details.get("cached_tokens") or 0)
+
         return UsageInfo(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cache_read_tokens=cache_read_tokens,
             extra={"openai_cli": {"usage": usage}},
         )
 
