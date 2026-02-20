@@ -204,6 +204,11 @@ class GeminiNormalizer(FormatNormalizer):
         "MAX_TOKENS": StopReason.MAX_TOKENS,
         "SAFETY": StopReason.CONTENT_FILTERED,
         "RECITATION": StopReason.CONTENT_FILTERED,
+        "LANGUAGE": StopReason.CONTENT_FILTERED,
+        "BLOCKLIST": StopReason.CONTENT_FILTERED,
+        "PROHIBITED_CONTENT": StopReason.CONTENT_FILTERED,
+        "SPII": StopReason.CONTENT_FILTERED,
+        "IMAGE_SAFETY": StopReason.CONTENT_FILTERED,
         "MALFORMED_FUNCTION_CALL": StopReason.TOOL_USE,
         "OTHER": StopReason.UNKNOWN,
     }
@@ -219,6 +224,29 @@ class GeminiNormalizer(FormatNormalizer):
         ErrorType.CONTENT_FILTERED: "FAILED_PRECONDITION",
         ErrorType.CONTEXT_LENGTH_EXCEEDED: "INVALID_ARGUMENT",
         ErrorType.UNKNOWN: "INTERNAL",
+    }
+
+    # generationConfig 中已被标准化提取的 key，其余写入 extra 以便 roundtrip 保留
+    _GC_KNOWN_KEYS: set[str] = {
+        "max_output_tokens",
+        "maxOutputTokens",
+        "temperature",
+        "top_p",
+        "topP",
+        "top_k",
+        "topK",
+        "stop_sequences",
+        "stopSequences",
+        "response_modalities",
+        "responseModalities",
+        "thinking_config",
+        "thinkingConfig",
+        "candidate_count",
+        "candidateCount",
+        "response_mime_type",
+        "responseMimeType",
+        "response_schema",
+        "responseSchema",
     }
 
     # =========================
@@ -281,7 +309,48 @@ class GeminiNormalizer(FormatNormalizer):
         )
 
         # 构建 extra，保留原始 gemini 字段
-        extra: dict[str, Any] = {"gemini": self._extract_extra(request, {"contents"})}
+        extra: dict[str, Any] = {
+            "gemini": self._extract_extra(
+                request,
+                {
+                    "model",
+                    "contents",
+                    "system_instruction",
+                    "systemInstruction",
+                    "generation_config",
+                    "generationConfig",
+                    "tools",
+                    "tool_config",
+                    "toolConfig",
+                    "stream",
+                    "safetySettings",
+                    "safety_settings",
+                    "cachedContent",
+                    "cached_content",
+                },
+            )
+        }
+
+        # 保留 generationConfig 中未被标准化的额外字段（seed, presencePenalty 等）
+        raw_gc = (
+            request.get("generation_config")
+            if "generation_config" in request
+            else request.get("generationConfig")
+        )
+        if isinstance(raw_gc, dict):
+            gc_extra = {k: v for k, v in raw_gc.items() if k not in self._GC_KNOWN_KEYS}
+            if gc_extra:
+                extra.setdefault("gemini", {})["generation_config_extra"] = gc_extra
+
+        # 保留 safetySettings（原样透传）
+        raw_safety = request.get("safetySettings") or request.get("safety_settings")
+        if raw_safety:
+            extra.setdefault("gemini", {})["safety_settings"] = raw_safety
+
+        # 保留 cachedContent（原样透传）
+        raw_cached = request.get("cachedContent") or request.get("cached_content")
+        if raw_cached:
+            extra.setdefault("gemini", {})["cached_content"] = raw_cached
 
         # 保留 generationConfig 中的特殊字段（responseModalities, thinkingConfig 等）
         # 这些字段在 _get_generation_config 中已提取，需要单独存储以便转换时使用
@@ -505,6 +574,14 @@ class GeminiNormalizer(FormatNormalizer):
                 if "thinking_config" in orig_gc and "thinkingConfig" not in generation_config:
                     generation_config["thinkingConfig"] = orig_gc["thinking_config"]
 
+            # 恢复 generationConfig 中未被标准化的额外字段
+            # (seed, presencePenalty, frequencyPenalty, logprobs, speechConfig, mediaResolution 等)
+            gc_extra = gemini_extra.get("generation_config_extra")
+            if isinstance(gc_extra, dict):
+                for k, v in gc_extra.items():
+                    if k not in generation_config:
+                        generation_config[k] = v
+
         raw_contents: list[dict[str, Any]] = []
         last_idx = len(internal.messages) - 1
         for idx, msg in enumerate(internal.messages):
@@ -570,6 +647,15 @@ class GeminiNormalizer(FormatNormalizer):
         if tool_config:
             result["tool_config"] = tool_config
 
+        # 恢复 safetySettings 和 cachedContent（Gemini -> Gemini 透传）
+        if isinstance(gemini_extra, dict):
+            safety = gemini_extra.get("safety_settings")
+            if safety:
+                result["safetySettings"] = safety
+            cached = gemini_extra.get("cached_content")
+            if cached:
+                result["cachedContent"] = cached
+
         return result
 
     # =========================
@@ -577,7 +663,7 @@ class GeminiNormalizer(FormatNormalizer):
     # =========================
 
     def response_to_internal(self, response: dict[str, Any]) -> InternalResponse:
-        rid = str(response.get("id") or "")
+        rid = str(response.get("responseId") or response.get("id") or "")
         model = str(response.get("modelVersion") or response.get("model") or "")
 
         candidates = response.get("candidates") or []
@@ -593,6 +679,11 @@ class GeminiNormalizer(FormatNormalizer):
         stop_reason = None
         if finish_reason is not None:
             stop_reason = self._FINISH_REASON_TO_STOP.get(str(finish_reason), StopReason.UNKNOWN)
+
+        # Gemini returns finishReason=STOP for function calls; detect tool use from content
+        has_tool_use = any(isinstance(b, ToolUseBlock) for b in blocks)
+        if has_tool_use and stop_reason != StopReason.TOOL_USE:
+            stop_reason = StopReason.TOOL_USE
 
         usage_info = self._usage_metadata_to_internal(response.get("usageMetadata"))
 
@@ -1147,8 +1238,20 @@ class GeminiNormalizer(FormatNormalizer):
 
     def error_from_internal(self, internal: InternalError) -> dict[str, Any]:
         status = self._ERROR_TYPE_TO_GEMINI_STATUS.get(internal.type, "INTERNAL")
+        code_map: dict[ErrorType, int] = {
+            ErrorType.INVALID_REQUEST: 400,
+            ErrorType.AUTHENTICATION: 401,
+            ErrorType.PERMISSION_DENIED: 403,
+            ErrorType.NOT_FOUND: 404,
+            ErrorType.RATE_LIMIT: 429,
+            ErrorType.OVERLOADED: 503,
+            ErrorType.CONTENT_FILTERED: 400,
+            ErrorType.CONTEXT_LENGTH_EXCEEDED: 400,
+            ErrorType.SERVER_ERROR: 500,
+            ErrorType.UNKNOWN: 500,
+        }
         payload: dict[str, Any] = {
-            "code": 400 if internal.type == ErrorType.INVALID_REQUEST else 500,
+            "code": code_map.get(internal.type, 500),
             "message": internal.message,
             "status": status,
         }

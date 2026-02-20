@@ -515,15 +515,11 @@ class CliPrefetchMixin:
                     if ctx.data_count > 0:
                         last_data_time = time.time()
 
-            # 处理剩余事件
-            flushed_events = sse_parser.flush()
-            for event in flushed_events:
-                self._handle_sse_event(
-                    ctx,
-                    event.get("event"),
-                    event.get("data") or "",
-                    record_chunk=not needs_conversion,
-                )
+            # flush 字节 buffer 残余数据 + SSE parser 内部缓冲区
+            for chunk in self._flush_buffer_with_conversion(
+                ctx, buffer, decoder, sse_parser, needs_conversion
+            ):
+                yield chunk
 
             # 检查是否收到数据
             if ctx.data_count == 0:

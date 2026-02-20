@@ -1,13 +1,19 @@
 """
 格式转换内部表示（Internal / Canonical Format）
 
-该模块定义 Hub-and-Spoke 架构的“中间表示法”，用于把不同 Provider 的请求/响应/流式事件
+该模块定义 Hub-and-Spoke 架构的"中间表示法"，用于把不同 Provider 的请求/响应/流式事件
 统一映射到稳定的内部结构，再转换为目标格式。
 
 设计原则：
 - 类型安全：尽量用 dataclass + Enum 表达语义，便于 IDE/静态检查
 - 可扩展：未知/不可逆字段写入 extra/raw，避免静默丢失
 - 兼容优先：UnknownBlock 在内部保留，但默认在输出阶段丢弃（可观测、可随时调整策略）
+
+字段修改须知：
+- 本文件是所有 normalizer 的共享契约，修改字段语义会同时影响所有格式的输入输出
+- 每个字段的注释标注了各格式的映射关系（OpenAI/Claude/Gemini）
+- 修改前请检查 tests/core/api_format/conversion/ 下的 roundtrip + schema 测试
+- 新增字段应标注 "可选" 并给默认值，避免破坏现有 normalizer
 """
 
 from dataclasses import dataclass, field
@@ -62,7 +68,13 @@ class ErrorType(str, Enum):
 
 @dataclass
 class TextBlock:
-    """文本内容块"""
+    """文本内容块
+
+    Format mapping:
+      OpenAI: message.content (string) / content[].type="text"
+      Claude: content[].type="text"
+      Gemini: parts[].text
+    """
 
     type: ContentType = field(default=ContentType.TEXT, init=False)
     text: str = ""
@@ -71,30 +83,52 @@ class TextBlock:
 
 @dataclass
 class ThinkingBlock:
-    """思考过程内容块（对齐 Gemini thought:true / Claude thinking / OpenAI reasoning_content）"""
+    """思考过程内容块
+
+    Format mapping:
+      OpenAI: message.reasoning_content / delta.reasoning_content
+      Claude: content[].type="thinking" (thinking + signature)
+      Gemini: parts[].thought=true (text + thoughtSignature)
+    """
 
     type: ContentType = field(default=ContentType.THINKING, init=False)
     thinking: str = ""
-    signature: str | None = None  # Gemini thoughtSignature / Claude signature
+    # Claude signature / Gemini thoughtSignature; OpenAI 无对应字段
+    signature: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ImageBlock:
-    """图片内容块"""
+    """图片内容块
+
+    Format mapping:
+      OpenAI: content[].type="image_url" -> image_url.url (URL or data:mime;base64,...)
+      Claude: content[].type="image" -> source.type="base64" | source.type="url"
+      Gemini: parts[].inlineData (base64) / parts[].fileData (URI)
+    """
 
     type: ContentType = field(default=ContentType.IMAGE, init=False)
-    # base64 编码的图片数据（二选一）
-    data: str | None = None
-    media_type: str | None = None
-    # 或者 URL 引用
-    url: str | None = None
+    data: str | None = None  # base64 encoded image data (mutually exclusive with url)
+    media_type: str | None = None  # MIME type, e.g. "image/png"
+    url: str | None = None  # URL reference (mutually exclusive with data)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ToolUseBlock:
-    """工具调用内容块"""
+    """工具调用内容块
+
+    Format mapping:
+      OpenAI: message.tool_calls[].id / .function.name / .function.arguments(JSON str)
+      Claude: content[].type="tool_use" -> id / name / input(dict)
+      Gemini: parts[].functionCall -> name / args(dict); id 由 normalizer 生成
+
+    Contract:
+      tool_id:    roundtrip 保留; OpenAI/Claude 原生提供, Gemini 由 normalizer 合成
+      tool_name:  必须非空
+      tool_input: 已解析的 dict (非 JSON 字符串)
+    """
 
     type: ContentType = field(default=ContentType.TOOL_USE, init=False)
     tool_id: str = ""
@@ -105,12 +139,23 @@ class ToolUseBlock:
 
 @dataclass
 class ToolResultBlock:
-    """工具结果内容块"""
+    """工具结果内容块
+
+    Format mapping:
+      OpenAI: role="tool" message -> tool_call_id + content(string)
+      Claude: content[].type="tool_result" -> tool_use_id + content
+      Gemini: parts[].functionResponse -> name + response(dict)
+
+    Contract:
+      tool_use_id:  关联 ToolUseBlock.tool_id; OpenAI/Claude 必须非空
+      tool_name:    Gemini functionResponse.name 需要; OpenAI/Claude 可为 None
+      output:       结构化输出 (dict/list); 与 content_text 二选一
+      content_text: 纯文本输出; 与 output 二选一
+    """
 
     type: ContentType = field(default=ContentType.TOOL_RESULT, init=False)
-    tool_use_id: str = ""  # 对应的 ToolUseBlock.tool_id（用于 Claude/Antigravity id 字段）
-    tool_name: str | None = None  # 工具名称（用于 Gemini function_response.name 字段）
-    # 工具输出可能是纯文本，也可能是结构化 JSON（Gemini functionResponse 等）
+    tool_use_id: str = ""
+    tool_name: str | None = None
     output: Any = None
     content_text: str | None = None
     is_error: bool = False
@@ -119,11 +164,17 @@ class ToolResultBlock:
 
 @dataclass
 class FileBlock:
-    """文件内容块（PDF、文档等）"""
+    """文件内容块（PDF、文档等）
+
+    Format mapping:
+      OpenAI: content[].type="file" -> file.file_data(data URL) / file.file_id
+      Claude: content[].type="document" -> source.type="base64" / source.type="url"
+      Gemini: parts[].fileData -> fileUri + mimeType
+    """
 
     type: ContentType = field(default=ContentType.FILE, init=False)
-    data: str | None = None  # base64 编码
-    media_type: str | None = None
+    data: str | None = None  # base64 encoded file data
+    media_type: str | None = None  # MIME type
     file_id: str | None = None  # OpenAI file reference
     file_url: str | None = None  # Gemini fileData URI
     filename: str | None = None
@@ -132,12 +183,18 @@ class FileBlock:
 
 @dataclass
 class AudioBlock:
-    """音频内容块"""
+    """音频内容块
+
+    Format mapping:
+      OpenAI: content[].type="input_audio" -> input_audio.data + input_audio.format
+      Claude: content[].type="audio" (planned)
+      Gemini: parts[].inlineData (audio MIME)
+    """
 
     type: ContentType = field(default=ContentType.AUDIO, init=False)
-    data: str | None = None  # base64 编码
-    media_type: str | None = None  # 完整 MIME（如 audio/mp3）
-    format: str | None = None  # 简短格式名（如 mp3, wav）
+    data: str | None = None  # base64 encoded audio data
+    media_type: str | None = None  # full MIME (e.g. audio/mp3)
+    format: str | None = None  # short format name (e.g. mp3, wav)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -200,19 +257,29 @@ class ToolChoice:
 
 @dataclass
 class InstructionSegment:
-    """系统/开发者指令段（用于保留 OpenAI system/developer 结构与顺序）"""
+    """系统/开发者指令段
 
-    role: Role  # 仅允许 Role.SYSTEM / Role.DEVELOPER
+    OpenAI 区分 system/developer 两种 role, Claude/Gemini 只有 system string.
+    instructions 列表保留 OpenAI 的 role 语义和顺序, system 字段是 join 后的纯文本兜底.
+    """
+
+    role: Role  # Role.SYSTEM / Role.DEVELOPER only
     text: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ThinkingConfig:
-    """统一的思考/推理配置（对齐 Claude thinking / Gemini thinkingConfig / OpenAI reasoning_effort）"""
+    """统一的思考/推理配置
+
+    Format mapping:
+      OpenAI: reasoning_effort ("low"/"medium"/"high") -> budget_tokens via lookup table
+      Claude: thinking.type="enabled" + thinking.budget_tokens
+      Gemini: generationConfig.thinkingConfig.thinkingBudget
+    """
 
     enabled: bool = False
-    budget_tokens: int | None = None  # None = provider 默认
+    budget_tokens: int | None = None  # None = provider default
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -227,7 +294,16 @@ class ResponseFormatConfig:
 
 @dataclass
 class InternalRequest:
-    """统一的请求表示"""
+    """统一的请求表示
+
+    Format mapping (key fields):
+      model:        OpenAI/Claude body.model; Gemini URL path param
+      instructions: OpenAI system/developer messages; Claude/Gemini -> join to system string
+      system:       instructions join fallback; Claude system param; Gemini systemInstruction
+      max_tokens:   OpenAI max_tokens/max_completion_tokens; Claude max_tokens; Gemini maxOutputTokens
+      tools:        OpenAI tools[].function; Claude tools[]; Gemini tools[].functionDeclarations
+      tool_choice:  OpenAI tool_choice; Claude tool_choice; Gemini toolConfig.functionCallingConfig
+    """
 
     model: str
     messages: list[InternalMessage]
@@ -297,7 +373,15 @@ class UsageInfo:
 
 @dataclass
 class InternalResponse:
-    """统一的响应表示"""
+    """统一的响应表示
+
+    Format mapping:
+      id:          OpenAI id; Claude id; Gemini (none, synthesized)
+      model:       OpenAI model; Claude model; Gemini model (from metadata)
+      content:     OpenAI choices[0].message; Claude content[]; Gemini candidates[0].content.parts
+      stop_reason: OpenAI finish_reason; Claude stop_reason; Gemini finishReason
+      usage:       OpenAI usage; Claude usage; Gemini usageMetadata
+    """
 
     id: str
     model: str

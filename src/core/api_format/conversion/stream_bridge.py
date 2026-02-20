@@ -166,7 +166,30 @@ class InternalStreamAggregator:
                 self._open.clear()
                 continue
 
+    @property
+    def open_count(self) -> int:
+        """当前未关闭的 block 数量。"""
+        return len(self._open)
+
+    @property
+    def final_count(self) -> int:
+        """已完成的 block 数量。"""
+        return len(self._final)
+
+    @property
+    def usage(self) -> UsageInfo | None:
+        return self._usage
+
+    @property
+    def stop_reason(self) -> StopReason | None:
+        return self._stop_reason
+
     def build(self) -> InternalResponse:
+        # Flush remaining open blocks (best-effort) in case MessageStopEvent was never received.
+        for idx, b in list(self._open.items()):
+            self._final.setdefault(idx, b.finalize())
+        self._open.clear()
+
         rid = self._id or self._fallback_id
         model = self._model or self._fallback_model
         content = [self._final[k] for k in sorted(self._final.keys())]

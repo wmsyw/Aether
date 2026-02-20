@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from src.api.handlers.base.parsers import get_parser_for_format
@@ -10,6 +12,7 @@ from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.utils import get_format_converter_registry
 from src.core.logger import logger
 from src.services.provider.behavior import get_provider_behavior
+from src.utils.sse_parser import SSEEventParser
 
 from .cli_sse_helpers import (
     _format_converted_events_to_sse,
@@ -280,6 +283,68 @@ class CliEventMixin:
             # 保存最后一个非空 usage
             if any([new_input, new_output, new_cached, new_cache_creation]):
                 ctx.final_usage = usage
+
+    def _flush_buffer_with_conversion(
+        self: CliHandlerProtocol,
+        ctx: StreamContext,
+        buffer: bytes,
+        decoder: codecs.IncrementalDecoder,
+        sse_parser: SSEEventParser,
+        needs_conversion: bool,
+    ) -> Iterator[bytes]:
+        """flush 字节 buffer 残余数据 + SSE parser 内部缓冲区，并做格式转换。
+
+        正常流结束时调用（区别于异常路径的 _flush_remaining_sse_data）。
+        当 needs_conversion=True 时 yield 转换后的 SSE 行；
+        当 needs_conversion=False 时 yield 原始行透传。
+        """
+        # 1) flush 字节 buffer 中的残余数据（最后一个 chunk 可能不以换行结尾）
+        if buffer:
+            try:
+                remaining = decoder.decode(buffer, True)
+            except Exception:
+                remaining = ""
+            for tail_line in remaining.split("\n"):
+                stripped = tail_line.rstrip("\r")
+                tail_events = sse_parser.feed_line(stripped)
+                if stripped == "":
+                    for event in tail_events:
+                        self._handle_sse_event(
+                            ctx,
+                            event.get("event"),
+                            event.get("data") or "",
+                            record_chunk=not needs_conversion,
+                        )
+                    continue
+                if needs_conversion and stripped:
+                    converted_lines, converted_events = self._convert_sse_line(
+                        ctx, stripped, tail_events
+                    )
+                    self._record_converted_chunks(ctx, converted_events)
+                    for converted_line in converted_lines:
+                        if converted_line:
+                            yield (converted_line + "\n").encode("utf-8")
+                elif stripped:
+                    # 非 conversion 模式：透传原始行
+                    yield (stripped + "\n").encode("utf-8")
+
+        # 2) flush SSE parser 内部缓冲区中的残余事件
+        for event in sse_parser.flush():
+            self._handle_sse_event(
+                ctx,
+                event.get("event"),
+                event.get("data") or "",
+                record_chunk=not needs_conversion,
+            )
+            if needs_conversion:
+                data_str = event.get("data") or ""
+                if data_str and data_str != "[DONE]":
+                    flush_line = f"data: {data_str}"
+                    converted_lines, converted_events = self._convert_sse_line(ctx, flush_line, [])
+                    self._record_converted_chunks(ctx, converted_events)
+                    for converted_line in converted_lines:
+                        if converted_line:
+                            yield (converted_line + "\n").encode("utf-8")
 
     def _finalize_stream_metadata(self, ctx: StreamContext) -> None:
         """

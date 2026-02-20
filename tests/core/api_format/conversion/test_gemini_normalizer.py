@@ -195,7 +195,7 @@ def test_gemini_stream_chunk_and_event_roundtrip_basic() -> None:
     n = GeminiNormalizer()
     state = StreamState()
 
-    chunks = [
+    chunks: list[dict[str, Any]] = [
         {
             "candidates": [{"content": {"parts": [{"text": "Hel"}], "role": "model"}, "index": 0}],
             "modelVersion": "gemini-1.5",

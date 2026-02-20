@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import codecs
 import json
+from collections import Counter
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -148,7 +149,11 @@ async def aggregate_upstream_stream_to_internal_response(
     buffer = b""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
+    _event_type_counts: Counter[str] = Counter()
+    _total_events = 0
+
     def _feed_line(normalized_line: str) -> None:
+        nonlocal _total_events
         data_obj, st = parse_provider_stream_line_to_json(normalized_line, provider_api_format)
         if st != "ok" or data_obj is None:
             return
@@ -171,6 +176,9 @@ async def aggregate_upstream_stream_to_internal_response(
                 error_status=parsed.error_type,
             )
 
+        etype = str(data_obj.get("type") or "")
+        _event_type_counts[etype] += 1
+        _total_events += 1
         internal_events = src_norm.stream_chunk_to_internal(data_obj, state)
         aggregator.feed(internal_events)
 
@@ -193,7 +201,35 @@ async def aggregate_upstream_stream_to_internal_response(
         if normalized_tail:
             _feed_line(normalized_tail)
 
-    return aggregator.build()
+    # 诊断日志：在 build() 之前记录聚合器状态
+    open_count = aggregator.open_count
+    final_count = aggregator.final_count
+    if not final_count and not open_count:
+        logger.warning(
+            "[{}] aggregate_upstream_stream: 聚合器无内容, "
+            "open={}, final={}, usage={}, stop_reason={}, "
+            "event_types={}, total_events={}",
+            request_id,
+            open_count,
+            final_count,
+            aggregator.usage,
+            aggregator.stop_reason,
+            dict(_event_type_counts),
+            _total_events,
+        )
+    elif not final_count and open_count:
+        logger.warning(
+            "[{}] aggregate_upstream_stream: final 为空但 open 有内容, "
+            "open={}, final={}, event_types={}, total_events={}",
+            request_id,
+            open_count,
+            final_count,
+            dict(_event_type_counts),
+            _total_events,
+        )
+
+    result = aggregator.build()
+    return result
 
 
 __all__ = [

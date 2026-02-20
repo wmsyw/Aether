@@ -203,6 +203,15 @@ class CliHandlerProtocol(Protocol):
         converted_events: list[dict[str, Any]],
     ) -> None: ...
 
+    def _flush_buffer_with_conversion(
+        self,
+        ctx: StreamContext,
+        buffer: bytes,
+        decoder: Any,
+        sse_parser: Any,
+        needs_conversion: bool,
+    ) -> Any: ...  # Iterator[bytes]
+
     def _finalize_stream_metadata(
         self,
         ctx: StreamContext,

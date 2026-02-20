@@ -218,7 +218,7 @@ def test_claude_stream_chunk_and_event_roundtrip_basic() -> None:
     n = ClaudeNormalizer()
     state = StreamState()
 
-    chunks = [
+    chunks: list[dict[str, Any]] = [
         {
             "type": "message_start",
             "message": {
@@ -350,6 +350,7 @@ def test_claude_system_array_format() -> None:
     internal = n.request_to_internal(req)
 
     # system 数组中的多个 text 应该用 \n\n 连接
+    assert internal.system is not None
     assert "x-anthropic-billing-header" in internal.system
     assert "You are Claude Code" in internal.system
     assert "Extract file paths" in internal.system

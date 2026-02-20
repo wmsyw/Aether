@@ -171,7 +171,25 @@ class ClaudeNormalizer(FormatNormalizer):
             tools=tools,
             tool_choice=tool_choice,
             thinking=thinking,
-            extra={"claude": self._extract_extra(request, {"messages"})},
+            extra={
+                "claude": self._extract_extra(
+                    request,
+                    {
+                        "model",
+                        "messages",
+                        "system",
+                        "max_tokens",
+                        "temperature",
+                        "top_p",
+                        "top_k",
+                        "stop_sequences",
+                        "stream",
+                        "tools",
+                        "tool_choice",
+                        "thinking",
+                    },
+                )
+            },
         )
 
         if dropped:
@@ -1151,7 +1169,7 @@ class ClaudeNormalizer(FormatNormalizer):
         if tool_choice.type == ToolChoiceType.REQUIRED:
             return {"type": "any"}
         if tool_choice.type == ToolChoiceType.TOOL:
-            return {"type": "tool_use", "name": tool_choice.tool_name or ""}
+            return {"type": "tool", "name": tool_choice.tool_name or ""}
         return {"type": "auto"}
 
     def _internal_message_to_claude(self, msg: InternalMessage) -> dict[str, Any]:

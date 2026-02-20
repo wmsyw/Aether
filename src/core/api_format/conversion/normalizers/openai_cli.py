@@ -17,12 +17,15 @@ from typing import Any
 
 from src.core.api_format.conversion.field_mappings import (
     ERROR_TYPE_MAPPINGS,
+    REASONING_EFFORT_TO_THINKING_BUDGET,
     RETRYABLE_ERROR_TYPES,
+    THINKING_BUDGET_TO_REASONING_EFFORT,
 )
 from src.core.api_format.conversion.internal import (
     ContentBlock,
     ContentType,
     ErrorType,
+    FileBlock,
     FormatCapabilities,
     ImageBlock,
     InstructionSegment,
@@ -34,6 +37,7 @@ from src.core.api_format.conversion.internal import (
     StopReason,
     TextBlock,
     ThinkingBlock,
+    ThinkingConfig,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -125,6 +129,24 @@ class OpenAICliNormalizer(FormatNormalizer):
 
         max_tokens = self._optional_int(request.get("max_output_tokens", request.get("max_tokens")))
 
+        # parallel_tool_calls
+        parallel_tool_calls: bool | None = None
+        ptc = request.get("parallel_tool_calls")
+        if ptc is not None:
+            parallel_tool_calls = bool(ptc)
+
+        # reasoning -> ThinkingConfig (Responses API uses reasoning.effort)
+        thinking: ThinkingConfig | None = None
+        reasoning = request.get("reasoning")
+        if isinstance(reasoning, dict):
+            effort = reasoning.get("effort")
+            if isinstance(effort, str) and effort in REASONING_EFFORT_TO_THINKING_BUDGET:
+                thinking = ThinkingConfig(
+                    enabled=True,
+                    budget_tokens=REASONING_EFFORT_TO_THINKING_BUDGET[effort],
+                    extra={"reasoning_effort": effort, "reasoning": reasoning},
+                )
+
         internal = InternalRequest(
             model=model,
             messages=messages,
@@ -137,7 +159,28 @@ class OpenAICliNormalizer(FormatNormalizer):
             stream=bool(request.get("stream") or False),
             tools=tools,
             tool_choice=tool_choice,
-            extra={"openai_cli": self._extract_extra(request, {"input"})},
+            thinking=thinking,
+            parallel_tool_calls=parallel_tool_calls,
+            extra={
+                "openai_cli": self._extract_extra(
+                    request,
+                    {
+                        "model",
+                        "input",
+                        "instructions",
+                        "max_output_tokens",
+                        "max_tokens",
+                        "temperature",
+                        "top_p",
+                        "stop",
+                        "stream",
+                        "tools",
+                        "tool_choice",
+                        "parallel_tool_calls",
+                        "reasoning",
+                    },
+                )
+            },
         )
 
         return internal
@@ -204,6 +247,26 @@ class OpenAICliNormalizer(FormatNormalizer):
         if internal.tool_choice:
             result["tool_choice"] = self._tool_choice_to_openai(internal.tool_choice)
 
+        # thinking -> reasoning (Responses API)
+        if internal.thinking and internal.thinking.enabled:
+            # 优先还原原始 reasoning 对象
+            original_reasoning = internal.thinking.extra.get("reasoning")
+            if isinstance(original_reasoning, dict):
+                result["reasoning"] = original_reasoning
+            else:
+                effort = internal.thinking.extra.get("reasoning_effort")
+                if not effort and internal.thinking.budget_tokens is not None:
+                    for threshold, level in THINKING_BUDGET_TO_REASONING_EFFORT:
+                        if internal.thinking.budget_tokens <= threshold:
+                            effort = level
+                            break
+                if effort:
+                    result["reasoning"] = {"effort": effort}
+
+        # parallel_tool_calls
+        if internal.parallel_tool_calls is not None:
+            result["parallel_tool_calls"] = internal.parallel_tool_calls
+
         # 还原 OpenAI Responses API 的其他字段（黑名单：已单独处理的字段不还原）
         handled_keys = {
             "model",
@@ -217,6 +280,8 @@ class OpenAICliNormalizer(FormatNormalizer):
             "stream",
             "tools",
             "tool_choice",
+            "parallel_tool_calls",
+            "reasoning",
         }
         for key, value in openai_cli_extra.items():
             if key not in handled_keys and key not in result:
@@ -291,7 +356,25 @@ class OpenAICliNormalizer(FormatNormalizer):
     ) -> dict[str, Any]:
         output_items: list[dict[str, Any]] = []
 
-        # 构建 output items：message（文本）和 function_call（工具调用）
+        # 构建 output items：reasoning（思考）、message（文本）、function_call（工具调用）
+        # 按 Responses API 顺序：reasoning -> message -> function_call
+        rs_idx = 0
+        for block in internal.content:
+            if isinstance(block, ThinkingBlock) and block.thinking:
+                rs_id = (
+                    f"rs_{internal.id or 'resp'}"
+                    if rs_idx == 0
+                    else f"rs_{internal.id or 'resp'}_{rs_idx}"
+                )
+                output_items.append(
+                    {
+                        "type": "reasoning",
+                        "id": rs_id,
+                        "summary": [{"type": "summary_text", "text": block.thinking}],
+                    }
+                )
+                rs_idx += 1
+
         text = self._collapse_internal_text(internal.content)
         if text:
             output_items.append(
@@ -897,6 +980,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                     {
                         "type": "response.content_part.added",
                         "sequence_number": self._next_seq(ss),
+                        "item_id": message_id,
                         "output_index": output_index,
                         "content_index": 0,
                         "part": {"type": "output_text", "text": "", "annotations": []},
@@ -904,10 +988,15 @@ class OpenAICliNormalizer(FormatNormalizer):
                 )
             ss["text_started"] = True
             ss["collected_text"] = str(ss.get("collected_text") or "") + event.text_delta
+            message_id = f"msg_{state.message_id or 'stream'}"
+            output_index = ss.get("message_output_index") or 0
             out.append(
                 {
                     "type": "response.output_text.delta",
                     "sequence_number": self._next_seq(ss),
+                    "item_id": message_id,
+                    "output_index": output_index,
+                    "content_index": 0,
                     "delta": event.text_delta,
                 }
             )
@@ -970,10 +1059,14 @@ class OpenAICliNormalizer(FormatNormalizer):
             ),
         }
         if ss.get("text_started"):
+            msg_output_index = ss.get("message_output_index") or 0
             out.append(
                 {
                     "type": "response.output_text.done",
                     "sequence_number": self._next_seq(ss),
+                    "item_id": message_id,
+                    "output_index": msg_output_index,
+                    "content_index": 0,
                     "text": final_text,
                 }
             )
@@ -982,7 +1075,8 @@ class OpenAICliNormalizer(FormatNormalizer):
                 {
                     "type": "response.content_part.done",
                     "sequence_number": self._next_seq(ss),
-                    "output_index": ss.get("message_output_index") or 0,
+                    "item_id": message_id,
+                    "output_index": msg_output_index,
                     "content_index": 0,
                     "part": {"type": "output_text", "text": final_text, "annotations": []},
                 }
@@ -1151,6 +1245,7 @@ class OpenAICliNormalizer(FormatNormalizer):
             (blocks, extra, has_tool_use): 内容块列表、extra 信息、是否包含工具调用
         """
         text_parts: list[str] = []
+        thinking_blocks: list[ContentBlock] = []
         blocks: list[ContentBlock] = []
         has_tool_use = False
 
@@ -1199,13 +1294,30 @@ class OpenAICliNormalizer(FormatNormalizer):
 
                 if item_type in ("output_text", "text") and isinstance(item.get("text"), str):
                     text_parts.append(item.get("text") or "")
+                    continue
+
+                if item_type == "reasoning":
+                    # reasoning output item -> ThinkingBlock
+                    summary = item.get("summary")
+                    summary_parts: list[str] = []
+                    if isinstance(summary, list):
+                        for s in summary:
+                            if isinstance(s, dict) and s.get("type") == "summary_text":
+                                t = s.get("text")
+                                if isinstance(t, str) and t:
+                                    summary_parts.append(t)
+                    thinking_text = "\n".join(summary_parts)
+                    if thinking_text:
+                        thinking_blocks.append(ThinkingBlock(thinking=thinking_text))
+                    continue
 
         # 兼容：部分实现可能直接给 output_text
         if not text_parts and isinstance(payload.get("output_text"), str):
             text_parts.append(payload.get("output_text") or "")
 
-        # 文本块放在前面，工具调用块在后面（与 Claude 的 content 顺序一致）
+        # thinking 在前，文本在中，工具调用在后（与 Claude 的 content 顺序一致）
         result_blocks: list[ContentBlock] = []
+        result_blocks.extend(thinking_blocks)
         text = "".join(text_parts)
         if text:
             result_blocks.append(TextBlock(text=text))
@@ -1399,6 +1511,24 @@ class OpenAICliNormalizer(FormatNormalizer):
                 else:
                     blocks.append(UnknownBlock(raw_type=ptype, payload=part))
                 continue
+            if ptype == "input_file":
+                file_data = part.get("file_data")
+                file_id = part.get("file_id")
+                filename = part.get("filename")
+                fb = FileBlock(filename=filename)
+                if isinstance(file_data, str) and file_data:
+                    # file_data 是 data URL: "data:mime;base64,..."
+                    if file_data.startswith("data:") and ";base64," in file_data:
+                        header, _, data = file_data.partition(",")
+                        fb.media_type = header.split(";")[0].split(":", 1)[-1]
+                        fb.data = data
+                    else:
+                        fb.data = file_data
+                elif isinstance(file_id, str) and file_id:
+                    fb.file_id = file_id
+                fb.extra = self._extract_extra(part, {"type", "file_data", "file_id", "filename"})
+                blocks.append(fb)
+                continue
             blocks.append(UnknownBlock(raw_type=ptype or "unknown", payload=part))
         return blocks
 
@@ -1428,15 +1558,20 @@ class OpenAICliNormalizer(FormatNormalizer):
                     continue
 
                 if isinstance(block, ToolResultBlock):
+                    # Responses API function_call_output.output 必须是字符串
+                    if block.content_text is not None:
+                        output_str = block.content_text
+                    elif isinstance(block.output, str):
+                        output_str = block.output
+                    elif block.output is not None:
+                        output_str = json.dumps(block.output, ensure_ascii=False)
+                    else:
+                        output_str = ""
                     out.append(
                         {
                             "type": "function_call_output",
                             "call_id": block.tool_use_id,
-                            "output": (
-                                block.content_text
-                                if block.content_text is not None
-                                else block.output
-                            ),
+                            "output": output_str,
                         }
                     )
                     continue
@@ -1566,6 +1701,11 @@ class OpenAICliNormalizer(FormatNormalizer):
             if tool_choice == "auto":
                 return ToolChoice(
                     type=ToolChoiceType.AUTO, extra={"openai_cli": {"tool_choice": tool_choice}}
+                )
+            if tool_choice == "required":
+                return ToolChoice(
+                    type=ToolChoiceType.REQUIRED,
+                    extra={"openai_cli": {"tool_choice": tool_choice}},
                 )
             return ToolChoice(type=ToolChoiceType.AUTO, extra={"raw": tool_choice})
 

@@ -260,7 +260,7 @@ def test_openai_stream_chunk_and_event_roundtrip_basic() -> None:
     n = OpenAINormalizer()
     state = StreamState()
 
-    chunks = [
+    chunks: list[dict[str, Any]] = [
         {
             "id": "chatcmpl_stream_1",
             "object": "chat.completion.chunk",

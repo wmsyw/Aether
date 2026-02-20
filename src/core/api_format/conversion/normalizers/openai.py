@@ -376,6 +376,14 @@ class OpenAINormalizer(FormatNormalizer):
 
         extra: dict[str, Any] = {}
 
+        # 保留 system_fingerprint / service_tier 以便 roundtrip 还原
+        sys_fp = response.get("system_fingerprint")
+        if sys_fp is not None:
+            extra.setdefault("openai", {})["system_fingerprint"] = sys_fp
+        svc_tier = response.get("service_tier")
+        if svc_tier is not None:
+            extra.setdefault("openai", {})["service_tier"] = svc_tier
+
         choices = response.get("choices") or []
         if isinstance(choices, list) and len(choices) > 1:
             extra.setdefault("openai", {})["choices"] = choices
@@ -384,7 +392,21 @@ class OpenAINormalizer(FormatNormalizer):
         message = choice0.get("message") if isinstance(choice0, dict) else None
         message = message if isinstance(message, dict) else {}
 
+        # reasoning_content -> ThinkingBlock
+        reasoning_content = message.get("reasoning_content")
+        reasoning_blocks: list[ContentBlock] = []
+        if (
+            isinstance(reasoning_content, str)
+            and reasoning_content
+            and reasoning_content != "[undefined]"
+        ):
+            reasoning_blocks.append(ThinkingBlock(thinking=reasoning_content))
+
         blocks, dropped = self._openai_content_to_blocks(message.get("content"))
+
+        # thinking blocks first (align with Claude thinking-first convention)
+        if reasoning_blocks:
+            blocks = reasoning_blocks + blocks
 
         # tool_calls -> ToolUseBlock
         tool_calls = message.get("tool_calls") or []
@@ -432,6 +454,7 @@ class OpenAINormalizer(FormatNormalizer):
             "object": "chat.completion",
             "created": int(time.time()),
             "model": model_name,
+            "system_fingerprint": None,
             "choices": [],
         }
 
@@ -448,10 +471,13 @@ class OpenAINormalizer(FormatNormalizer):
                 message["reasoning_content"] = reasoning_text
 
         content_value = self._blocks_to_openai_content(content_blocks)
+        # assistant 有 tool_calls 时 content 允许为 null；否则回退为空字符串
         if content_value is not None:
             message["content"] = content_value
-        else:
+        elif tool_blocks:
             message["content"] = None
+        else:
+            message["content"] = ""
 
         if tool_blocks:
             message["tool_calls"] = [
@@ -492,11 +518,17 @@ class OpenAINormalizer(FormatNormalizer):
                     usage_out["completion_tokens_details"] = ctd
             out["usage"] = usage_out
 
-        return out
+        # 还原 system_fingerprint / service_tier（roundtrip 保留）
+        openai_resp_extra = internal.extra.get("openai", {})
+        if isinstance(openai_resp_extra, dict):
+            sfp = openai_resp_extra.get("system_fingerprint")
+            if sfp is not None:
+                out["system_fingerprint"] = sfp
+            st = openai_resp_extra.get("service_tier")
+            if st is not None:
+                out["service_tier"] = st
 
-    # =========================
-    # Streaming
-    # =========================
+        return out
 
     def stream_chunk_to_internal(
         self, chunk: dict[str, Any], state: StreamState
@@ -732,7 +764,7 @@ class OpenAINormalizer(FormatNormalizer):
                 block_type = ss.get(f"block_type_{event.block_index}")
                 if block_type == ContentType.THINKING.value:
                     # 对齐 AM：thinking 内容输出为 reasoning_content
-                    out.append(base_chunk({"reasoning_content": event.text_delta, "content": None}))
+                    out.append(base_chunk({"reasoning_content": event.text_delta}))
                 else:
                     out.append(base_chunk({"content": event.text_delta}))
             return out
@@ -808,20 +840,12 @@ class OpenAINormalizer(FormatNormalizer):
 
         if isinstance(event, ToolCallDeltaEvent):
             tool_index = self._ensure_tool_call_index(ss, event.tool_id)
-            out.append(
-                base_chunk(
-                    {
-                        "tool_calls": [
-                            {
-                                "index": tool_index,
-                                "id": event.tool_id,
-                                "type": "function",
-                                "function": {"arguments": event.input_delta},
-                            }
-                        ]
-                    }
-                )
-            )
+            # 后续 delta 只需 index + function.arguments；id/type 仅在 ContentBlockStartEvent 首次发送
+            tc_delta: dict[str, Any] = {
+                "index": tool_index,
+                "function": {"arguments": event.input_delta},
+            }
+            out.append(base_chunk({"tool_calls": [tc_delta]}))
             return out
 
         if isinstance(event, MessageStopEvent):
@@ -1107,7 +1131,7 @@ class OpenAINormalizer(FormatNormalizer):
                 InternalMessage(
                     role=Role.USER,
                     content=[tr_block],
-                    extra=self._extract_extra(msg, {"role", "content"}),
+                    extra=self._extract_extra(msg, {"role", "content", "tool_call_id"}),
                 ),
                 dropped,
             )
@@ -1202,24 +1226,38 @@ class OpenAINormalizer(FormatNormalizer):
                 continue
 
             if ptype == "file":
-                file_data = part.get("file_data")
-                file_id = part.get("file_id")
-                if isinstance(file_data, dict):
-                    blocks.append(
-                        FileBlock(
-                            data=file_data.get("data"),
-                            media_type=file_data.get("mime_type"),
-                            filename=file_data.get("filename"),
-                            extra=self._extract_extra(part, {"type", "file_data"}),
+                # 标准 OpenAI 格式: {"type": "file", "file": {"file_id": ...}}
+                # 或 {"type": "file", "file": {"file_data": "data:mime;base64,...", "filename": ...}}
+                file_obj = part.get("file")
+                if isinstance(file_obj, dict):
+                    fid = file_obj.get("file_id")
+                    fdata = file_obj.get("file_data")
+                    fname = file_obj.get("filename")
+                    if isinstance(fdata, str) and fdata:
+                        # file_data 是 data URL 格式: "data:mime;base64,..."
+                        mime_type = None
+                        raw_data = fdata
+                        if fdata.startswith("data:") and ";base64," in fdata:
+                            header, raw_data = fdata.split(";base64,", 1)
+                            mime_type = header[len("data:") :]
+                        blocks.append(
+                            FileBlock(
+                                data=raw_data,
+                                media_type=mime_type,
+                                filename=fname,
+                                extra=self._extract_extra(part, {"type", "file"}),
+                            )
                         )
-                    )
-                elif isinstance(file_id, str) and file_id:
-                    blocks.append(
-                        FileBlock(
-                            file_id=file_id,
-                            extra=self._extract_extra(part, {"type", "file_id"}),
+                    elif isinstance(fid, str) and fid:
+                        blocks.append(
+                            FileBlock(
+                                file_id=fid,
+                                filename=fname,
+                                extra=self._extract_extra(part, {"type", "file"}),
+                            )
                         )
-                    )
+                    else:
+                        blocks.append(UnknownBlock(raw_type="file", payload=part))
                 else:
                     blocks.append(UnknownBlock(raw_type="file", payload=part))
                 continue
@@ -1511,36 +1549,27 @@ class OpenAINormalizer(FormatNormalizer):
                     text_parts.append(b.text)
                 continue
             if isinstance(b, ImageBlock):
-                # 区分两种图片来源：
-                # 1. URL 引用（OpenAI 原生格式）-> multipart content
-                # 2. base64 内嵌数据（格式转换来的）-> markdown 格式
-                if b.url and not b.data:
-                    # OpenAI 原生格式：URL 引用的图片，使用 multipart content
-                    parts.append({"type": "image_url", "image_url": {"url": b.url}})
-                elif b.data and b.media_type:
-                    # 格式转换来的图片（base64 内嵌），使用 markdown 格式
+                if b.data and b.media_type:
+                    # base64 data -> data URL in image_url format
                     data_url = f"data:{b.media_type};base64,{b.data}"
-                    text_parts.append(f"![image]({data_url})")
+                    parts.append({"type": "image_url", "image_url": {"url": data_url}})
                 elif b.url:
-                    # 有 URL 也有 data，优先使用 URL
                     parts.append({"type": "image_url", "image_url": {"url": b.url}})
                 continue
 
             if isinstance(b, FileBlock):
                 if b.data and b.media_type:
-                    # OpenAI file content part
-                    file_part: dict[str, Any] = {
-                        "type": "file",
-                        "file_data": {
-                            "mime_type": b.media_type,
-                            "data": b.data,
-                        },
-                    }
+                    # 标准 OpenAI 格式: {"type": "file", "file": {"file_data": "data:mime;base64,...", "filename": ...}}
+                    data_url = f"data:{b.media_type};base64,{b.data}"
+                    file_inner: dict[str, Any] = {"file_data": data_url}
                     if b.filename:
-                        file_part["file_data"]["filename"] = b.filename
-                    parts.append(file_part)
+                        file_inner["filename"] = b.filename
+                    parts.append({"type": "file", "file": file_inner})
                 elif b.file_id:
-                    parts.append({"type": "file", "file_id": b.file_id})
+                    file_inner_id: dict[str, Any] = {"file_id": b.file_id}
+                    if b.filename:
+                        file_inner_id["filename"] = b.filename
+                    parts.append({"type": "file", "file": file_inner_id})
                 elif b.file_url:
                     # 回退为文本描述
                     text_parts.append(f"[File: {b.file_url}]")
@@ -1576,8 +1605,9 @@ class OpenAINormalizer(FormatNormalizer):
         if text_parts:
             return "\n".join(text_parts)
 
-        # OpenAI content 可以是空字符串；但作为响应 message.content 通常允许为 ""/None。
-        return ""
+        # 无任何内容：返回 None，让调用方决定是输出 null 还是空字符串
+        # （assistant 有 tool_calls 时 content 应为 null；user 消息 content 可为空字符串）
+        return None
 
     def _split_blocks(
         self, blocks: list[ContentBlock]
@@ -1677,7 +1707,13 @@ class OpenAINormalizer(FormatNormalizer):
             out["reasoning_content"] = "".join(thinking_texts)
 
         content_value = self._blocks_to_openai_content(content_blocks)
-        out["content"] = content_value if content_value is not None else ""
+        # assistant 有 tool_calls 时 content 允许为 null；否则回退为空字符串
+        if content_value is not None:
+            out["content"] = content_value
+        elif tool_blocks:
+            out["content"] = None
+        else:
+            out["content"] = ""
 
         if tool_blocks:
             out["tool_calls"] = [
@@ -1704,8 +1740,8 @@ class OpenAINormalizer(FormatNormalizer):
         }
 
     def _tool_use_block_to_openai_call(self, block: ToolUseBlock, index: int) -> dict[str, Any]:
+        # index 参数仅用于 fallback id 生成；非流式响应的 tool_calls 数组不应包含 index 字段
         return {
-            "index": index,
             "id": block.tool_id or f"call_{index}",
             "type": "function",
             "function": {
