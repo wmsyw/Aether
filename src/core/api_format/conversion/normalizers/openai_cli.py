@@ -233,16 +233,23 @@ class OpenAICliNormalizer(FormatNormalizer):
         if internal.tools:
             # Responses API 使用扁平结构: {type, name, description, parameters}
             # 而非 Chat Completions 的嵌套结构: {type, function: {name, ...}}
-            result["tools"] = [
-                {
-                    "type": "function",
-                    "name": t.name,
-                    "description": t.description or "",
-                    "parameters": t.parameters or {},
-                    **(t.extra.get("openai_tool") or {}),
-                }
-                for t in internal.tools
-            ]
+            rebuilt_tools: list[dict[str, Any]] = []
+            for t in internal.tools:
+                # 非 function 类型（如 custom/web_search）：直接还原原始 dict
+                raw_tool = t.extra.get("openai_cli_raw_tool")
+                if isinstance(raw_tool, dict):
+                    rebuilt_tools.append(raw_tool)
+                else:
+                    rebuilt_tools.append(
+                        {
+                            "type": "function",
+                            "name": t.name,
+                            "description": t.description or "",
+                            "parameters": t.parameters or {},
+                            **(t.extra.get("openai_tool") or {}),
+                        }
+                    )
+            result["tools"] = rebuilt_tools
 
         if internal.tool_choice:
             result["tool_choice"] = self._tool_choice_to_openai(internal.tool_choice)
@@ -304,7 +311,6 @@ class OpenAICliNormalizer(FormatNormalizer):
             # 删除 Codex 不支持的字段
             for key in (
                 "previous_response_id",
-                "prompt_cache_key",
                 "service_tier",
                 "max_completion_tokens",
             ):
@@ -1647,7 +1653,11 @@ class OpenAICliNormalizer(FormatNormalizer):
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+
+            tool_type = tool.get("type")
+
+            # 标准嵌套结构: {type: "function", function: {name, description, parameters}}
+            if tool_type == "function" and isinstance(tool.get("function"), dict):
                 fn = tool["function"]
                 name = str(fn.get("name") or "")
                 if not name:
@@ -1669,7 +1679,30 @@ class OpenAICliNormalizer(FormatNormalizer):
                 )
                 continue
 
-            # 兼容：部分实现可能直接给 {name, description, parameters}
+            # 非 function 类型（如 type: "custom", "web_search" 等）：保留原始 dict 以便透传还原
+            if tool_type and tool_type != "function":
+                if not tool.get("name"):
+                    logger.debug(
+                        "[OpenAICliNormalizer] 跳过无 name 的非 function tool: type={}",
+                        tool_type,
+                    )
+                    continue
+                name = str(tool["name"])
+                out.append(
+                    ToolDefinition(
+                        name=name,
+                        description=tool.get("description"),
+                        parameters=(
+                            tool.get("parameters")
+                            if isinstance(tool.get("parameters"), dict)
+                            else None
+                        ),
+                        extra={"openai_cli_raw_tool": tool},
+                    )
+                )
+                continue
+
+            # 兼容：扁平 function 结构 {name, description, parameters}（无 type 或 type=function）
             name = str(tool.get("name") or "")
             if name:
                 out.append(
