@@ -1651,12 +1651,13 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
                     }
 
             except Exception as e:
-                logger.error("刷新 Key {} 限额失败: {}", key.id, e)
+                error_msg = str(e) or type(e).__name__
+                logger.error("刷新 Key {} 限额失败: {}", key.id, error_msg)
                 return {
                     "key_id": key.id,
                     "key_name": key.name,
                     "status": "error",
-                    "message": str(e),
+                    "message": error_msg,
                 }
 
         # 分批执行，每批最多 5 个并发
