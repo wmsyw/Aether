@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 from src.core.api_format import (
@@ -120,13 +121,31 @@ def build_test_request_body(
 # ==============================================================================
 
 
-# 路径段类型：str 表示 dict key，int 表示数组索引
-PathSegment = str | int
+@dataclass(frozen=True, slots=True)
+class _WildcardSlice:
+    """表示数组通配符路径段: [*] 或 [start-end]"""
+
+    start: int | None  # None 表示 [*]
+    end: int | None
+
+    def resolve(self, length: int) -> range:
+        """根据实际数组长度返回索引 range"""
+        if self.start is None:
+            return range(length)
+        s = max(0, self.start)
+        e = min(length - 1, self.end if self.end is not None else length - 1)
+        return range(s, e + 1) if s <= e else range(0)
+
+
+# 路径段类型：str 表示 dict key，int 表示数组索引，_WildcardSlice 表示通配
+PathSegment = str | int | _WildcardSlice
+
+_RANGE_RE = re.compile(r"^(\d+)\s*-\s*(\d+)$")
 
 
 def _parse_path(path: str) -> list[PathSegment]:
     """
-    解析路径，支持点号分隔、转义和数组索引。
+    解析路径，支持点号分隔、转义、数组索引、通配符和范围。
 
     Examples:
         "metadata.user.name"       -> ["metadata", "user", "name"]
@@ -135,11 +154,15 @@ def _parse_path(path: str) -> list[PathSegment]:
         "data[0].items[2].name"    -> ["data", 0, "items", 2, "name"]
         "messages[-1]"             -> ["messages", -1]
         "matrix[0][1]"             -> ["matrix", 0, 1]
+        "tools[*].name"            -> ["tools", _WildcardSlice(None, None), "name"]
+        "tools[0-4].name"          -> ["tools", _WildcardSlice(0, 4), "name"]
 
     约束：
         - 不允许空段（例如：".a" / "a." / "a..b"），遇到则返回空列表表示无效路径。
         - 仅对 "\\." 做特殊处理；其他反斜杠组合按字面量保留。
         - 数组索引必须是整数（支持负数索引）。
+        - [*] 表示遍历数组所有元素。
+        - [N-M] 表示遍历数组索引 N 到 M（含两端）。
     """
     raw = (path or "").strip()
     if not raw:
@@ -172,7 +195,7 @@ def _parse_path(path: str) -> list[PathSegment]:
             i += 1
             continue
 
-        # 数组索引：[N]
+        # 数组索引：[N] / [*] / [N-M]
         if ch == "[":
             # 先将当前累积的 key 入栈
             if current:
@@ -190,12 +213,22 @@ def _parse_path(path: str) -> list[PathSegment]:
             if not index_str:
                 return []  # 空索引
 
-            try:
-                idx = int(index_str)
-            except ValueError:
-                return []  # 非整数索引
+            # [*] 通配符
+            if index_str == "*":
+                parts.append(_WildcardSlice(None, None))
+            else:
+                # [N-M] 范围
+                m = _RANGE_RE.match(index_str)
+                if m:
+                    parts.append(_WildcardSlice(int(m.group(1)), int(m.group(2))))
+                else:
+                    # 普通整数索引
+                    try:
+                        idx = int(index_str)
+                    except ValueError:
+                        return []  # 非整数索引
+                    parts.append(idx)
 
-            parts.append(idx)
             expect_key = False
             i = j + 1
             continue
@@ -212,6 +245,86 @@ def _parse_path(path: str) -> list[PathSegment]:
         return []
 
     return parts if parts else []
+
+
+def _has_wildcard(parts: list[PathSegment]) -> bool:
+    """检查路径段列表中是否包含通配符"""
+    return any(isinstance(p, _WildcardSlice) for p in parts)
+
+
+def _expand_wildcard_paths(
+    obj: Any, parts: list[PathSegment], *, require_leaf: bool = False
+) -> list[list[str | int]]:
+    """
+    将含通配符的路径段展开为具体的路径段列表。
+
+    遍历 obj 结构，遇到 _WildcardSlice 时根据实际数组长度展开为具体索引。
+    返回的每条路径都是纯 str|int 段，不含通配符。
+
+    Args:
+        obj: 要遍历的数据结构
+        parts: 含通配符的路径段列表
+        require_leaf: 是否要求叶子节点存在（False 时只要父级存在即可，适用于 set）
+    """
+    result: list[list[str | int]] = []
+
+    def _recurse(current: Any, idx: int, prefix: list[str | int]) -> None:
+        if idx == len(parts):
+            result.append(prefix[:])
+            return
+
+        seg = parts[idx]
+        is_last = idx == len(parts) - 1
+
+        if isinstance(seg, _WildcardSlice):
+            if not isinstance(current, list):
+                return
+            for i in seg.resolve(len(current)):
+                prefix.append(i)
+                try:
+                    _recurse(current[i], idx + 1, prefix)
+                except IndexError:
+                    pass
+                prefix.pop()
+        elif isinstance(seg, int):
+            if isinstance(current, list):
+                try:
+                    prefix.append(seg)
+                    _recurse(current[seg], idx + 1, prefix)
+                    prefix.pop()
+                except IndexError:
+                    prefix.pop()
+        else:
+            # str key
+            if isinstance(current, dict):
+                if seg in current:
+                    prefix.append(seg)
+                    _recurse(current[seg], idx + 1, prefix)
+                    prefix.pop()
+                elif is_last and not require_leaf:
+                    # 叶子节点不存在但允许创建（set 场景）
+                    prefix.append(seg)
+                    result.append(prefix[:])
+                    prefix.pop()
+
+    _recurse(obj, 0, [])
+    return result
+
+
+def _segments_to_path(segments: list[str | int]) -> str:
+    """将路径段列表转回路径字符串（用于调用现有的 _set/_get/_delete 函数）"""
+    parts: list[str] = []
+    for seg in segments:
+        if isinstance(seg, int):
+            parts.append(f"[{seg}]")
+        else:
+            # 转义字面量点号
+            escaped = seg.replace(".", "\\.")
+            if parts and not parts[-1].endswith("]"):
+                parts.append(f".{escaped}")
+            else:
+                parts.append(escaped)
+    return "".join(parts)
 
 
 def _get_nested_value(obj: Any, path: str) -> tuple[bool, Any]:
@@ -408,6 +521,45 @@ def _extract_path(
 
 _ORIGINAL_PLACEHOLDER = "{{$original}}"
 
+# ==============================================================================
+# 命名风格转换
+# ==============================================================================
+
+_NAME_STYLE_VALUES = frozenset(
+    {"snake_case", "camelCase", "PascalCase", "kebab-case", "capitalize"}
+)
+
+# 拆分标识符为单词列表（支持 camelCase / PascalCase / snake_case / kebab-case / 混合）
+_WORD_SPLIT_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]|[0-9]+")
+
+
+def _split_identifier(name: str) -> list[str]:
+    """将标识符拆分为小写单词列表"""
+    # 先把常见分隔符替换为空格
+    normalized = name.replace("_", " ").replace("-", " ")
+    words = _WORD_SPLIT_RE.findall(normalized)
+    return [w.lower() for w in words if w]
+
+
+def _convert_name_style(name: str, style: str) -> str:
+    """将标识符转换为指定命名风格"""
+    words = _split_identifier(name)
+    if not words:
+        return name
+
+    if style == "snake_case":
+        return "_".join(words)
+    elif style == "camelCase":
+        return words[0] + "".join(w.capitalize() for w in words[1:])
+    elif style == "PascalCase":
+        return "".join(w.capitalize() for w in words)
+    elif style == "kebab-case":
+        return "-".join(words)
+    elif style == "capitalize":
+        # 仅首字母大写，保留其余部分不变
+        return name[0].upper() + name[1:] if name else name
+    return name
+
 
 def _contains_original_placeholder(value: Any) -> bool:
     """递归检查 value 中是否包含 {{$original}} 占位符"""
@@ -440,6 +592,113 @@ def _resolve_original_placeholder(template: Any, original: Any) -> Any:
     if isinstance(template, list):
         return [_resolve_original_placeholder(item, original) for item in template]
     return template
+
+
+_ITEM_PREFIX = "$item."
+_ITEM_EXACT = "$item"
+
+
+def _has_item_ref(condition: dict[str, Any] | None) -> bool:
+    """检查 condition 的 path 是否包含 $item 引用"""
+    if not condition or not isinstance(condition, dict):
+        return False
+    path = condition.get("path", "")
+    return isinstance(path, str) and (
+        path.strip().startswith(_ITEM_PREFIX) or path.strip() == _ITEM_EXACT
+    )
+
+
+def _resolve_item_condition(
+    condition: dict[str, Any],
+    item_path_prefix: str,
+) -> dict[str, Any]:
+    """将 condition 中的 $item 引用替换为具体的元素路径前缀。
+
+    例如：
+        condition = {"path": "$item.name", "op": "in", "value": ["writer"]}
+        item_path_prefix = "tools[0]"
+        -> {"path": "tools[0].name", "op": "in", "value": ["writer"]}
+
+        condition = {"path": "$item", "op": "type_is", "value": "object"}
+        item_path_prefix = "tools[0]"
+        -> {"path": "tools[0]", "op": "type_is", "value": "object"}
+    """
+    resolved = dict(condition)
+    raw_path = resolved.get("path", "").strip()
+    if raw_path == _ITEM_EXACT:
+        resolved["path"] = item_path_prefix
+    elif raw_path.startswith(_ITEM_PREFIX):
+        suffix = raw_path[len(_ITEM_PREFIX) :]
+        resolved["path"] = f"{item_path_prefix}.{suffix}"
+    return resolved
+
+
+def _get_item_prefix_from_concrete(
+    concrete_segs: list[str | int],
+    wildcard_parts: list[PathSegment],
+) -> str:
+    """从展开后的具体路径段中，提取通配符所在层级的元素路径前缀。
+
+    例如：
+        concrete_segs = ["tools", 0, "name"]
+        wildcard_parts = ["tools", _WildcardSlice, "name"]
+        -> "tools[0]"  (通配符在 index 1，取 concrete_segs[:2])
+
+        concrete_segs = ["data", 1, "items", 2, "name"]
+        wildcard_parts = ["data", _WildcardSlice, "items", _WildcardSlice, "name"]
+        -> "data[1].items[2]"  (取到最后一个通配符位置+1)
+    """
+    # 找到最后一个通配符在 wildcard_parts 中的位置
+    last_wc_idx = 0
+    for i, seg in enumerate(wildcard_parts):
+        if isinstance(seg, _WildcardSlice):
+            last_wc_idx = i
+
+    # concrete_segs 中对应位置 +1 就是元素前缀的结束
+    prefix_segs = concrete_segs[: last_wc_idx + 1]
+    return _segments_to_path(prefix_segs)
+
+
+def _iter_wildcard_targets(
+    result: dict[str, Any],
+    path: str,
+    parts: list[PathSegment],
+    condition: dict[str, Any] | None,
+    item_condition: bool,
+    *,
+    require_leaf: bool = False,
+    reverse: bool = False,
+) -> list[str]:
+    """通配符路径展开 + $item 条件过滤的通用逻辑。
+
+    如果路径不含通配符，返回 [path] 本身（单元素列表）。
+    如果含通配符，展开后逐条评估 $item 条件，返回通过条件的具体路径列表。
+
+    Args:
+        result: 当前请求体（用于展开和条件评估）
+        path: 原始路径字符串（不含通配符时直接返回）
+        parts: 已解析的路径段列表
+        condition: 规则的 condition 字典
+        item_condition: condition 是否包含 $item 引用
+        require_leaf: 是否要求叶子节点存在
+        reverse: 是否倒序返回（drop 场景需要倒序避免索引偏移）
+    """
+    if not _has_wildcard(parts):
+        return [path]
+
+    expanded = _expand_wildcard_paths(result, parts, require_leaf=require_leaf)
+    if reverse:
+        expanded = list(reversed(expanded))
+
+    targets: list[str] = []
+    for concrete_segs in expanded:
+        if item_condition:
+            prefix = _get_item_prefix_from_concrete(concrete_segs, parts)
+            resolved = _resolve_item_condition(condition, prefix)  # type: ignore[arg-type]
+            if not _evaluate_condition(result, resolved):
+                continue
+        targets.append(_segments_to_path(concrete_segs))
+    return targets
 
 
 # ==============================================================================
@@ -568,6 +827,8 @@ def apply_body_rules(
     - 支持多层嵌套：data[0].items[2].name
     - 支持负数索引：messages[-1]
     - 支持连续数组索引：matrix[0][1]
+    - 通配符 [*]：遍历数组所有元素，如 tools[*].name
+    - 范围 [N-M]：遍历数组索引 N 到 M（含两端），如 tools[0-4].name
 
     支持的规则类型：
     - set: 设置/覆盖字段 {"action": "set", "path": "metadata.user_id", "value": 123}
@@ -578,6 +839,9 @@ def apply_body_rules(
     - insert: 在数组指定位置插入元素 {"action": "insert", "path": "messages", "index": 0, "value": {...}}
     - regex_replace: 正则替换字符串值 {"action": "regex_replace", "path": "messages[0].content",
         "pattern": "\\bfoo\\b", "replacement": "bar", "flags": "i", "count": 0}
+    - name_style: 转换字符串命名风格 {"action": "name_style", "path": "tools[*].name",
+        "style": "camelCase"}
+        支持的风格: snake_case, camelCase, PascalCase, kebab-case, capitalize
 
     Args:
         body: 原始请求体
@@ -599,10 +863,14 @@ def apply_body_rules(
         if not isinstance(rule, dict):
             continue
 
-        # 条件触发：condition 存在且不满足时跳过规则
+        # 条件触发：
+        # - $item 引用的 condition 延迟到通配符循环内逐元素评估
+        # - 普通 condition 在此全局评估，不满足则跳过整条规则
         condition = rule.get("condition")
-        if condition is not None and not _evaluate_condition(result, condition):
-            continue
+        item_condition = _has_item_ref(condition)
+        if condition is not None and not item_condition:
+            if not _evaluate_condition(result, condition):
+                continue
 
         action = rule.get("action")
         if not isinstance(action, str):
@@ -613,17 +881,31 @@ def apply_body_rules(
             path = _extract_path(rule, protected_lower)
             if not path:
                 continue
-            value = rule.get("value")
-            if _contains_original_placeholder(value):
-                found, original = _get_nested_value(result, path)
-                value = _resolve_original_placeholder(value, original if found else None)
-            _set_nested_value(result, path, value)
+            parts = _parse_path(path)
+            for target_path in _iter_wildcard_targets(
+                result, path, parts, condition, item_condition
+            ):
+                value = rule.get("value")
+                if _contains_original_placeholder(value):
+                    found, original = _get_nested_value(result, target_path)
+                    value = _resolve_original_placeholder(value, original if found else None)
+                _set_nested_value(result, target_path, value)
 
         elif action == "drop":
             path = _extract_path(rule, protected_lower)
             if not path:
                 continue
-            _delete_nested_value(result, path)
+            parts = _parse_path(path)
+            for target_path in _iter_wildcard_targets(
+                result,
+                path,
+                parts,
+                condition,
+                item_condition,
+                require_leaf=True,
+                reverse=True,
+            ):
+                _delete_nested_value(result, target_path)
 
         elif action == "rename":
             raw_from = rule.get("from", "")
@@ -645,16 +927,23 @@ def apply_body_rules(
             ):
                 continue
 
+            # rename 不支持通配符（语义不明确）
+            if _has_wildcard(from_parts) or _has_wildcard(to_parts):
+                continue
+
             _rename_nested_value(result, from_path, to_path)
 
         elif action == "append":
             path = _extract_path(rule, protected_lower)
             if not path:
                 continue
-            found, target = _get_nested_value(result, path)
-            if not found or not isinstance(target, list):
-                continue
-            target.append(rule.get("value"))
+            parts = _parse_path(path)
+            for target_path in _iter_wildcard_targets(
+                result, path, parts, condition, item_condition, require_leaf=True
+            ):
+                found, target = _get_nested_value(result, target_path)
+                if found and isinstance(target, list):
+                    target.append(rule.get("value"))
 
         elif action == "insert":
             path = _extract_path(rule, protected_lower)
@@ -663,6 +952,7 @@ def apply_body_rules(
             index = rule.get("index")
             if not isinstance(index, int):
                 continue
+            # insert 不支持通配符（索引语义冲突）
             found, target = _get_nested_value(result, path)
             if not found or not isinstance(target, list):
                 continue
@@ -686,15 +976,34 @@ def apply_body_rules(
             if not isinstance(count, int) or count < 0:
                 count = 0
 
-            found, current_val = _get_nested_value(result, path)
-            if not found or not isinstance(current_val, str):
+            try:
+                compiled = re.compile(pattern, re_flags)
+            except re.error:
                 continue
 
-            try:
-                new_val = re.compile(pattern, re_flags).sub(replacement, current_val, count=count)
-                _set_nested_value(result, path, new_val)
-            except re.error:
-                continue  # 正则表达式无效，跳过
+            parts = _parse_path(path)
+            for target_path in _iter_wildcard_targets(
+                result, path, parts, condition, item_condition, require_leaf=True
+            ):
+                found, current_val = _get_nested_value(result, target_path)
+                if found and isinstance(current_val, str):
+                    new_val = compiled.sub(replacement, current_val, count=count)
+                    _set_nested_value(result, target_path, new_val)
+
+        elif action == "name_style":
+            path = _extract_path(rule, protected_lower)
+            if not path:
+                continue
+            style = rule.get("style")
+            if not isinstance(style, str) or style not in _NAME_STYLE_VALUES:
+                continue
+            parts = _parse_path(path)
+            for target_path in _iter_wildcard_targets(
+                result, path, parts, condition, item_condition, require_leaf=True
+            ):
+                found, current_val = _get_nested_value(result, target_path)
+                if found and isinstance(current_val, str):
+                    _set_nested_value(result, target_path, _convert_name_style(current_val, style))
 
     return result
 

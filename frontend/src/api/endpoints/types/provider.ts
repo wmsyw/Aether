@@ -135,7 +135,19 @@ export interface BodyRuleCondition {
   value?: any  // exists / not_exists 不需要 value
 }
 
-export type BodyRule = (BodyRuleSet | BodyRuleDrop | BodyRuleRename | BodyRuleAppend | BodyRuleInsert | BodyRuleRegexReplace) & {
+/**
+ * 请求体规则 - 转换命名风格
+ *
+ * - path 指向目标字符串字段，支持通配符如 "tools[*].name"
+ * - style 为目标命名风格
+ */
+export interface BodyRuleNameStyle {
+  action: 'name_style'
+  path: string
+  style: 'snake_case' | 'camelCase' | 'PascalCase' | 'kebab-case' | 'capitalize'
+}
+
+export type BodyRule = (BodyRuleSet | BodyRuleDrop | BodyRuleRename | BodyRuleAppend | BodyRuleInsert | BodyRuleRegexReplace | BodyRuleNameStyle) & {
   condition?: BodyRuleCondition
 }
 

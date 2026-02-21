@@ -30,13 +30,20 @@ HeaderRule = dict[str, Any]
 # - append: 向数组追加元素 {"action": "append", "path": "messages", "value": {...}}
 # - insert: 在数组指定位置插入 {"action": "insert", "path": "messages", "index": 0, "value": {...}}
 # - regex_replace: 正则替换字符串值 {"action": "regex_replace", "path": "...", "pattern": "...", "replacement": "..."}
+# - name_style: 转换命名风格 {"action": "name_style", "path": "tools[*].name", "style": "camelCase"}
 # 路径语法支持数组索引：messages[0].content, data[-1], matrix[0][1]
+# 路径语法支持通配符：tools[*].name（遍历所有元素）, tools[0-4].name（遍历范围）
 # 运行时处理在 request_builder.py 的 apply_body_rules 中；结构校验见 _validate_body_rules
 BodyRule = dict[str, Any]
 
 # body_rules 允许的 action 集合
 _BODY_RULE_ACTIONS: frozenset[str] = frozenset(
-    {"set", "drop", "rename", "append", "insert", "regex_replace"}
+    {"set", "drop", "rename", "append", "insert", "regex_replace", "name_style"}
+)
+
+# name_style 允许的风格值
+_NAME_STYLE_VALUES: frozenset[str] = frozenset(
+    {"snake_case", "camelCase", "PascalCase", "kebab-case", "capitalize"}
 )
 
 # regex_replace 允许的 flags 字符
@@ -166,7 +173,7 @@ def _validate_body_rules(rules: list[BodyRule]) -> list[BodyRule]:
         action = action.strip().lower()
 
         # ---------- path 校验 ----------
-        if action in {"set", "drop", "append", "insert", "regex_replace"}:
+        if action in {"set", "drop", "append", "insert", "regex_replace", "name_style"}:
             path = rule.get("path")
             if not isinstance(path, str) or not path.strip():
                 raise ValueError(f"body_rules[{idx}]: action={action!r} 必须提供非空 path")
@@ -221,6 +228,15 @@ def _validate_body_rules(rules: list[BodyRule]) -> list[BodyRule]:
             count = rule.get("count", 0)
             if not isinstance(count, int) or count < 0:
                 raise ValueError(f"body_rules[{idx}]: regex_replace 的 count 必须为非负整数")
+
+        # ---------- name_style 校验 ----------
+        if action == "name_style":
+            style = rule.get("style")
+            if not isinstance(style, str) or style not in _NAME_STYLE_VALUES:
+                raise ValueError(
+                    f"body_rules[{idx}]: name_style 的 style 必须是 "
+                    f"{sorted(_NAME_STYLE_VALUES)} 之一，当前值: {style!r}"
+                )
 
         # ---------- condition 校验 ----------
         condition = rule.get("condition")

@@ -296,7 +296,7 @@
                       v-if="getEndpointEditBodyRules(endpoint.id).length > 0"
                       class="flex items-center gap-1 text-xs text-muted-foreground px-2"
                     >
-                      <span><code class="bg-muted px-1 rounded">.</code> 嵌套字段 / <code class="bg-muted px-1 rounded">[N]</code> 数组索引；值为 JSON 格式</span>
+                      <span><code class="bg-muted px-1 rounded">.</code> 嵌套字段 / <code class="bg-muted px-1 rounded">[N]</code> 数组索引 / <code class="bg-muted px-1 rounded">[*]</code> 通配符；值为 JSON 格式</span>
                       <div class="flex-1" />
                       <Popover
                         :open="bodyRuleHelpOpenEndpointId === endpoint.id"
@@ -326,6 +326,8 @@
                               <div class="text-muted-foreground">
                                 <code>metadata.user_id</code> 嵌套字段<br>
                                 <code>messages[0].content</code> 数组索引<br>
+                                <code>tools[*].name</code> 通配符（遍历所有元素）<br>
+                                <code>tools[0-4].name</code> 范围（遍历索引 0~4）<br>
                                 <code>config\.v1.key</code> 转义点号
                               </div>
                             </div>
@@ -341,6 +343,14 @@
                             </div>
                             <div>
                               <div class="font-medium mb-0.5">
+                                命名风格
+                              </div>
+                              <div class="text-muted-foreground">
+                                批量转换字段命名：capitalize / snake_case / camelCase / PascalCase / kebab-case
+                              </div>
+                            </div>
+                            <div>
+                              <div class="font-medium mb-0.5">
                                 条件运算符
                               </div>
                               <div class="text-muted-foreground">
@@ -350,11 +360,15 @@
                                 <code>matches</code> 正则匹配<br>
                                 <code>exists</code> <code>not_exists</code> 字段存在性<br>
                                 <code>in</code> 在列表中（值填 <code>["a","b"]</code>）<br>
-                                <code>type_is</code> 类型判断（string/number/boolean/array/object/null）
+                                <code>type_is</code> 类型判断（string/number/boolean/array/object/null）<br>
+                                条件路径支持 <code>$item.xxx</code> 引用通配符当前元素
                               </div>
                             </div>
                             <div class="text-muted-foreground">
                               规则按顺序执行，前面的修改对后续规则可见。
+                            </div>
+                            <div class="text-muted-foreground">
+                              规则在格式转换之后执行，路径需按目标提供商的请求体结构填写。
                             </div>
                           </div>
                         </PopoverContent>
@@ -397,6 +411,9 @@
                             </SelectItem>
                             <SelectItem value="regex_replace">
                               正则替换
+                            </SelectItem>
+                            <SelectItem value="name_style">
+                              命名风格
                             </SelectItem>
                           </SelectContent>
                         </Select>
@@ -524,6 +541,41 @@
                             :title="getRegexPatternValidationTip(rule)"
                           />
                         </template>
+                        <template v-else-if="rule.action === 'name_style'">
+                          <Input
+                            :model-value="rule.path"
+                            placeholder="字段路径（如 tools[*].name）"
+                            size="sm"
+                            class="flex-[2] min-w-0 h-7 text-xs"
+                            @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'path', v)"
+                          />
+                          <span class="text-muted-foreground text-xs">→</span>
+                          <Select
+                            :model-value="rule.style || 'capitalize'"
+                            @update:model-value="(v: string) => updateEndpointBodyRuleField(endpoint.id, index, 'style', v)"
+                          >
+                            <SelectTrigger class="w-[120px] h-7 text-xs shrink-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="capitalize">
+                                Capitalize
+                              </SelectItem>
+                              <SelectItem value="snake_case">
+                                snake_case
+                              </SelectItem>
+                              <SelectItem value="camelCase">
+                                camelCase
+                              </SelectItem>
+                              <SelectItem value="PascalCase">
+                                PascalCase
+                              </SelectItem>
+                              <SelectItem value="kebab-case">
+                                kebab-case
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </template>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -541,7 +593,7 @@
                         <span class="text-[10px] font-semibold text-muted-foreground shrink-0">IF</span>
                         <Input
                           :model-value="rule.conditionPath"
-                          placeholder="字段路径"
+                          :placeholder="rule.path?.includes('[*]') || rule.path?.match(/\[\d+-\d+\]/) ? '$item.字段名' : '字段路径'"
                           size="sm"
                           class="flex-1 min-w-0 h-7 text-xs"
                           @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'conditionPath', v)"
@@ -742,6 +794,7 @@ import {
   type HeaderRule,
   type BodyRule,
   type BodyRuleRegexReplace,
+  type BodyRuleNameStyle,
   type BodyRuleCondition,
   type BodyRuleConditionOp,
 } from '@/api/endpoints'
@@ -758,7 +811,7 @@ interface EditableRule {
 }
 
 // 编辑用的请求体规则类型
-type BodyRuleAction = 'set' | 'drop' | 'rename' | 'append' | 'insert' | 'regex_replace'
+type BodyRuleAction = 'set' | 'drop' | 'rename' | 'append' | 'insert' | 'regex_replace' | 'name_style'
 
 interface EditableBodyRule {
   action: BodyRuleAction
@@ -770,6 +823,7 @@ interface EditableBodyRule {
   pattern: string  // regex_replace 用
   replacement: string // regex_replace 用
   flags: string    // regex_replace 用（i/m/s）
+  style: string    // name_style 用（snake_case/camelCase/PascalCase/kebab-case/capitalize）
   conditionEnabled: boolean  // 是否启用条件
   conditionPath: string
   conditionOp: string
@@ -1082,7 +1136,7 @@ function initEndpointEditState(endpoint: ProviderEndpoint): EndpointEditState {
   }
 
   const emptyBodyRule = (): Omit<EditableBodyRule, 'action'> => ({
-    path: '', value: '', from: '', to: '', index: '', pattern: '', replacement: '', flags: '',
+    path: '', value: '', from: '', to: '', index: '', pattern: '', replacement: '', flags: '', style: '',
     conditionEnabled: false, conditionPath: '', conditionOp: 'eq', conditionValue: '',
   })
 
@@ -1115,6 +1169,8 @@ function initEndpointEditState(endpoint: ProviderEndpoint): EndpointEditState {
         bodyRules.push({ ...emptyBodyRule(), action: 'insert', path: rule.path || '', value, index: String(rule.index ?? ''), ...conditionFields })
       } else if (rule.action === 'regex_replace') {
         bodyRules.push({ ...emptyBodyRule(), action: 'regex_replace', path: rule.path || '', pattern: rule.pattern || '', replacement: rule.replacement || '', flags: rule.flags || '', ...conditionFields })
+      } else if (rule.action === 'name_style') {
+        bodyRules.push({ ...emptyBodyRule(), action: 'name_style', path: rule.path || '', style: rule.style || 'capitalize', ...conditionFields })
       }
     }
   }
@@ -1303,7 +1359,7 @@ function getEndpointEditBodyRules(endpointId: string): EditableBodyRule[] {
 // 添加请求体规则（同时自动展开折叠）
 function handleAddEndpointBodyRule(endpointId: string) {
   const rules = getEndpointEditBodyRules(endpointId)
-  rules.push({ action: 'set', path: '', value: '', from: '', to: '', index: '', pattern: '', replacement: '', flags: '', conditionEnabled: false, conditionPath: '', conditionOp: 'eq', conditionValue: '' })
+  rules.push({ action: 'set', path: '', value: '', from: '', to: '', index: '', pattern: '', replacement: '', flags: '', style: '', conditionEnabled: false, conditionPath: '', conditionOp: 'eq', conditionValue: '' })
   // 自动展开折叠
   endpointRulesExpanded.value[endpointId] = true
 }
@@ -1327,11 +1383,12 @@ function updateEndpointBodyRuleAction(endpointId: string, index: number, action:
     rules[index].pattern = ''
     rules[index].replacement = ''
     rules[index].flags = ''
+    rules[index].style = ''
   }
 }
 
 // 更新请求体规则字段
-function updateEndpointBodyRuleField(endpointId: string, index: number, field: 'path' | 'value' | 'from' | 'to' | 'index' | 'pattern' | 'replacement' | 'flags' | 'conditionPath' | 'conditionOp' | 'conditionValue', value: string) {
+function updateEndpointBodyRuleField(endpointId: string, index: number, field: 'path' | 'value' | 'from' | 'to' | 'index' | 'pattern' | 'replacement' | 'flags' | 'style' | 'conditionPath' | 'conditionOp' | 'conditionValue', value: string) {
   const rules = getEndpointEditBodyRules(endpointId)
   if (rules[index]) {
     rules[index][field] = value
@@ -1520,17 +1577,31 @@ function getBodySetValueValidationTip(rule: EditableBodyRule): string {
   }
 }
 
+// 判断请求体规则是否有效（必填字段已填写）
+function isBodyRuleEffective(r: EditableBodyRule): boolean {
+  switch (r.action) {
+    case 'set':
+    case 'drop':
+      return !!r.path.trim()
+    case 'rename':
+      return !!(r.from.trim() && r.to.trim())
+    case 'insert':
+    case 'append':
+      return !!r.path.trim()
+    case 'regex_replace':
+      return !!(r.path.trim() && r.pattern.trim())
+    case 'name_style':
+      return !!(r.path.trim() && r.style.trim())
+    default:
+      return false
+  }
+}
+
 // 获取端点的请求体规则数量（有效的规则）
 function getEndpointBodyRulesCount(endpoint: ProviderEndpoint): number {
   const state = endpointEditStates.value[endpoint.id]
   if (state) {
-    return state.bodyRules.filter(r => {
-      if (r.action === 'set' || r.action === 'drop') return r.path.trim()
-      if (r.action === 'rename') return r.from.trim() && r.to.trim()
-      if (r.action === 'insert' || r.action === 'append') return r.path.trim()
-      if (r.action === 'regex_replace') return r.path.trim() && r.pattern.trim()
-      return false
-    }).length
+    return state.bodyRules.filter(isBodyRuleEffective).length
   }
   return endpoint.body_rules?.length || 0
 }
@@ -1592,13 +1663,7 @@ function hasBodyRulesChanges(endpoint: ProviderEndpoint): boolean {
   if (!state) return false
 
   const originalRules = endpoint.body_rules || []
-  const editedRules = state.bodyRules.filter(r => {
-    if (r.action === 'set' || r.action === 'drop') return r.path.trim()
-    if (r.action === 'rename') return r.from.trim() && r.to.trim()
-    if (r.action === 'insert' || r.action === 'append') return r.path.trim()
-    if (r.action === 'regex_replace') return r.path.trim() && r.pattern.trim()
-    return false
-  })
+  const editedRules = state.bodyRules.filter(isBodyRuleEffective)
   if (editedRules.length !== originalRules.length) return true
   for (let i = 0; i < editedRules.length; i++) {
     const edited = editedRules[i]
@@ -1629,6 +1694,9 @@ function hasBodyRulesChanges(endpoint: ProviderEndpoint): boolean {
       if (edited.pattern !== (original.pattern ?? '')) return true
       if (edited.replacement !== (original.replacement ?? '')) return true
       if (edited.flags !== (original.flags ?? '')) return true
+    } else if (edited.action === 'name_style' && original.action === 'name_style') {
+      if (edited.path !== (original.path ?? '')) return true
+      if (edited.style !== (original.style ?? '')) return true
     }
     // 条件变更检测
     const origCond = original.condition
@@ -1693,6 +1761,8 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
         ...(rule.flags.trim() ? { flags: rule.flags.trim() } : {}),
       }
       result.push({ ...entry, ...(condition ? { condition } : {}) })
+    } else if (rule.action === 'name_style' && rule.path.trim() && rule.style.trim()) {
+      result.push({ action: 'name_style', path: rule.path.trim(), style: rule.style.trim() as BodyRuleNameStyle['style'], ...(condition ? { condition } : {}) })
     }
   }
 
@@ -1740,6 +1810,10 @@ function getBodyValidationErrorForEndpoint(endpointId: string): string | null {
           if (!validFlags.has(f)) return `${prefix}flags 仅允许 i/m/s，非法字符: ${f}`
         }
       }
+    } else if (rule.action === 'name_style') {
+      if (!rule.path.trim()) return `${prefix}路径不能为空`
+      const validStyles = new Set(['snake_case', 'camelCase', 'PascalCase', 'kebab-case', 'capitalize'])
+      if (!rule.style.trim() || !validStyles.has(rule.style.trim())) return `${prefix}请选择有效的命名风格`
     }
   }
   return null

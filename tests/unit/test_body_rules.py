@@ -989,3 +989,422 @@ class TestConditionalBodyRules:
             ],
         )
         assert "feature" not in result
+
+
+class TestWildcardPaths:
+    """通配符路径 [*] 和范围 [N-M] 的测试"""
+
+    def test_wildcard_set_all_elements(self) -> None:
+        body = {"tools": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "tools[*].enabled", "value": True}],
+        )
+        assert all(t["enabled"] is True for t in result["tools"])
+
+    def test_wildcard_regex_replace_all(self) -> None:
+        body = {"tools": [{"name": "get_user"}, {"name": "get_order"}, {"name": "set_config"}]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "regex_replace",
+                    "path": "tools[*].name",
+                    "pattern": "^get_",
+                    "replacement": "fetch_",
+                }
+            ],
+        )
+        assert result["tools"][0]["name"] == "fetch_user"
+        assert result["tools"][1]["name"] == "fetch_order"
+        assert result["tools"][2]["name"] == "set_config"
+
+    def test_wildcard_drop_all(self) -> None:
+        body = {"items": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "drop", "path": "items[*].b"}],
+        )
+        assert result == {"items": [{"a": 1}, {"a": 3}]}
+
+    def test_wildcard_set_with_original_placeholder(self) -> None:
+        body = {"tools": [{"name": "foo"}, {"name": "bar"}]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "set",
+                    "path": "tools[*].name",
+                    "value": "prefix_{{$original}}",
+                }
+            ],
+        )
+        assert result["tools"][0]["name"] == "prefix_foo"
+        assert result["tools"][1]["name"] == "prefix_bar"
+
+    def test_range_set_partial(self) -> None:
+        body = {"items": [{"v": 0}, {"v": 1}, {"v": 2}, {"v": 3}, {"v": 4}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "items[1-3].v", "value": 99}],
+        )
+        assert result["items"][0]["v"] == 0
+        assert result["items"][1]["v"] == 99
+        assert result["items"][2]["v"] == 99
+        assert result["items"][3]["v"] == 99
+        assert result["items"][4]["v"] == 4
+
+    def test_range_exceeds_array_length(self) -> None:
+        body = {"items": [{"v": 0}, {"v": 1}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "items[0-10].v", "value": 99}],
+        )
+        assert result["items"][0]["v"] == 99
+        assert result["items"][1]["v"] == 99
+
+    def test_wildcard_on_empty_array(self) -> None:
+        body: dict[str, Any] = {"tools": []}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "tools[*].name", "value": "x"}],
+        )
+        assert result == {"tools": []}
+
+    def test_wildcard_on_non_array(self) -> None:
+        body = {"tools": "not_an_array"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "tools[*].name", "value": "x"}],
+        )
+        assert result == {"tools": "not_an_array"}
+
+    def test_wildcard_nested(self) -> None:
+        body = {
+            "data": [
+                {"items": [{"name": "a"}, {"name": "b"}]},
+                {"items": [{"name": "c"}]},
+            ]
+        }
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "data[*].items[*].name", "value": "x"}],
+        )
+        assert result["data"][0]["items"][0]["name"] == "x"
+        assert result["data"][0]["items"][1]["name"] == "x"
+        assert result["data"][1]["items"][0]["name"] == "x"
+
+    def test_wildcard_append(self) -> None:
+        body = {"groups": [{"tags": ["a"]}, {"tags": ["b"]}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "append", "path": "groups[*].tags", "value": "new"}],
+        )
+        assert result["groups"][0]["tags"] == ["a", "new"]
+        assert result["groups"][1]["tags"] == ["b", "new"]
+
+    def test_rename_with_wildcard_is_skipped(self) -> None:
+        """rename 不支持通配符，应跳过"""
+        body = {"items": [{"old": 1}, {"old": 2}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "rename", "from": "items[*].old", "to": "items[*].new"}],
+        )
+        assert result == {"items": [{"old": 1}, {"old": 2}]}
+
+    def test_wildcard_with_condition(self) -> None:
+        body = {"flag": True, "tools": [{"name": "a"}, {"name": "b"}]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "set",
+                    "path": "tools[*].active",
+                    "value": True,
+                    "condition": {"path": "flag", "op": "eq", "value": True},
+                }
+            ],
+        )
+        assert result["tools"][0]["active"] is True
+        assert result["tools"][1]["active"] is True
+
+    def test_does_not_mutate_original(self) -> None:
+        body = {"tools": [{"name": "a"}, {"name": "b"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "tools[*].name", "value": "x"}],
+        )
+        assert result["tools"][0]["name"] == "x"
+        assert body["tools"][0]["name"] == "a"
+
+
+class TestNameStyleAction:
+    """name_style action 的测试"""
+
+    def test_snake_case(self) -> None:
+        body = {"tools": [{"name": "getUserInfo"}, {"name": "setOrderStatus"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[*].name", "style": "snake_case"}],
+        )
+        assert result["tools"][0]["name"] == "get_user_info"
+        assert result["tools"][1]["name"] == "set_order_status"
+
+    def test_camel_case(self) -> None:
+        body = {"tools": [{"name": "get_user_info"}, {"name": "set_order_status"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[*].name", "style": "camelCase"}],
+        )
+        assert result["tools"][0]["name"] == "getUserInfo"
+        assert result["tools"][1]["name"] == "setOrderStatus"
+
+    def test_pascal_case(self) -> None:
+        body = {"tools": [{"name": "get_user_info"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[*].name", "style": "PascalCase"}],
+        )
+        assert result["tools"][0]["name"] == "GetUserInfo"
+
+    def test_kebab_case(self) -> None:
+        body = {"tools": [{"name": "getUserInfo"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[*].name", "style": "kebab-case"}],
+        )
+        assert result["tools"][0]["name"] == "get-user-info"
+
+    def test_single_path_no_wildcard(self) -> None:
+        body = {"tool": {"name": "myFunctionName"}}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tool.name", "style": "snake_case"}],
+        )
+        assert result["tool"]["name"] == "my_function_name"
+
+    def test_invalid_style_skipped(self) -> None:
+        body = {"tools": [{"name": "foo"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[0].name", "style": "UPPER_CASE"}],
+        )
+        assert result["tools"][0]["name"] == "foo"
+
+    def test_non_string_value_skipped(self) -> None:
+        body = {"tools": [{"name": 123}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[0].name", "style": "snake_case"}],
+        )
+        assert result["tools"][0]["name"] == 123
+
+    def test_already_correct_style(self) -> None:
+        body = {"tools": [{"name": "already_snake_case"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[0].name", "style": "snake_case"}],
+        )
+        assert result["tools"][0]["name"] == "already_snake_case"
+
+    def test_mixed_styles_in_array(self) -> None:
+        body = {
+            "tools": [
+                {"name": "getUserInfo"},
+                {"name": "set_order_status"},
+                {"name": "DeleteItem"},
+            ]
+        }
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[*].name", "style": "snake_case"}],
+        )
+        assert result["tools"][0]["name"] == "get_user_info"
+        assert result["tools"][1]["name"] == "set_order_status"
+        assert result["tools"][2]["name"] == "delete_item"
+
+    def test_with_numbers_in_name(self) -> None:
+        body = {"tools": [{"name": "getV2User"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[0].name", "style": "snake_case"}],
+        )
+        assert result["tools"][0]["name"] == "get_v_2_user"
+
+    def test_does_not_mutate_original(self) -> None:
+        body = {"tools": [{"name": "getUserInfo"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[0].name", "style": "snake_case"}],
+        )
+        assert result["tools"][0]["name"] == "get_user_info"
+        assert body["tools"][0]["name"] == "getUserInfo"
+
+    def test_capitalize(self) -> None:
+        body = {"tools": [{"name": "writer"}, {"name": "edit"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[*].name", "style": "capitalize"}],
+        )
+        assert result["tools"][0]["name"] == "Writer"
+        assert result["tools"][1]["name"] == "Edit"
+
+    def test_capitalize_preserves_rest(self) -> None:
+        """capitalize 只改首字母，保留其余部分"""
+        body = {"tools": [{"name": "getUserInfo"}]}
+        result = apply_body_rules(
+            body,
+            [{"action": "name_style", "path": "tools[0].name", "style": "capitalize"}],
+        )
+        assert result["tools"][0]["name"] == "GetUserInfo"
+
+
+class TestItemCondition:
+    """$item 条件引用的测试 -- 通配符路径下逐元素评估"""
+
+    def test_name_style_with_item_condition(self) -> None:
+        """只对 name 在列表中的 tool 做首字母大写"""
+        body = {
+            "tools": [
+                {"name": "writer"},
+                {"name": "edit"},
+                {"name": "search"},
+            ]
+        }
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "name_style",
+                    "path": "tools[*].name",
+                    "style": "capitalize",
+                    "condition": {
+                        "path": "$item.name",
+                        "op": "in",
+                        "value": ["writer", "edit"],
+                    },
+                }
+            ],
+        )
+        assert result["tools"][0]["name"] == "Writer"
+        assert result["tools"][1]["name"] == "Edit"
+        assert result["tools"][2]["name"] == "search"  # 不在列表中，不变
+
+    def test_set_with_item_condition(self) -> None:
+        """set + $item condition"""
+        body = {"items": [{"type": "a", "v": 1}, {"type": "b", "v": 2}, {"type": "a", "v": 3}]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "set",
+                    "path": "items[*].v",
+                    "value": 99,
+                    "condition": {"path": "$item.type", "op": "eq", "value": "a"},
+                }
+            ],
+        )
+        assert result["items"][0]["v"] == 99
+        assert result["items"][1]["v"] == 2  # type=b, 不变
+        assert result["items"][2]["v"] == 99
+
+    def test_drop_with_item_condition(self) -> None:
+        """drop + $item condition"""
+        body = {
+            "tools": [
+                {"name": "a", "extra": 1},
+                {"name": "b", "extra": 2},
+                {"name": "c", "extra": 3},
+            ]
+        }
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "drop",
+                    "path": "tools[*].extra",
+                    "condition": {"path": "$item.name", "op": "eq", "value": "b"},
+                }
+            ],
+        )
+        assert "extra" in result["tools"][0]
+        assert "extra" not in result["tools"][1]  # name=b, extra 被删除
+        assert "extra" in result["tools"][2]
+
+    def test_regex_replace_with_item_condition(self) -> None:
+        """regex_replace + $item condition"""
+        body = {
+            "tools": [
+                {"name": "get_user", "type": "read"},
+                {"name": "set_user", "type": "write"},
+            ]
+        }
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "regex_replace",
+                    "path": "tools[*].name",
+                    "pattern": "^get_",
+                    "replacement": "fetch_",
+                    "condition": {"path": "$item.type", "op": "eq", "value": "read"},
+                }
+            ],
+        )
+        assert result["tools"][0]["name"] == "fetch_user"
+        assert result["tools"][1]["name"] == "set_user"  # type=write, 不变
+
+    def test_item_condition_with_exists(self) -> None:
+        """$item.xxx + exists"""
+        body = {"items": [{"name": "a"}, {"name": "b", "flag": True}, {"name": "c"}]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "set",
+                    "path": "items[*].marked",
+                    "value": True,
+                    "condition": {"path": "$item.flag", "op": "exists"},
+                }
+            ],
+        )
+        assert "marked" not in result["items"][0]
+        assert result["items"][1]["marked"] is True
+        assert "marked" not in result["items"][2]
+
+    def test_item_exact_ref(self) -> None:
+        """$item (不带后缀) 引用整个元素"""
+        body = {"items": ["hello", 42, "world"]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "regex_replace",
+                    "path": "items[*]",
+                    "pattern": "^hello$",
+                    "replacement": "hi",
+                    "condition": {"path": "$item", "op": "type_is", "value": "string"},
+                }
+            ],
+        )
+        assert result["items"][0] == "hi"
+        assert result["items"][1] == 42  # 不是 string，跳过
+        assert result["items"][2] == "world"
+
+    def test_non_item_condition_still_global(self) -> None:
+        """不含 $item 的 condition 仍然全局评估"""
+        body = {"flag": False, "tools": [{"name": "a"}, {"name": "b"}]}
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "set",
+                    "path": "tools[*].active",
+                    "value": True,
+                    "condition": {"path": "flag", "op": "eq", "value": True},
+                }
+            ],
+        )
+        # flag=False，全局条件不满足，所有元素都不变
+        assert "active" not in result["tools"][0]
+        assert "active" not in result["tools"][1]
