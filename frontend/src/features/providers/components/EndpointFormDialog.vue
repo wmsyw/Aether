@@ -1424,8 +1424,10 @@ function validateBodyRulePathForEndpoint(endpointId: string, path: string, index
   const normalizedPath = raw.toLowerCase()
 
   const rules = getEndpointEditBodyRules(endpointId)
+  const currentRule = rules[index]
+  // 任意一方启用了条件，则不视为冲突（条件可能互斥，真正冲突在运行时处理）
   const duplicate = rules.findIndex(
-    (r, i) => i !== index && (
+    (r, i) => i !== index && !currentRule.conditionEnabled && !r.conditionEnabled && (
       ((r.action === 'set' || r.action === 'drop') && r.path.trim().toLowerCase() === normalizedPath) ||
       (r.action === 'rename' && r.to.trim().toLowerCase() === normalizedPath)
     )
@@ -1455,8 +1457,9 @@ function validateBodyRenameFromForEndpoint(endpointId: string, from: string, ind
   const normalizedFrom = raw.toLowerCase()
 
   const rules = getEndpointEditBodyRules(endpointId)
+  const currentRule = rules[index]
   const duplicate = rules.findIndex(
-    (r, i) => i !== index &&
+    (r, i) => i !== index && !currentRule.conditionEnabled && !r.conditionEnabled &&
       ((r.action === 'set' && r.path.trim().toLowerCase() === normalizedFrom) ||
        (r.action === 'drop' && r.path.trim().toLowerCase() === normalizedFrom) ||
        (r.action === 'rename' && r.from.trim().toLowerCase() === normalizedFrom))
@@ -1486,8 +1489,9 @@ function validateBodyRenameToForEndpoint(endpointId: string, to: string, index: 
   const normalizedTo = raw.toLowerCase()
 
   const rules = getEndpointEditBodyRules(endpointId)
+  const currentRule = rules[index]
   const duplicate = rules.findIndex(
-    (r, i) => i !== index &&
+    (r, i) => i !== index && !currentRule.conditionEnabled && !r.conditionEnabled &&
       ((r.action === 'set' && r.path.trim().toLowerCase() === normalizedTo) ||
        (r.action === 'rename' && r.to.trim().toLowerCase() === normalizedTo))
   )
