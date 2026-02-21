@@ -166,11 +166,23 @@ const compareUserId = ref<string>('__none__')
 const leaderboard = ref<LeaderboardItem[]>([])
 const leaderboardLoading = ref(false)
 
-const userSummary = ref<any | null>(null)
+interface UsageSummary {
+  total_requests: number
+  total_tokens: number
+  total_cost: number
+  error_rate: number
+}
+
+interface TimeSeriesItem {
+  date: string
+  total_cost: number
+}
+
+const userSummary = ref<UsageSummary | null>(null)
 const summaryLoading = ref(false)
 
-const series = ref<any[]>([])
-const comparisonSeries = ref<any[]>([])
+const series = ref<TimeSeriesItem[]>([])
+const comparisonSeries = ref<TimeSeriesItem[]>([])
 const seriesLoading = ref(false)
 
 function buildTimeRangeParams() {

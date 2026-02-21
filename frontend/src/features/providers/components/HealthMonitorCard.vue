@@ -142,6 +142,7 @@ import EndpointHealthTimeline from './EndpointHealthTimeline.vue'
 import { getEndpointStatusMonitor, getPublicEndpointStatusMonitor } from '@/api/endpoints/health'
 import type { EndpointStatusMonitor, PublicEndpointStatusMonitor } from '@/api/endpoints/types'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 
 const props = withDefaults(defineProps<{
@@ -176,8 +177,8 @@ async function loadMonitors() {
       const data = await getPublicEndpointStatusMonitor(params)
       monitors.value = data.formats || []
     }
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '加载健康监控数据失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载健康监控数据失败'), '错误')
   } finally {
     loadingMonitors.value = false
   }

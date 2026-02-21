@@ -773,10 +773,12 @@
         {{ formatFullDate(selectedAnnouncement.created_at) }}
       </div>
 
+      <!-- eslint-disable vue/no-v-html -->
       <div
         class="prose prose-sm dark:prose-invert max-w-none"
         v-html="renderMarkdown(selectedAnnouncement.content)"
       />
+      <!-- eslint-enable vue/no-v-html -->
     </div>
 
     <template #footer>
@@ -998,7 +1000,7 @@ const loadingAnnouncements = ref(false)
 const selectedAnnouncement = ref<Announcement | null>(null)
 const detailDialogOpen = ref(false)
 
-const iconMap: Record<string, any> = {
+const iconMap: Record<string, unknown> = {
   Users, Activity, TrendingUp, DollarSign, Key, Hash, Database
 }
 

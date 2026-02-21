@@ -26,7 +26,7 @@ export interface CandidateRecord {
   error_message?: string
   latency_ms?: number
   concurrent_requests?: number
-  extra_data?: Record<string, any>
+  extra_data?: Record<string, unknown>
   created_at: string
   started_at?: string
   finished_at?: string

@@ -85,6 +85,8 @@ class TaskService:
         capability_requirements: dict[str, bool] | None = None,
         preferred_key_ids: list[str] | None = None,
         request_body_ref: dict[str, Any] | None = None,
+        request_headers: dict[str, Any] | None = None,
+        request_body: dict[str, Any] | None = None,
         # ASYNC-only (video submit)
         extract_external_task_id: Any | None = None,
         supported_auth_types: set[str] | None = None,
@@ -180,6 +182,8 @@ class TaskService:
             capability_requirements=capability_requirements,
             preferred_key_ids=preferred_key_ids,
             request_body_ref=request_body_ref,
+            request_headers=request_headers,
+            request_body=request_body,
         )
 
     async def _execute_sync_unified(
@@ -194,6 +198,8 @@ class TaskService:
         capability_requirements: dict[str, bool] | None,
         preferred_key_ids: list[str] | None,
         request_body_ref: dict[str, Any] | None,
+        request_headers: dict[str, Any] | None,
+        request_body: dict[str, Any] | None,
     ) -> ExecutionResult:
         """
         Unified candidate traversal loop for SYNC.
@@ -266,6 +272,8 @@ class TaskService:
                 model=model_name,
                 is_stream=is_stream,
                 api_format=api_format_norm,
+                request_headers=request_headers,
+                request_body=request_body,
             )
         except Exception as exc:
             logger.warning("创建 pending 使用记录失败: {}", str(exc))

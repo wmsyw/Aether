@@ -333,6 +333,7 @@ import {
 import { blacklistApi, whitelistApi, type BlacklistStats, type WhitelistResponse } from '@/api/security'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { parseApiError } from '@/utils/errorParser'
 
 const { success, error } = useToast()
 const { confirmDanger } = useConfirm()
@@ -368,8 +369,8 @@ async function loadBlacklistStats() {
   loadingBlacklist.value = true
   try {
     blacklistStats.value = await blacklistApi.getStats()
-  } catch (err: any) {
-    error(err.response?.data?.detail || '无法获取黑名单统计')
+  } catch (err: unknown) {
+    error(parseApiError(err, '无法获取黑名单统计'))
   } finally {
     loadingBlacklist.value = false
   }
@@ -382,8 +383,8 @@ async function loadWhitelist() {
   loadingWhitelist.value = true
   try {
     whitelistData.value = await whitelistApi.getList()
-  } catch (err: any) {
-    error(err.response?.data?.detail || '无法获取白名单列表')
+  } catch (err: unknown) {
+    error(parseApiError(err, '无法获取白名单列表'))
   } finally {
     loadingWhitelist.value = false
   }
@@ -405,8 +406,8 @@ async function handleAddToBlacklist() {
     showAddBlacklistDialog.value = false
     blacklistForm.value = { ip_address: '', reason: '', ttl: undefined }
     await loadBlacklistStats()
-  } catch (err: any) {
-    error(err.response?.data?.detail || '无法添加 IP 到黑名单')
+  } catch (err: unknown) {
+    error(parseApiError(err, '无法添加 IP 到黑名单'))
   }
 }
 
@@ -424,8 +425,8 @@ async function handleAddToWhitelist() {
     showAddWhitelistDialog.value = false
     whitelistForm.value = { ip_address: '' }
     await loadWhitelist()
-  } catch (err: any) {
-    error(err.response?.data?.detail || '无法添加 IP 到白名单')
+  } catch (err: unknown) {
+    error(parseApiError(err, '无法添加 IP 到白名单'))
   }
 }
 
@@ -446,8 +447,8 @@ async function handleRemoveFromWhitelist(ip: string) {
     success(`IP ${ip} 已从白名单移除`)
 
     await loadWhitelist()
-  } catch (err: any) {
-    error(err.response?.data?.detail || '无法从白名单移除 IP')
+  } catch (err: unknown) {
+    error(parseApiError(err, '无法从白名单移除 IP'))
   }
 }
 

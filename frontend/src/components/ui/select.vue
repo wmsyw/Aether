@@ -15,8 +15,12 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  defaultValue: undefined,
   modelValue: undefined,
   open: undefined,
+  dir: undefined,
+  name: undefined,
+  autocomplete: undefined,
 })
 
 const emit = defineEmits<{

@@ -121,13 +121,13 @@ export function parseNullableNumberInput(
  * // In template:
  * <Input @update:model-value="handleRateLimit" />
  */
-export function createNumberInputHandler<T extends Record<string, any>>(
+export function createNumberInputHandler<T extends Record<string, unknown>>(
   obj: T,
   field: keyof T,
   options: Parameters<typeof parseNumberInput>[1] = {}
 ) {
   return (value: string | number | null | undefined) => {
-    (obj as any)[field] = parseNumberInput(value, options)
+    (obj as Record<string, unknown>)[field as string] = parseNumberInput(value, options)
   }
 }
 

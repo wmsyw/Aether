@@ -528,7 +528,7 @@ const navigation = computed(() => {
     .sort((a, b) => a.admin_menu_order - b.admin_menu_order)
     .map(m => ({
       name: m.display_name,
-      href: m.admin_route!,
+      href: m.admin_route ?? '',
       icon: iconMap[m.admin_menu_icon || ''] || Puzzle
     }))
 

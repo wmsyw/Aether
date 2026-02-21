@@ -1,9 +1,11 @@
 <template>
   <div :class="wrapperClass">
+    <!-- eslint-disable vue/no-v-html -->
     <pre><code
-:class="`language-${language}`"
-               v-html="highlightedCode"
+      :class="`language-${language}`"
+      v-html="highlightedCode"
     /></pre>
+    <!-- eslint-enable vue/no-v-html -->
   </div>
 </template>
 

@@ -101,7 +101,7 @@ export const usersApi = {
   },
 
   // 管理员统计
-  async getUsageStats(): Promise<any> {
+  async getUsageStats(): Promise<Record<string, unknown>> {
     const response = await apiClient.get('/api/admin/usage/stats')
     return response.data
   }

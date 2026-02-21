@@ -51,7 +51,7 @@ export interface ToolUseContentBlock extends ContentBlockBase {
   type: 'tool_use'
   toolId: string
   toolName: string
-  input: Record<string, any> | string
+  input: Record<string, unknown> | string
 }
 
 /** 工具结果内容块 */
@@ -151,7 +151,7 @@ export interface FormatDetector {
    * @param hint 后端提供的格式提示
    * @returns 匹配置信度 (0-100)，0 表示不匹配
    */
-  detect(requestBody: any, responseBody: any, hint?: string): number
+  detect(requestBody: unknown, responseBody: unknown, hint?: string): number
 }
 
 /** 请求体解析器 */
@@ -161,7 +161,7 @@ export interface RequestParser {
    * @param requestBody 请求体
    * @returns 解析后的对话
    */
-  parseRequest(requestBody: any): ParsedConversation
+  parseRequest(requestBody: unknown): ParsedConversation
 }
 
 /** 响应体解析器 */
@@ -171,14 +171,14 @@ export interface ResponseParser {
    * @param responseBody 响应体
    * @returns 解析后的对话
    */
-  parseResponse(responseBody: any): ParsedConversation
+  parseResponse(responseBody: unknown): ParsedConversation
 
   /**
    * 解析流式响应
    * @param chunks 响应块列表
    * @returns 解析后的对话
    */
-  parseStreamResponse(chunks: any[]): ParsedConversation
+  parseStreamResponse(chunks: unknown[]): ParsedConversation
 }
 
 /** 完整的 API 格式解析器 */
@@ -193,14 +193,14 @@ export interface ApiFormatParser extends FormatDetector, RequestParser, Response
    * @param requestBody 请求体
    * @returns 渲染结果
    */
-  renderRequest(requestBody: any): import('./render').RenderResult
+  renderRequest(requestBody: unknown): import('./render').RenderResult
 
   /**
    * 渲染响应体为渲染块
    * @param responseBody 响应体
    * @returns 渲染结果
    */
-  renderResponse(responseBody: any): import('./render').RenderResult
+  renderResponse(responseBody: unknown): import('./render').RenderResult
 }
 
 // ============================================================
@@ -215,12 +215,15 @@ export interface StreamMetadata {
 /** 流式响应体结构 */
 export interface StreamResponseBody {
   metadata?: StreamMetadata
-  chunks?: any[]
+  chunks?: unknown[]
 }
 
 /** 检查是否为流式响应 */
-export function isStreamResponse(body: any): body is StreamResponseBody {
-  return body?.metadata?.stream === true && Array.isArray(body?.chunks)
+export function isStreamResponse(body: unknown): body is StreamResponseBody {
+  if (!body || typeof body !== 'object') return false
+  const obj = body as Record<string, unknown>
+  const metadata = obj.metadata as Record<string, unknown> | undefined
+  return metadata?.stream === true && Array.isArray(obj.chunks)
 }
 
 // ============================================================
@@ -241,7 +244,7 @@ export function createThinkingBlock(thinking: string, signature?: string): Think
 export function createToolUseBlock(
   toolId: string,
   toolName: string,
-  input: Record<string, any> | string
+  input: Record<string, unknown> | string
 ): ToolUseContentBlock {
   return { type: 'tool_use', toolId, toolName, input }
 }

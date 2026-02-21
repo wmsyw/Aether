@@ -414,6 +414,10 @@ class UsageQueueConsumer:
                 api_format=data.get("api_format"),
                 endpoint_api_format=data.get("endpoint_api_format"),
                 has_format_conversion=data.get("has_format_conversion"),
+                request_headers=data.get("request_headers"),
+                request_body=data.get("request_body"),
+                provider_request_headers=data.get("provider_request_headers"),
+                provider_request_body=data.get("provider_request_body"),
             )
         finally:
             db.close()

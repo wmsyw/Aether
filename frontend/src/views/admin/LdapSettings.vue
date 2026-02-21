@@ -243,6 +243,7 @@ import { PageContainer, PageHeader, CardSection } from '@/components/layout'
 import { Button, Input, Label, Switch } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { adminApi, type LdapConfigUpdateRequest } from '@/api/admin'
+import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
 
@@ -291,7 +292,7 @@ async function loadConfig() {
     hasPassword.value = !!response.has_bind_password
   } catch (err) {
     error('加载 LDAP 配置失败')
-    console.error('加载 LDAP 配置失败:', err)
+    log.error('加载 LDAP 配置失败', err)
   } finally {
     loading.value = false
   }
@@ -328,7 +329,7 @@ async function handleSave() {
     ldapConfig.value.bind_password = ''
   } catch (err) {
     error('保存 LDAP 配置失败')
-    console.error('保存 LDAP 配置失败:', err)
+    log.error('保存 LDAP 配置失败', err)
   } finally {
     saveLoading.value = false
   }
@@ -359,7 +360,7 @@ async function handleTestConnection() {
     }
   } catch (err) {
     error('LDAP 连接测试失败')
-    console.error('LDAP 连接测试失败:', err)
+    log.error('LDAP 连接测试失败', err)
   } finally {
     testLoading.value = false
   }

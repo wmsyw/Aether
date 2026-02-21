@@ -7,7 +7,7 @@ const RETRY_DELAY = 1000 // 1秒
 const CACHE_BUSTER_DELAY = 2000 // 2秒后尝试缓存清除
 
 // 模块缓存
-const moduleCache = new Map<string, Promise<any>>()
+const moduleCache = new Map<string, Promise<unknown>>()
 
 /**
  * 清除浏览器缓存的工具函数
@@ -28,14 +28,15 @@ function clearBrowserCache() {
 /**
  * 检查错误是否是网络/缓存相关
  */
-function isNetworkOrCacheError(error: any): boolean {
-  const errorMessage = error?.message || ''
+function isNetworkOrCacheError(error: unknown): boolean {
+  const err = error as { message?: string; name?: string } | null
+  const errorMessage = err?.message || ''
   return (
     errorMessage.includes('Failed to fetch') ||
     errorMessage.includes('Loading chunk') ||
     errorMessage.includes('dynamically imported module') ||
     errorMessage.includes('NetworkError') ||
-    error?.name === 'ChunkLoadError'
+    err?.name === 'ChunkLoadError'
   )
 }
 
@@ -46,7 +47,7 @@ function isNetworkOrCacheError(error: any): boolean {
  * @param cacheKey 缓存键
  * @returns Promise
  */
-export async function importWithRetry<T = any>(
+export async function importWithRetry<T = unknown>(
   importFn: () => Promise<T>,
   retries: number = MAX_RETRIES,
   cacheKey?: string
@@ -54,7 +55,7 @@ export async function importWithRetry<T = any>(
   try {
     // 如果有缓存键且缓存中存在，直接返回
     if (cacheKey && moduleCache.has(cacheKey)) {
-      return await moduleCache.get(cacheKey)!
+      return await moduleCache.get(cacheKey) as T
     }
 
     const importPromise = importFn()

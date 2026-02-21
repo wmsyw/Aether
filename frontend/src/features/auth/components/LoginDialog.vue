@@ -60,10 +60,12 @@
             class="oauth-btn"
             @click="handleOAuthLogin(oauthProviders[0].provider_type)"
           >
+            <!-- eslint-disable vue/no-v-html -->
             <span
               class="oauth-icon"
               v-html="getOAuthIcon(oauthProviders[0].provider_type)"
             />
+            <!-- eslint-enable vue/no-v-html -->
             <span>使用 {{ oauthProviders[0].display_name }} 登录</span>
           </button>
         </div>
@@ -83,10 +85,12 @@
               :title="p.display_name"
               @click="handleOAuthLogin(p.provider_type)"
             >
+              <!-- eslint-disable vue/no-v-html -->
               <span
                 class="oauth-icon-lg"
                 v-html="getOAuthIcon(p.provider_type)"
               />
+              <!-- eslint-enable vue/no-v-html -->
             </button>
           </div>
         </div>

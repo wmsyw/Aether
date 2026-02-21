@@ -38,7 +38,7 @@ async def test_task_service_execute_async_returns_execution_result() -> None:
         key=SimpleNamespace(id="k1"),
     )
     outcome = SubmitOutcome(
-        candidate=candidate,
+        candidate=candidate,  # type: ignore[arg-type]
         candidate_keys=[{"index": 0, "provider_id": "p1"}],
         external_task_id="task_123",
         rule_lookup=None,
@@ -48,7 +48,7 @@ async def test_task_service_execute_async_returns_execution_result() -> None:
     )
 
     svc.submit_with_failover = AsyncMock(return_value=outcome)  # type: ignore[method-assign]
-    svc._recorder.get_candidate_keys = MagicMock(  # type: ignore[attr-defined]
+    svc._recorder.get_candidate_keys = MagicMock(  # type: ignore[attr-defined, method-assign]
         return_value=[
             CandidateKey(candidate_index=0, retry_index=0, status="success", provider_id="p1")
         ]
@@ -72,3 +72,38 @@ async def test_task_service_execute_async_returns_execution_result() -> None:
     assert result.provider_task_id == "task_123"
     assert result.provider_id == "p1"
     assert result.candidate_index == 0
+
+
+@pytest.mark.asyncio
+async def test_task_service_execute_sync_passes_request_headers_and_body() -> None:
+    db = MagicMock()
+    svc = TaskService(db)
+    sentinel_result = object()
+    svc._execute_sync_unified = AsyncMock(  # type: ignore[method-assign]
+        return_value=sentinel_result
+    )
+
+    request_headers = {"authorization": "Bearer test", "x-trace-id": "abc123"}
+    request_body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+    request_body_ref = {"body": request_body}
+
+    result = await svc.execute(
+        task_type="chat",
+        task_mode=TaskMode.SYNC,
+        api_format="openai:chat",
+        model_name="gpt-4o-mini",
+        user_api_key=MagicMock(id="u", user_id="user"),
+        request_func=AsyncMock(),
+        request_id="rid-sync",
+        is_stream=True,
+        request_headers=request_headers,
+        request_body=request_body,
+        request_body_ref=request_body_ref,
+    )
+
+    assert result is sentinel_result
+    svc._execute_sync_unified.assert_awaited_once()  # type: ignore[attr-defined]
+    kwargs = svc._execute_sync_unified.await_args.kwargs  # type: ignore[attr-defined, union-attr]
+    assert kwargs["request_headers"] == request_headers
+    assert kwargs["request_body"] == request_body
+    assert kwargs["request_body_ref"] == request_body_ref

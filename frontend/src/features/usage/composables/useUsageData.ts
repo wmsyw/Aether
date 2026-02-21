@@ -12,6 +12,7 @@ import type {
 } from '../types'
 import { createDefaultStats } from '../types'
 import { log } from '@/utils/logger'
+import { getErrorStatus } from '@/types/api-error'
 
 export interface UseUsageDataOptions {
   isAdminPage: Ref<boolean>
@@ -81,27 +82,31 @@ export function useUsageData(options: UseUsageDataOptions) {
           usageApi.getUsageByApiFormat(dateRange)
         ])
 
+        // statsData may contain additional fields not declared in UsageStats
+        const statsRaw = statsData as Record<string, unknown>
         stats.value = {
           total_requests: statsData.total_requests || 0,
           total_tokens: statsData.total_tokens || 0,
           total_cost: statsData.total_cost || 0,
-          total_actual_cost: (statsData as any).total_actual_cost,
+          total_actual_cost: statsData.total_actual_cost,
           avg_response_time: statsData.avg_response_time || 0,
-          error_count: (statsData as any).error_count,
-          error_rate: (statsData as any).error_rate,
-          cache_stats: (statsData as any).cache_stats,
+          error_count: typeof statsRaw.error_count === 'number' ? statsRaw.error_count : undefined,
+          error_rate: typeof statsRaw.error_rate === 'number' ? statsRaw.error_rate : undefined,
+          cache_stats: statsRaw.cache_stats as UsageStatsState['cache_stats'],
           period_start: '',
           period_end: '',
-          activity_heatmap: null
         }
 
-        modelStats.value = modelData.map(item => ({
-          model: item.model,
-          request_count: item.request_count || 0,
-          total_tokens: item.total_tokens || 0,
-          total_cost: item.total_cost || 0,
-          actual_cost: (item as any).actual_cost
-        }))
+        modelStats.value = modelData.map(item => {
+          const raw = item as Record<string, unknown>
+          return {
+            model: item.model,
+            request_count: item.request_count || 0,
+            total_tokens: item.total_tokens || 0,
+            total_cost: item.total_cost || 0,
+            actual_cost: typeof raw.actual_cost === 'number' ? raw.actual_cost : undefined
+          }
+        })
 
         providerStats.value = providerData.map(item => ({
           provider: item.provider,
@@ -142,10 +147,9 @@ export function useUsageData(options: UseUsageDataOptions) {
           avg_response_time: userData.avg_response_time || 0,
           period_start: '',
           period_end: '',
-          activity_heatmap: null
         }
 
-        modelStats.value = (userData.summary_by_model || []).map((item: any) => ({
+        modelStats.value = (userData.summary_by_model || []).map((item) => ({
           model: item.model,
           request_count: item.requests || 0,
           total_tokens: item.total_tokens || 0,
@@ -153,13 +157,14 @@ export function useUsageData(options: UseUsageDataOptions) {
           actual_cost: item.actual_total_cost_usd
         }))
 
-        providerStats.value = (userData.summary_by_provider || []).map((item: any) => ({
+        providerStats.value = (userData.summary_by_provider || []).map((item) => ({
           provider: item.provider,
           requests: item.requests || 0,
+          totalTokens: 0,
           totalCost: item.total_cost_usd || 0,
           successRate: item.success_rate || 0,
-          avgResponseTime: item.avg_response_time_ms > 0
-            ? `${(item.avg_response_time_ms / 1000).toFixed(2)}s`
+          avgResponseTime: (item.avg_response_time_ms ?? 0) > 0
+            ? `${((item.avg_response_time_ms ?? 0) / 1000).toFixed(2)}s`
             : '-'
         }))
 
@@ -221,8 +226,8 @@ export function useUsageData(options: UseUsageDataOptions) {
           })
           .sort((a, b) => b.request_count - a.request_count)
       }
-    } catch (error: any) {
-      if (error.response?.status !== 403) {
+    } catch (error: unknown) {
+      if (getErrorStatus(error) !== 403) {
         log.error('加载统计数据失败:', error)
       }
       stats.value = createDefaultStats()
@@ -244,7 +249,7 @@ export function useUsageData(options: UseUsageDataOptions) {
       const offset = (pagination.page - 1) * pagination.pageSize
 
       // 构建请求参数
-      const params: any = {
+      const params: Record<string, unknown> = {
         limit: pagination.pageSize,
         offset,
         ...currentDateRange.value

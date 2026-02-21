@@ -160,6 +160,8 @@ class ChatSyncExecutor:
                 capability_requirements=capability_requirements or None,
                 preferred_key_ids=preferred_key_ids or None,
                 request_body_ref=request_body_ref,
+                request_headers=original_headers,
+                request_body=original_request_body,
             )
             actual_provider_name = exec_result.provider_name or "unknown"
             ctx.provider_id = exec_result.provider_id

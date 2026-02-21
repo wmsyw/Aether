@@ -498,6 +498,8 @@ import RefreshButton from '@/components/ui/refresh-button.vue'
 import { Plus, Key, Copy, Trash2, Loader2, Activity, CheckCircle, Power, Check } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
+import { getErrorStatus } from '@/types/api-error'
 import { computed } from 'vue'
 
 const { success, error: showError } = useToast()
@@ -548,14 +550,15 @@ async function loadApiKeys() {
   loading.value = true
   try {
     apiKeys.value = await meApi.getApiKeys()
-  } catch (error: any) {
+  } catch (error: unknown) {
     log.error('加载 API 密钥失败:', error)
-    if (!error.response) {
+    const status = getErrorStatus(error)
+    if (status === undefined) {
       showError('无法连接到服务器，请检查后端服务是否运行')
-    } else if (error.response.status === 401) {
+    } else if (status === 401) {
       showError('认证失败，请重新登录')
     } else {
-      showError(`加载 API 密钥失败：${  error.response?.data?.detail || error.message}`)
+      showError(parseApiError(error, '加载 API 密钥失败'))
     }
   } finally {
     loading.value = false
@@ -596,7 +599,7 @@ async function deleteApiKey() {
   deleting.value = true
   try {
     await meApi.deleteApiKey(keyToDelete.value.id)
-    apiKeys.value = apiKeys.value.filter(k => k.id !== keyToDelete.value!.id)
+    apiKeys.value = apiKeys.value.filter(k => k.id !== keyToDelete.value?.id)
     showDeleteDialog.value = false
     success('API 密钥已删除')
   } catch (error) {

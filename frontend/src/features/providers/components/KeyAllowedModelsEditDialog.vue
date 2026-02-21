@@ -796,7 +796,7 @@ async function handleSave() {
     success('模型权限已更新', '成功')
     emit('saved')
     emit('close')
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '保存失败'), '错误')
   } finally {
     saving.value = false

@@ -4,6 +4,7 @@
  * 缓存已移至后端（Redis），前端只保留并发请求去重，避免同时发多个相同请求。
  */
 import { ref } from 'vue'
+import { isAxiosError } from 'axios'
 import { adminApi } from '@/api/admin'
 import { parseUpstreamModelError } from '@/utils/errorParser'
 import type { UpstreamModel } from '@/api/endpoints/types'
@@ -42,6 +43,7 @@ export function useUpstreamModelsCache() {
 
     // 强制刷新时不复用进行中的请求
     if (!forceRefresh && pendingRequests.has(requestKey)) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       return pendingRequests.get(requestKey)!
     }
 
@@ -62,9 +64,9 @@ export function useUpstreamModelsCache() {
           const rawError = response.data?.error || '获取上游模型失败'
           return { models: [], error: parseUpstreamModelError(rawError) }
         }
-      } catch (err: any) {
-        const rawError = err.response?.data?.detail || err.message || '获取上游模型失败'
-        return { models: [], error: parseUpstreamModelError(rawError) }
+      } catch (err: unknown) {
+        const rawError = isAxiosError(err) ? (err.response?.data?.detail ?? err.message) : (err instanceof Error ? err.message : String(err))
+        return { models: [], error: parseUpstreamModelError(rawError || '获取上游模型失败') }
       } finally {
         loadingMap.value.set(requestKey, false)
         pendingRequests.delete(requestKey)

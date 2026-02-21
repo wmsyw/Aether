@@ -29,6 +29,9 @@ import {
   createEmptyRenderResult,
 } from './render'
 
+/** Raw JSON object from API (loosely typed) */
+type RawObject = Record<string, unknown>
+
 /**
  * Gemini API 格式解析器
  */
@@ -39,7 +42,7 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 检测是否为 Gemini 格式
    */
-  detect(requestBody: any, responseBody: any, hint?: string): number {
+  detect(requestBody: unknown, responseBody: unknown, hint?: string): number {
     // 1. 后端提示优先
     if (hint) {
       const lowerHint = hint.toLowerCase()
@@ -47,19 +50,21 @@ export class GeminiParser implements ApiFormatParser {
       if (lowerHint.includes('claude') || lowerHint.includes('openai')) return 0
     }
 
+    const req = requestBody as RawObject | null | undefined
+
     // 2. 检查模型名
-    const model = requestBody?.model?.toLowerCase() || ''
+    const model = (typeof req?.model === 'string' ? req.model : '').toLowerCase()
     if (model.includes('gemini')) return 95
 
     // 3. Gemini 特有结构: 使用 contents 而非 messages
-    if (requestBody?.contents && Array.isArray(requestBody.contents)) {
+    if (req?.contents && Array.isArray(req.contents)) {
       return 90
     }
 
     // 4. 检查响应体特征
-    const respBody = isStreamResponse(responseBody)
-      ? responseBody.chunks?.[0]
-      : responseBody
+    const respBody = (isStreamResponse(responseBody)
+      ? (responseBody.chunks?.[0] as RawObject | undefined)
+      : responseBody) as RawObject | null | undefined
 
     if (respBody?.candidates) {
       return 85
@@ -71,32 +76,33 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 解析请求体
    */
-  parseRequest(requestBody: any): ParsedConversation {
+  parseRequest(requestBody: unknown): ParsedConversation {
     if (!requestBody) {
       return createEmptyConversation('gemini', '无请求体')
     }
 
     try {
+      const body = requestBody as RawObject
       const result: ParsedConversation = {
         messages: [],
         isStream: false,
         apiFormat: 'gemini',
-        model: requestBody.model,
+        model: typeof body.model === 'string' ? body.model : undefined,
       }
 
       // 提取 system instruction
-      const sysInst = requestBody.system_instruction || requestBody.systemInstruction
-      if (sysInst?.parts) {
-        result.system = sysInst.parts
-          .filter((p: any) => p.text)
-          .map((p: any) => p.text)
+      const sysInst = (body.system_instruction || body.systemInstruction) as RawObject | undefined
+      if (sysInst?.parts && Array.isArray(sysInst.parts)) {
+        result.system = (sysInst.parts as RawObject[])
+          .filter((p: RawObject) => typeof p.text === 'string')
+          .map((p: RawObject) => String(p.text))
           .join('\n')
       }
 
       // 提取 contents
-      if (Array.isArray(requestBody.contents)) {
-        for (const content of requestBody.contents) {
-          const parsedMsg = this.parseContent(content)
+      if (Array.isArray(body.contents)) {
+        for (const content of body.contents) {
+          const parsedMsg = this.parseContent(content as RawObject)
           if (parsedMsg) {
             result.messages.push(parsedMsg)
           }
@@ -112,12 +118,13 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 解析响应体
    */
-  parseResponse(responseBody: any): ParsedConversation {
+  parseResponse(responseBody: unknown): ParsedConversation {
     if (!responseBody) {
       return createEmptyConversation('gemini', '无响应体')
     }
 
     try {
+      const body = responseBody as RawObject
       const result: ParsedConversation = {
         messages: [],
         isStream: false,
@@ -125,9 +132,11 @@ export class GeminiParser implements ApiFormatParser {
       }
 
       // Gemini 响应格式: { candidates: [{ content: { parts: [...] } }] }
-      const candidate = responseBody.candidates?.[0]
-      if (candidate?.content?.parts) {
-        const contentBlocks = this.parseParts(candidate.content.parts)
+      const candidates = body.candidates as RawObject[] | undefined
+      const candidate = candidates?.[0] as RawObject | undefined
+      const candidateContent = candidate?.content as RawObject | undefined
+      if (candidateContent?.parts && Array.isArray(candidateContent.parts)) {
+        const contentBlocks = this.parseParts(candidateContent.parts as RawObject[])
         if (contentBlocks.length > 0) {
           result.messages.push(createMessage('assistant', contentBlocks))
         }
@@ -142,7 +151,7 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 解析流式响应
    */
-  parseStreamResponse(chunks: any[]): ParsedConversation {
+  parseStreamResponse(chunks: unknown[]): ParsedConversation {
     if (!chunks || chunks.length === 0) {
       return createEmptyConversation('gemini', '无响应数据')
     }
@@ -155,16 +164,24 @@ export class GeminiParser implements ApiFormatParser {
       }
 
       const textParts: string[] = []
-      const toolCalls: { name: string; args: any }[] = []
+      const toolCalls: { name: string; args: Record<string, unknown> }[] = []
 
-      for (const chunk of chunks) {
-        const parts = chunk.candidates?.[0]?.content?.parts
+      for (const rawChunk of chunks) {
+        const chunk = rawChunk as RawObject
+        const candidates = chunk.candidates as RawObject[] | undefined
+        const firstCandidate = candidates?.[0] as RawObject | undefined
+        const candidateContent = firstCandidate?.content as RawObject | undefined
+        const parts = candidateContent?.parts as RawObject[] | undefined
         if (parts) {
           for (const part of parts) {
-            if (part.text) {
+            if (typeof part.text === 'string') {
               textParts.push(part.text)
             } else if (part.functionCall) {
-              toolCalls.push(part.functionCall)
+              const fc = part.functionCall as RawObject
+              toolCalls.push({
+                name: String(fc.name || ''),
+                args: (fc.args as Record<string, unknown>) || {},
+              })
             }
           }
         }
@@ -199,11 +216,12 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 解析 content 对象
    */
-  private parseContent(content: any): ParsedMessage | null {
+  private parseContent(content: RawObject): ParsedMessage | null {
     if (!content) return null
 
-    const role = this.mapRole(content.role)
-    const contentBlocks = this.parseParts(content.parts || [])
+    const role = this.mapRole(typeof content.role === 'string' ? content.role : undefined)
+    const parts = Array.isArray(content.parts) ? content.parts as RawObject[] : []
+    const contentBlocks = this.parseParts(parts)
 
     if (contentBlocks.length === 0) return null
 
@@ -213,7 +231,7 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 解析 parts 数组
    */
-  private parseParts(parts: any[]): ContentBlock[] {
+  private parseParts(parts: RawObject[]): ContentBlock[] {
     const result: ContentBlock[] = []
 
     for (const part of parts) {
@@ -229,36 +247,39 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 解析单个 part
    */
-  private parsePart(part: any): ContentBlock | null {
+  private parsePart(part: RawObject): ContentBlock | null {
     if (!part) return null
 
     // 文本
     if (part.text !== undefined) {
-      return createTextBlock(part.text)
+      return createTextBlock(String(part.text))
     }
 
     // 内联数据（图片等）
     if (part.inlineData) {
+      const inlineData = part.inlineData as RawObject
       return createImageBlock('base64', {
-        data: part.inlineData.data,
-        mimeType: part.inlineData.mimeType,
+        data: typeof inlineData.data === 'string' ? inlineData.data : undefined,
+        mimeType: typeof inlineData.mimeType === 'string' ? inlineData.mimeType : undefined,
       })
     }
 
     // 函数调用
     if (part.functionCall) {
+      const fc = part.functionCall as RawObject
       return createToolUseBlock(
         '',
-        part.functionCall.name || '',
-        part.functionCall.args || {}
+        String(fc.name || ''),
+        (fc.args as Record<string, unknown>) || {}
       )
     }
 
     // 函数响应
     if (part.functionResponse) {
+      const fr = part.functionResponse as RawObject
       return createToolResultBlock(
         '', // Gemini 用 name 关联
-        JSON.stringify(part.functionResponse.response, null, 2)
+        JSON.stringify(fr.response, null, 2)
       )
     }
 
@@ -286,20 +307,21 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 渲染请求体
    */
-  renderRequest(requestBody: any): RenderResult {
+  renderRequest(requestBody: unknown): RenderResult {
     if (!requestBody) {
       return createEmptyRenderResult('无请求体')
     }
 
     try {
+      const body = requestBody as RawObject
       const blocks: RenderBlock[] = []
 
       // 渲染 system instruction
-      const sysInst = requestBody.system_instruction || requestBody.systemInstruction
-      if (sysInst?.parts) {
-        const systemText = sysInst.parts
-          .filter((p: any) => p.text)
-          .map((p: any) => p.text)
+      const sysInst = (body.system_instruction || body.systemInstruction) as RawObject | undefined
+      if (sysInst?.parts && Array.isArray(sysInst.parts)) {
+        const systemText = (sysInst.parts as RawObject[])
+          .filter((p: RawObject) => typeof p.text === 'string')
+          .map((p: RawObject) => String(p.text))
           .join('\n')
         if (systemText) {
           blocks.push(createMessageBlock('system', [
@@ -309,9 +331,9 @@ export class GeminiParser implements ApiFormatParser {
       }
 
       // 渲染 contents
-      if (Array.isArray(requestBody.contents)) {
-        for (const content of requestBody.contents) {
-          const msgBlock = this.renderContent(content)
+      if (Array.isArray(body.contents)) {
+        for (const content of body.contents) {
+          const msgBlock = this.renderContent(content as RawObject)
           if (msgBlock) {
             blocks.push(msgBlock)
           }
@@ -327,7 +349,7 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 渲染响应体
    */
-  renderResponse(responseBody: any): RenderResult {
+  renderResponse(responseBody: unknown): RenderResult {
     if (!responseBody) {
       return createEmptyRenderResult('无响应体')
     }
@@ -338,14 +360,18 @@ export class GeminiParser implements ApiFormatParser {
     }
 
     try {
+      const body = responseBody as RawObject
       const blocks: RenderBlock[] = []
 
       // Gemini 响应格式: { candidates: [{ content: { parts: [...] } }] }
-      const candidate = responseBody.candidates?.[0]
-      if (candidate?.content?.parts) {
-        const contentBlocks = this.renderParts(candidate.content.parts)
+      const candidates = body.candidates as RawObject[] | undefined
+      const candidate = candidates?.[0] as RawObject | undefined
+      const candidateContent = candidate?.content as RawObject | undefined
+      if (candidateContent?.parts && Array.isArray(candidateContent.parts)) {
+        const parts = candidateContent.parts as RawObject[]
+        const contentBlocks = this.renderParts(parts)
         if (contentBlocks.length > 0) {
-          const badges = this.getBadgesForParts(candidate.content.parts)
+          const badges = this.getBadgesForParts(parts)
           blocks.push(createMessageBlock('assistant', contentBlocks, {
             roleLabel: 'Assistant',
             badges: badges.length > 0 ? badges : undefined,
@@ -362,7 +388,7 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 渲染流式响应
    */
-  private renderStreamResponse(chunks: any[]): RenderResult {
+  private renderStreamResponse(chunks: unknown[]): RenderResult {
     if (!chunks || chunks.length === 0) {
       return createEmptyRenderResult('无响应数据')
     }
@@ -397,15 +423,16 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 渲染 content 对象
    */
-  private renderContent(content: any): RenderBlock | null {
+  private renderContent(content: RawObject): RenderBlock | null {
     if (!content) return null
 
-    const role = this.mapRole(content.role)
-    const contentBlocks = this.renderParts(content.parts || [])
+    const role = this.mapRole(typeof content.role === 'string' ? content.role : undefined)
+    const parts = Array.isArray(content.parts) ? content.parts as RawObject[] : []
+    const contentBlocks = this.renderParts(parts)
 
     if (contentBlocks.length === 0) return null
 
-    const badges = this.getBadgesForParts(content.parts || [])
+    const badges = this.getBadgesForParts(parts)
 
     return createMessageBlock(role, contentBlocks, {
       roleLabel: this.getRoleLabel(role),
@@ -416,7 +443,7 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 渲染 parts 数组
    */
-  private renderParts(parts: any[]): RenderBlock[] {
+  private renderParts(parts: RawObject[]): RenderBlock[] {
     const result: RenderBlock[] = []
 
     for (const part of parts) {
@@ -432,34 +459,37 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 渲染单个 part
    */
-  private renderPart(part: any): RenderBlock | null {
+  private renderPart(part: RawObject): RenderBlock | null {
     if (!part) return null
 
     // 文本
     if (part.text !== undefined) {
-      return createTextRenderBlock(part.text)
+      return createTextRenderBlock(String(part.text))
     }
 
     // 内联数据（图片等）
     if (part.inlineData) {
+      const inlineData = part.inlineData as RawObject
       return createImageRenderBlock({
-        src: `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`,
-        mimeType: part.inlineData.mimeType,
+        src: `data:${inlineData.mimeType || 'image/png'};base64,${inlineData.data}`,
+        mimeType: typeof inlineData.mimeType === 'string' ? inlineData.mimeType : undefined,
       })
     }
 
     // 函数调用
     if (part.functionCall) {
+      const fc = part.functionCall as RawObject
       return createToolUseRenderBlock(
-        part.functionCall.name || '函数调用',
-        this.formatJson(part.functionCall.args)
+        String(fc.name || '函数调用'),
+        this.formatJson(fc.args)
       )
     }
 
     // 函数响应
     if (part.functionResponse) {
+      const fr = part.functionResponse as RawObject
       return createToolResultRenderBlock(
-        this.formatJson(part.functionResponse.response)
+        this.formatJson(fr.response)
       )
     }
 
@@ -533,11 +563,11 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 获取 parts 的徽章
    */
-  private getBadgesForParts(parts: any[]): BadgeRenderBlock[] {
+  private getBadgesForParts(parts: RawObject[]): BadgeRenderBlock[] {
     const badges: BadgeRenderBlock[] = []
-    const hasImage = parts.some((p: any) => p.inlineData)
-    const hasToolCall = parts.some((p: any) => p.functionCall)
-    const hasToolResult = parts.some((p: any) => p.functionResponse)
+    const hasImage = parts.some((p: RawObject) => p.inlineData)
+    const hasToolCall = parts.some((p: RawObject) => p.functionCall)
+    const hasToolResult = parts.some((p: RawObject) => p.functionResponse)
 
     if (hasToolCall) {
       badges.push(createBadgeBlock('函数调用', 'outline'))
@@ -575,10 +605,10 @@ export class GeminiParser implements ApiFormatParser {
   /**
    * 格式化 JSON
    */
-  private formatJson(input: any): string {
+  private formatJson(input: unknown): string {
     if (typeof input === 'string') {
       try {
-        const parsed = JSON.parse(input)
+        const parsed = JSON.parse(input) as unknown
         return JSON.stringify(parsed, null, 2)
       } catch {
         return input

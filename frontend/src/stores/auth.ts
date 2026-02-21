@@ -3,6 +3,8 @@ import { ref, computed } from 'vue'
 import { authApi, type User } from '@/api/auth'
 import apiClient from '@/api/client'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
+import { getErrorStatus } from '@/types/api-error'
 
 export const useAuthStore = defineStore('auth', () => {
   // 初始化时从 localStorage 恢复 token
@@ -44,16 +46,17 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = userInfo
 
       return true
-    } catch (err: any) {
+    } catch (err: unknown) {
       // 不要暴露后端的详细错误信息
-      if (err.response?.status === 401) {
+      const status = getErrorStatus(err)
+      if (status === 401) {
         error.value = '邮箱或密码错误'
-      } else if (err.response?.status === 422) {
+      } else if (status === 422) {
         error.value = '请输入有效的邮箱地址'
-      } else if (err.response?.status === 429) {
+      } else if (status === 429) {
         // 限流错误，显示后端返回的具体信息
-        error.value = err.response?.data?.detail || '请求过于频繁,请稍后重试'
-      } else if (err.response?.status === 500) {
+        error.value = parseApiError(err, '请求过于频繁,请稍后重试')
+      } else if (status === 500) {
         error.value = '服务器错误,请稍后重试'
       } else {
         error.value = '登录失败,请检查网络连接'
@@ -75,7 +78,7 @@ export const useAuthStore = defineStore('auth', () => {
       const userInfo = await authApi.getCurrentUser()
       user.value = userInfo
       return userInfo
-    } catch (err: any) {
+    } catch (err: unknown) {
       log.error('Failed to fetch user info', err)
       // 根据用户要求,不管什么错误都不清除状态
       // 保持登录状态,除非用户手动退出

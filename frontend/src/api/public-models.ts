@@ -16,7 +16,7 @@ export interface PublicGlobalModel {
   // Key 能力支持
   supported_capabilities: string[] | null
   // 模型配置（JSON）
-  config: Record<string, any> | null
+  config: Record<string, unknown> | null
 }
 
 export interface PublicGlobalModelListResponse {

@@ -361,7 +361,7 @@ async function handleSave() {
     success('账号已更新', '成功')
     emit('saved')
     emit('close')
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMessage = parseApiError(err, '保存失败')
     showError(errorMessage, '错误')
   } finally {

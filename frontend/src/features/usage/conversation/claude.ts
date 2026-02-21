@@ -33,6 +33,9 @@ import {
   createEmptyRenderResult,
 } from './render'
 
+/** Raw JSON object from API (loosely typed) */
+type RawObject = Record<string, unknown>
+
 /**
  * Claude API 格式解析器
  */
@@ -43,7 +46,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 检测是否为 Claude 格式
    */
-  detect(requestBody: any, responseBody: any, hint?: string): number {
+  detect(requestBody: unknown, responseBody: unknown, hint?: string): number {
     // 1. 后端提示优先
     if (hint) {
       const lowerHint = hint.toLowerCase()
@@ -52,37 +55,41 @@ export class ClaudeParser implements ApiFormatParser {
       if (lowerHint.includes('openai') || lowerHint.includes('gemini')) return 0
     }
 
+    const req = requestBody as RawObject | null | undefined
+
     // 2. 检查模型名
-    const model = requestBody?.model?.toLowerCase() || ''
+    const model = (typeof req?.model === 'string' ? req.model : '').toLowerCase()
     if (model.includes('claude')) return 95
 
     // 3. 检查请求体结构
-    if (!requestBody?.messages || !Array.isArray(requestBody.messages)) {
+    if (!req?.messages || !Array.isArray(req.messages)) {
       return 0
     }
 
     // 4. 检查响应体特征
-    const respBody = isStreamResponse(responseBody)
-      ? responseBody.chunks?.[0]
-      : responseBody
+    const respBody = (isStreamResponse(responseBody)
+      ? (responseBody.chunks?.[0] as RawObject | undefined)
+      : responseBody) as RawObject | null | undefined
 
     if (respBody) {
       // Claude 响应特征
+      const respType = typeof respBody.type === 'string' ? respBody.type : ''
       if (
-        respBody.type === 'message' ||
-        respBody.type?.startsWith('content_block') ||
-        respBody.type?.startsWith('message_')
+        respType === 'message' ||
+        respType.startsWith('content_block') ||
+        respType.startsWith('message_')
       ) {
         return 90
       }
       // 明确是 OpenAI 格式
-      if (respBody.choices || respBody.object?.includes('chat.completion')) {
+      const respObject = typeof respBody.object === 'string' ? respBody.object : ''
+      if (respBody.choices || respObject.includes('chat.completion')) {
         return 0
       }
     }
 
     // 5. 检查 Claude 特有的请求字段
-    if (requestBody.system !== undefined) {
+    if (req.system !== undefined) {
       // system 可以是字符串或数组，这是 Claude 的特征
       return 70
     }
@@ -94,26 +101,27 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析请求体
    */
-  parseRequest(requestBody: any): ParsedConversation {
+  parseRequest(requestBody: unknown): ParsedConversation {
     if (!requestBody) {
       return createEmptyConversation('claude', '无请求体')
     }
 
     try {
+      const body = requestBody as RawObject
       const result: ParsedConversation = {
         messages: [],
-        isStream: requestBody.stream === true,
+        isStream: body.stream === true,
         apiFormat: 'claude',
-        model: requestBody.model,
+        model: typeof body.model === 'string' ? body.model : undefined,
       }
 
       // 提取 system prompt
-      result.system = this.extractSystemPrompt(requestBody.system)
+      result.system = this.extractSystemPrompt(body.system)
 
       // 提取 messages
-      if (Array.isArray(requestBody.messages)) {
-        for (const msg of requestBody.messages) {
-          const parsedMsg = this.parseMessage(msg)
+      if (Array.isArray(body.messages)) {
+        for (const msg of body.messages) {
+          const parsedMsg = this.parseMessage(msg as RawObject)
           if (parsedMsg) {
             result.messages.push(parsedMsg)
           }
@@ -129,22 +137,23 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析响应体
    */
-  parseResponse(responseBody: any): ParsedConversation {
+  parseResponse(responseBody: unknown): ParsedConversation {
     if (!responseBody) {
       return createEmptyConversation('claude', '无响应体')
     }
 
     try {
+      const body = responseBody as RawObject
       const result: ParsedConversation = {
         messages: [],
         isStream: false,
         apiFormat: 'claude',
-        model: responseBody.model,
+        model: typeof body.model === 'string' ? body.model : undefined,
       }
 
       // Claude 响应格式: { type: "message", content: [...] }
-      if (Array.isArray(responseBody.content)) {
-        const contentBlocks = this.parseContentBlocks(responseBody.content, 'assistant')
+      if (Array.isArray(body.content)) {
+        const contentBlocks = this.parseContentBlocks(body.content as RawObject[], 'assistant')
         if (contentBlocks.length > 0) {
           result.messages.push(createMessage('assistant', contentBlocks))
         }
@@ -159,7 +168,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析流式响应
    */
-  parseStreamResponse(chunks: any[]): ParsedConversation {
+  parseStreamResponse(chunks: unknown[]): ParsedConversation {
     if (!chunks || chunks.length === 0) {
       return createEmptyConversation('claude', '无响应数据')
     }
@@ -175,47 +184,49 @@ export class ClaudeParser implements ApiFormatParser {
       const blocks = new Map<number, {
         type: ContentBlock['type']
         parts: string[]
-        metadata?: any
+        metadata?: Record<string, string>
       }>()
 
-      for (const chunk of chunks) {
+      for (const rawChunk of chunks) {
+        const chunk = rawChunk as RawObject
         // 提取模型名
-        if (chunk.message?.model && !result.model) {
-          result.model = chunk.message.model
+        const chunkMessage = chunk.message as RawObject | undefined
+        if (typeof chunkMessage?.model === 'string' && !result.model) {
+          result.model = chunkMessage.model
         }
 
         if (chunk.type === 'content_block_start') {
-          const index = chunk.index ?? 0
-          const block = chunk.content_block
+          const index = (typeof chunk.index === 'number' ? chunk.index : 0)
+          const block = chunk.content_block as RawObject | undefined
           if (block?.type === 'text') {
-            blocks.set(index, { type: 'text', parts: [block.text || ''] })
+            blocks.set(index, { type: 'text', parts: [String(block.text || '')] })
           } else if (block?.type === 'thinking') {
             blocks.set(index, {
               type: 'thinking',
-              parts: [block.thinking || ''],
-              metadata: { signature: block.signature },
+              parts: [String(block.thinking || '')],
+              metadata: { signature: String(block.signature || '') },
             })
           } else if (block?.type === 'tool_use') {
             blocks.set(index, {
               type: 'tool_use',
               parts: [],
-              metadata: { toolName: block.name, toolId: block.id },
+              metadata: { toolName: String(block.name || ''), toolId: String(block.id || '') },
             })
           }
         } else if (chunk.type === 'content_block_delta') {
-          const index = chunk.index ?? 0
-          const delta = chunk.delta
+          const index = (typeof chunk.index === 'number' ? chunk.index : 0)
+          const delta = chunk.delta as RawObject | undefined
           const block = blocks.get(index)
-          if (block) {
-            if (delta?.type === 'text_delta') {
-              block.parts.push(delta.text || '')
-            } else if (delta?.type === 'thinking_delta') {
-              block.parts.push(delta.thinking || '')
-            } else if (delta?.type === 'input_json_delta') {
-              block.parts.push(delta.partial_json || '')
-            } else if (delta?.type === 'signature_delta') {
+          if (block && delta) {
+            if (delta.type === 'text_delta') {
+              block.parts.push(String(delta.text || ''))
+            } else if (delta.type === 'thinking_delta') {
+              block.parts.push(String(delta.thinking || ''))
+            } else if (delta.type === 'input_json_delta') {
+              block.parts.push(String(delta.partial_json || ''))
+            } else if (delta.type === 'signature_delta') {
               block.metadata = block.metadata || {}
-              block.metadata.signature = (block.metadata.signature || '') + (delta.signature || '')
+              block.metadata.signature = (block.metadata.signature || '') + String(delta.signature || '')
             }
           }
         }
@@ -258,7 +269,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 提取 system prompt
    */
-  private extractSystemPrompt(system: any): string | undefined {
+  private extractSystemPrompt(system: unknown): string | undefined {
     if (!system) return undefined
 
     if (typeof system === 'string') {
@@ -267,8 +278,8 @@ export class ClaudeParser implements ApiFormatParser {
 
     if (Array.isArray(system)) {
       return system
-        .filter((b: any) => b.type === 'text')
-        .map((b: any) => b.text)
+        .filter((b: RawObject) => b.type === 'text')
+        .map((b: RawObject) => String(b.text || ''))
         .join('\n')
     }
 
@@ -278,7 +289,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析单条消息
    */
-  private parseMessage(msg: any): ParsedMessage | null {
+  private parseMessage(msg: RawObject): ParsedMessage | null {
     if (!msg || !msg.role) return null
 
     const role = msg.role as MessageRole
@@ -292,13 +303,13 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析消息内容
    */
-  private parseMessageContent(content: any, role: MessageRole): ContentBlock[] {
+  private parseMessageContent(content: unknown, role: MessageRole): ContentBlock[] {
     if (typeof content === 'string') {
       return [createTextBlock(content)]
     }
 
     if (Array.isArray(content)) {
-      return this.parseContentBlocks(content, role)
+      return this.parseContentBlocks(content as RawObject[], role)
     }
 
     return []
@@ -307,7 +318,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析内容块数组
    */
-  private parseContentBlocks(blocks: any[], role: MessageRole): ContentBlock[] {
+  private parseContentBlocks(blocks: RawObject[], role: MessageRole): ContentBlock[] {
     const result: ContentBlock[] = []
 
     for (const block of blocks) {
@@ -323,28 +334,31 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析单个内容块
    */
-  private parseContentBlock(block: any, _role: MessageRole): ContentBlock | null {
+  private parseContentBlock(block: RawObject, _role: MessageRole): ContentBlock | null {
     if (!block || !block.type) return null
 
     switch (block.type) {
       case 'text':
-        return createTextBlock(block.text || '')
+        return createTextBlock(String(block.text || ''))
 
       case 'thinking':
-        return createThinkingBlock(block.thinking || '', block.signature)
+        return createThinkingBlock(
+          String(block.thinking || ''),
+          typeof block.signature === 'string' ? block.signature : undefined
+        )
 
       case 'tool_use':
         return createToolUseBlock(
-          block.id || '',
-          block.name || '',
-          block.input || {}
+          String(block.id || ''),
+          String(block.name || ''),
+          (block.input as Record<string, unknown>) || {}
         )
 
       case 'tool_result':
         return createToolResultBlock(
-          block.tool_use_id || '',
+          String(block.tool_use_id || ''),
           this.parseToolResultContent(block.content),
-          block.is_error
+          block.is_error as boolean | undefined
         )
 
       case 'image':
@@ -358,23 +372,23 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析图片块
    */
-  private parseImageBlock(block: any): ContentBlock | null {
-    const source = block.source
+  private parseImageBlock(block: RawObject): ContentBlock | null {
+    const source = block.source as RawObject | undefined
     if (!source) {
       return createImageBlock('base64', { alt: '[图片]' })
     }
 
     if (source.type === 'base64') {
       return createImageBlock('base64', {
-        data: source.data,
-        mimeType: source.media_type,
+        data: typeof source.data === 'string' ? source.data : undefined,
+        mimeType: typeof source.media_type === 'string' ? source.media_type : undefined,
       })
     }
 
     if (source.type === 'url') {
       return createImageBlock('url', {
-        url: source.url,
-        mimeType: source.media_type,
+        url: typeof source.url === 'string' ? source.url : undefined,
+        mimeType: typeof source.media_type === 'string' ? source.media_type : undefined,
       })
     }
 
@@ -384,16 +398,17 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 解析工具结果内容
    */
-  private parseToolResultContent(content: any): string | ContentBlock[] {
+  private parseToolResultContent(content: unknown): string | ContentBlock[] {
     if (typeof content === 'string') {
       return content
     }
 
     if (Array.isArray(content)) {
       const blocks: ContentBlock[] = []
-      for (const item of content) {
+      for (const rawItem of content) {
+        const item = rawItem as RawObject
         if (item.type === 'text') {
-          blocks.push(createTextBlock(item.text || ''))
+          blocks.push(createTextBlock(String(item.text || '')))
         } else if (item.type === 'image') {
           const imgBlock = this.parseImageBlock(item)
           if (imgBlock) blocks.push(imgBlock)
@@ -412,17 +427,18 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染请求体
    */
-  renderRequest(requestBody: any): RenderResult {
+  renderRequest(requestBody: unknown): RenderResult {
     if (!requestBody) {
       return createEmptyRenderResult('无请求体')
     }
 
     try {
+      const body = requestBody as RawObject
       const blocks: RenderBlock[] = []
-      const isStream = requestBody.stream === true
+      const isStream = body.stream === true
 
       // 渲染 system prompt
-      const system = this.extractSystemPrompt(requestBody.system)
+      const system = this.extractSystemPrompt(body.system)
       if (system) {
         blocks.push(createMessageBlock('system', [
           createTextRenderBlock(system),
@@ -430,9 +446,9 @@ export class ClaudeParser implements ApiFormatParser {
       }
 
       // 渲染 messages
-      if (Array.isArray(requestBody.messages)) {
-        for (const msg of requestBody.messages) {
-          const msgBlock = this.renderMessage(msg)
+      if (Array.isArray(body.messages)) {
+        for (const msg of body.messages) {
+          const msgBlock = this.renderMessage(msg as RawObject)
           if (msgBlock) {
             blocks.push(msgBlock)
           }
@@ -448,7 +464,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染响应体
    */
-  renderResponse(responseBody: any): RenderResult {
+  renderResponse(responseBody: unknown): RenderResult {
     if (!responseBody) {
       return createEmptyRenderResult('无响应体')
     }
@@ -459,13 +475,15 @@ export class ClaudeParser implements ApiFormatParser {
     }
 
     try {
+      const body = responseBody as RawObject
       const blocks: RenderBlock[] = []
 
       // Claude 响应格式: { type: "message", content: [...] }
-      if (Array.isArray(responseBody.content)) {
-        const contentBlocks = this.renderContentBlocks(responseBody.content)
+      if (Array.isArray(body.content)) {
+        const rawContent = body.content as RawObject[]
+        const contentBlocks = this.renderContentBlocks(rawContent)
         if (contentBlocks.length > 0) {
-          const badges = this.getBadgesForContent(responseBody.content)
+          const badges = this.getBadgesForContent(rawContent)
           blocks.push(createMessageBlock('assistant', contentBlocks, {
             roleLabel: 'Assistant',
             badges,
@@ -482,7 +500,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染流式响应
    */
-  private renderStreamResponse(chunks: any[]): RenderResult {
+  private renderStreamResponse(chunks: unknown[]): RenderResult {
     if (!chunks || chunks.length === 0) {
       return createEmptyRenderResult('无响应数据')
     }
@@ -517,7 +535,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染单条消息
    */
-  private renderMessage(msg: any): RenderBlock | null {
+  private renderMessage(msg: RawObject): RenderBlock | null {
     if (!msg || !msg.role) return null
 
     const role = msg.role as MessageRole
@@ -536,13 +554,13 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染消息内容
    */
-  private renderMessageContent(content: any): RenderBlock[] {
+  private renderMessageContent(content: unknown): RenderBlock[] {
     if (typeof content === 'string') {
       return [createTextRenderBlock(content)]
     }
 
     if (Array.isArray(content)) {
-      return this.renderContentBlocks(content)
+      return this.renderContentBlocks(content as RawObject[])
     }
 
     return []
@@ -551,7 +569,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染原始内容块数组
    */
-  private renderContentBlocks(blocks: any[]): RenderBlock[] {
+  private renderContentBlocks(blocks: RawObject[]): RenderBlock[] {
     const result: RenderBlock[] = []
 
     for (const block of blocks) {
@@ -567,30 +585,30 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染单个原始内容块
    */
-  private renderContentBlock(block: any): RenderBlock | null {
+  private renderContentBlock(block: RawObject): RenderBlock | null {
     if (!block || !block.type) return null
 
     switch (block.type) {
       case 'text':
-        return createTextRenderBlock(block.text || '')
+        return createTextRenderBlock(String(block.text || ''))
 
       case 'thinking':
         return createCollapsibleBlock(
-          `思考过程 (${(block.thinking || '').length} 字符)`,
-          [createCodeBlock(block.thinking || '')],
+          `思考过程 (${String(block.thinking || '').length} 字符)`,
+          [createCodeBlock(String(block.thinking || ''))],
           { defaultOpen: false, className: 'thinking-block' }
         )
 
       case 'tool_use':
         return createToolUseRenderBlock(
-          block.name || '工具调用',
+          String(block.name || '工具调用'),
           this.formatJson(block.input),
-          block.id
+          typeof block.id === 'string' ? block.id : undefined
         )
 
       case 'tool_result': {
         const content = this.formatToolResultContent(block.content)
-        return createToolResultRenderBlock(content, block.is_error)
+        return createToolResultRenderBlock(content, block.is_error as boolean | undefined)
       }
 
       case 'image':
@@ -666,8 +684,8 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 渲染图片块
    */
-  private renderImageBlock(block: any): RenderBlock | null {
-    const source = block.source
+  private renderImageBlock(block: RawObject): RenderBlock | null {
+    const source = block.source as RawObject | undefined
     if (!source) {
       return createImageRenderBlock({ alt: '[图片]' })
     }
@@ -675,14 +693,14 @@ export class ClaudeParser implements ApiFormatParser {
     if (source.type === 'base64') {
       return createImageRenderBlock({
         src: `data:${source.media_type || 'image/png'};base64,${source.data}`,
-        mimeType: source.media_type,
+        mimeType: typeof source.media_type === 'string' ? source.media_type : undefined,
       })
     }
 
     if (source.type === 'url') {
       return createImageRenderBlock({
-        src: source.url,
-        mimeType: source.media_type,
+        src: typeof source.url === 'string' ? source.url : undefined,
+        mimeType: typeof source.media_type === 'string' ? source.media_type : undefined,
       })
     }
 
@@ -705,11 +723,11 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 获取原始内容的徽章
    */
-  private getBadgesForRawContent(content: any): BadgeRenderBlock[] {
+  private getBadgesForRawContent(content: unknown): BadgeRenderBlock[] {
     if (!Array.isArray(content)) return []
 
     const badges: BadgeRenderBlock[] = []
-    const types = new Set(content.map((b: any) => b.type))
+    const types = new Set(content.map((b: RawObject) => b.type))
 
     if (types.has('thinking')) {
       badges.push(createBadgeBlock('思考', 'secondary'))
@@ -730,7 +748,7 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 获取内容的徽章
    */
-  private getBadgesForContent(content: any[]): BadgeRenderBlock[] {
+  private getBadgesForContent(content: RawObject[]): BadgeRenderBlock[] {
     return this.getBadgesForRawContent(content)
   }
 
@@ -760,10 +778,10 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 格式化 JSON
    */
-  private formatJson(input: any): string {
+  private formatJson(input: unknown): string {
     if (typeof input === 'string') {
       try {
-        const parsed = JSON.parse(input)
+        const parsed = JSON.parse(input) as unknown
         return JSON.stringify(parsed, null, 2)
       } catch {
         return input
@@ -775,15 +793,15 @@ export class ClaudeParser implements ApiFormatParser {
   /**
    * 格式化工具结果内容
    */
-  private formatToolResultContent(content: any): string {
+  private formatToolResultContent(content: unknown): string {
     if (typeof content === 'string') {
       return content
     }
 
     if (Array.isArray(content)) {
       return content
-        .map((item: any) => {
-          if (item.type === 'text') return item.text
+        .map((item: RawObject) => {
+          if (item.type === 'text') return String(item.text || '')
           if (item.type === 'image') return '[图片]'
           return ''
         })

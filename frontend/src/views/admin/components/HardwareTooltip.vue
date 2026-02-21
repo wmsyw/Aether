@@ -2,24 +2,23 @@
 import type { ProxyNode } from '@/api/proxy-nodes'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Cpu } from 'lucide-vue-next'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps<{ node: ProxyNode }>()
-const open = ref(false)
 
-const hardwareInfo = computed<Record<string, any> | null>(() => {
+const hardwareInfo = computed<Record<string, unknown> | null>(() => {
   const info = props.node.hardware_info
   if (info == null) return null
   if (typeof info === 'string') {
     try {
       const parsed = JSON.parse(info)
-      if (parsed && typeof parsed === 'object') return parsed as Record<string, any>
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>
     } catch {
       return {}
     }
     return {}
   }
-  if (typeof info === 'object') return info as Record<string, any>
+  if (typeof info === 'object') return info as Record<string, unknown>
   return {}
 })
 
@@ -27,16 +26,18 @@ const hardwareRows = computed(() => {
   const info = hardwareInfo.value ?? {}
   const rows: Array<{ label: string; value: string }> = []
 
-  const cpuCores = pickNumber(info.cpu_cores, info.cpu_count, info.cpu?.cores)
+  const cpuObj = info.cpu as Record<string, unknown> | undefined
+  const cpuCores = pickNumber(info.cpu_cores, info.cpu_count, cpuObj?.cores)
   if (cpuCores != null) {
     rows.push({ label: 'CPU', value: `${cpuCores} cores` })
   }
 
+  const memObj = info.memory as Record<string, unknown> | undefined
   const memoryMb = pickNumber(
     info.total_memory_mb,
     info.memory_total_mb,
     info.memory_mb,
-    info.memory?.total_mb
+    memObj?.total_mb
   )
   if (memoryMb != null) {
     rows.push({ label: 'RAM', value: formatMemory(memoryMb) })
@@ -60,11 +61,6 @@ const hardwareRows = computed(() => {
   }
 
   return rows
-})
-
-const tooltipTitle = computed(() => {
-  if (hardwareRows.value.length === 0) return '暂无硬件信息上报'
-  return hardwareRows.value.map(row => `${row.label}: ${row.value}`).join(' | ')
 })
 
 const showHardwareInfo = computed(
@@ -103,13 +99,7 @@ function pickString(...values: unknown[]): string {
   return ''
 }
 
-function toggleTooltip() {
-  open.value = !open.value
-}
 
-function handleOpenChange(value: boolean) {
-  open.value = value
-}
 </script>
 
 <template>
@@ -117,22 +107,14 @@ function handleOpenChange(value: boolean) {
     v-if="showHardwareInfo"
     :delay-duration="0"
   >
-    <Tooltip
-      :open="open"
-      @update:open="handleOpenChange"
-    >
+    <Tooltip>
       <TooltipTrigger as-child>
-        <button
-          type="button"
+        <span
           aria-label="硬件信息"
-          :title="tooltipTitle"
           class="inline-flex items-center justify-center rounded-sm p-0.5 hover:bg-muted/60 transition-colors cursor-help"
-          @click.stop="toggleTooltip"
-          @keydown.enter.prevent.stop="toggleTooltip"
-          @keydown.space.prevent.stop="toggleTooltip"
         >
           <Cpu class="h-3.5 w-3.5 text-muted-foreground" />
-        </button>
+        </span>
       </TooltipTrigger>
       <TooltipContent
         side="right"

@@ -200,11 +200,12 @@ import {
   type ProviderModelAlias
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
-import { parseTestModelError } from '@/utils/errorParser'
+import { parseApiError, parseTestModelError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 
 const props = defineProps<{
-  provider: any
+  provider: ProviderWithEndpointsSummary
 }>()
 
 const emit = defineEmits<{
@@ -264,7 +265,7 @@ const aliasGroups = computed<AliasGroup[]>(() => {
         groupMap.set(groupKey, group)
         groups.push(group)
       }
-      groupMap.get(groupKey)!.aliases.push(alias)
+      groupMap.get(groupKey)?.aliases.push(alias)
     }
   }
 
@@ -285,8 +286,8 @@ async function loadModels() {
   try {
     loading.value = true
     models.value = await getProviderModels(props.provider.id)
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '加载失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载失败'), '错误')
   } finally {
     loading.value = false
   }
@@ -361,8 +362,8 @@ async function confirmDelete() {
     deletingGroup.value = null
     await loadModels()
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '删除失败'), '错误')
   }
 }
 
@@ -373,7 +374,7 @@ async function onDialogSaved() {
 }
 
 // 测试模型映射
-async function testMapping(group: any, mapping: any) {
+async function testMapping(group: AliasGroup, mapping: ProviderModelAlias) {
   const testingKey = `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`
   testingMapping.value = testingKey
 
@@ -407,9 +408,8 @@ async function testMapping(group: any, mapping: any) {
     } else {
       showError(`映射测试失败: ${parseTestModelError(result)}`)
     }
-  } catch (err: any) {
-    const errorMsg = err.response?.data?.detail || err.message || '测试请求失败'
-    showError(`映射测试失败: ${errorMsg}`)
+  } catch (err: unknown) {
+    showError(`映射测试失败: ${parseApiError(err, '测试请求失败')}`)
   } finally {
     testingMapping.value = null
   }

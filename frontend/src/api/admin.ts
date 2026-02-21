@@ -28,8 +28,8 @@ export interface OAuthProviderExport {
   scopes?: string[] | null
   redirect_uri: string
   frontend_callback_url: string
-  attribute_mapping?: any
-  extra_config?: any
+  attribute_mapping?: Record<string, unknown>
+  extra_config?: Record<string, unknown>
   is_enabled?: boolean
 }
 
@@ -59,7 +59,7 @@ export interface UserExport {
   allowed_providers?: string[] | null
   allowed_api_formats?: string[] | null
   allowed_models?: string[] | null
-  model_capability_settings?: any
+  model_capability_settings?: Record<string, Record<string, boolean>>
   quota_usd?: number | null
   used_usd?: number
   total_usd?: number
@@ -79,7 +79,7 @@ export interface UserApiKeyExport {
   allowed_models?: string[] | null
   rate_limit?: number | null  // null = 无限制
   concurrent_limit?: number | null
-  force_capabilities?: any
+  force_capabilities?: Record<string, boolean>
   is_active: boolean
   expires_at?: string | null
   auto_delete_on_expiry?: boolean
@@ -94,9 +94,9 @@ export interface GlobalModelExport {
   name: string
   display_name: string
   default_price_per_request?: number | null
-  default_tiered_pricing: any
+  default_tiered_pricing: Record<string, unknown>
   supported_capabilities?: string[] | null
-  config?: any
+  config?: Record<string, unknown>
   is_active: boolean
 }
 
@@ -112,8 +112,8 @@ export interface ProviderExport {
   is_active: boolean
   concurrent_limit?: number | null
   max_retries?: number | null
-  proxy?: any
-  config?: any
+  proxy?: Record<string, unknown>
+  config?: Record<string, unknown>
   endpoints: EndpointExport[]
   api_keys: ProviderKeyExport[]
   models: ModelExport[]
@@ -122,12 +122,12 @@ export interface ProviderExport {
 export interface EndpointExport {
   api_format: string
   base_url: string
-  headers?: any
+  headers?: Record<string, unknown>
   max_retries?: number
   is_active: boolean
   custom_path?: string | null
-  config?: any
-  proxy?: any
+  config?: Record<string, unknown>
+  proxy?: Record<string, unknown>
 }
 
 export interface ProviderKeyExport {
@@ -139,8 +139,8 @@ export interface ProviderKeyExport {
   internal_priority?: number
   global_priority_by_format?: Record<string, number> | null
   rpm_limit?: number | null
-  allowed_models?: any
-  capabilities?: any
+  allowed_models?: string[] | null
+  capabilities?: Record<string, boolean>
   cache_ttl_minutes?: number
   max_probe_interval_minutes?: number
   is_active: boolean
@@ -149,16 +149,16 @@ export interface ProviderKeyExport {
 export interface ModelExport {
   global_model_name: string | null
   provider_model_name: string
-  provider_model_mappings?: any
+  provider_model_mappings?: Record<string, unknown>
   price_per_request?: number | null
-  tiered_pricing?: any
+  tiered_pricing?: Record<string, unknown>
   supports_vision?: boolean | null
   supports_function_calling?: boolean | null
   supports_streaming?: boolean | null
   supports_extended_thinking?: boolean | null
   supports_image_generation?: boolean | null
   is_active: boolean
-  config?: any
+  config?: Record<string, unknown>
 }
 
 // 邮件模板接口
@@ -533,14 +533,14 @@ export const adminApi = {
 
   // 系统配置相关
   // 获取所有系统配置
-  async getAllSystemConfigs(): Promise<any[]> {
-    const response = await apiClient.get<any[]>('/api/admin/system/configs')
+  async getAllSystemConfigs(): Promise<Array<{ key: string; value: unknown; description?: string }>> {
+    const response = await apiClient.get<Array<{ key: string; value: unknown; description?: string }>>('/api/admin/system/configs')
     return response.data
   },
 
   // 获取特定系统配置
-  async getSystemConfig(key: string): Promise<{ key: string; value: any }> {
-    const response = await apiClient.get<{ key: string; value: any }>(
+  async getSystemConfig(key: string): Promise<{ key: string; value: unknown }> {
+    const response = await apiClient.get<{ key: string; value: unknown }>(
       `/api/admin/system/configs/${key}`
     )
     return response.data
@@ -549,10 +549,10 @@ export const adminApi = {
   // 更新系统配置
   async updateSystemConfig(
     key: string,
-    value: any,
+    value: unknown,
     description?: string
-  ): Promise<{ key: string; value: any; description?: string }> {
-    const response = await apiClient.put<{ key: string; value: any; description?: string }>(
+  ): Promise<{ key: string; value: unknown; description?: string }> {
+    const response = await apiClient.put<{ key: string; value: unknown; description?: string }>(
       `/api/admin/system/configs/${key}`,
       { value, description }
     )
@@ -568,8 +568,8 @@ export const adminApi = {
   },
 
   // 获取系统统计
-  async getSystemStats(): Promise<any> {
-    const response = await apiClient.get<any>('/api/admin/system/stats')
+  async getSystemStats(): Promise<Record<string, unknown>> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/admin/system/stats')
     return response.data
   },
 
@@ -621,7 +621,7 @@ export const adminApi = {
   },
 
   // 测试 SMTP 连接，支持传入未保存的配置
-  async testSmtpConnection(config: Record<string, any> = {}): Promise<{ success: boolean; message: string }> {
+  async testSmtpConnection(config: Record<string, unknown> = {}): Promise<{ success: boolean; message: string }> {
     const response = await apiClient.post<{ success: boolean; message: string }>(
       '/api/admin/system/smtp/test',
       config
@@ -860,8 +860,8 @@ export const adminApi = {
     user_id?: string
     model?: string
     provider_name?: string
-  }): Promise<any[]> {
-    const response = await apiClient.get<any[]>('/api/admin/stats/time-series', { params })
+  }): Promise<Array<Record<string, unknown>>> {
+    const response = await apiClient.get<Array<Record<string, unknown>>>('/api/admin/stats/time-series', { params })
     return response.data
   },
 

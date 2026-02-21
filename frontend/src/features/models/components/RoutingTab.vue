@@ -606,6 +606,7 @@ import {
 import { API_FORMAT_ORDER } from '@/api/endpoints/types'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { recoverKeyHealth } from '@/api/endpoints/health'
+import { parseApiError } from '@/utils/errorParser'
 import { useToast } from '@/composables/useToast'
 import { useCountdownTimer, getProbeCountdown } from '@/composables/useCountdownTimer'
 import { MAX_MODEL_NAME_LENGTH, createLRURegexCache, getCompiledModelMappingRegex } from '@/features/models/utils/model-mapping-regex'
@@ -696,7 +697,8 @@ const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
         formatMap.set(format, { providers: [], allKeys: [] })
       }
 
-      const data = formatMap.get(format)!
+      const data = formatMap.get(format)
+      if (!data) continue
 
       // 添加 provider entry
       data.providers.push({
@@ -739,7 +741,7 @@ const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
       if (!keyGroupMap.has(priority)) {
         keyGroupMap.set(priority, [])
       }
-      keyGroupMap.get(priority)!.push(keyEntry)
+      keyGroupMap.get(priority)?.push(keyEntry)
     }
 
     // 转换为分组数组并排序
@@ -847,8 +849,8 @@ async function loadRoutingData() {
 
     internalRoutingData.value = data
     compiledGlobalModelMappingRegexes.value = compiled
-  } catch (err: any) {
-    internalError.value = err.response?.data?.detail || '加载失败'
+  } catch (err: unknown) {
+    internalError.value = parseApiError(err, '加载失败')
   } finally {
     internalLoading.value = false
   }
@@ -977,7 +979,7 @@ function getKeyPriorityGroups(keys: RoutingKeyInfo[]): KeyPriorityGroup[] {
         keys: []
       })
     }
-    groups.get(priority)!.keys.push(key)
+    groups.get(priority)?.keys.push(key)
   }
 
   return Array.from(groups.values()).sort((a, b) => {
@@ -1121,8 +1123,8 @@ async function handleRecoverKey(keyId: string, apiFormat: string) {
     // 通知父组件刷新数据
     emit('refresh')
     showSuccess(result.message || 'Key 已恢复')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || 'Key 恢复失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, 'Key 恢复失败'), '错误')
   }
 }
 

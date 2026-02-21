@@ -17,7 +17,7 @@
         <ul class="space-y-1 text-muted-foreground">
           <li>用户: {{ importUsersPreview.users?.length || 0 }} 个</li>
           <li>
-            API Keys: {{ importUsersPreview.users?.reduce((sum: number, u: any) => sum + (u.api_keys?.length || 0), 0) }} 个
+            API Keys: {{ importUsersPreview.users?.reduce((sum: number, u: { api_keys?: unknown[] }) => sum + (u.api_keys?.length || 0), 0) }} 个
           </li>
           <li v-if="importUsersPreview.standalone_keys?.length">
             独立余额 Keys: {{ importUsersPreview.standalone_keys.length }} 个

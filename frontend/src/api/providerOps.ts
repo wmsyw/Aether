@@ -45,17 +45,17 @@ export interface ArchitectureInfo {
   architecture_id: string
   display_name: string
   description: string
-  credentials_schema: Record<string, any>
+  credentials_schema: Record<string, unknown>
   supported_auth_types: Array<{
     type: string
     display_name: string
-    credentials_schema?: Record<string, any>
+    credentials_schema?: Record<string, unknown>
   }>
   supported_actions: Array<{
     type: string
     display_name: string
     description: string
-    config_schema: Record<string, any>
+    config_schema: Record<string, unknown>
   }>
   default_connector: string | null
 }
@@ -85,7 +85,7 @@ export interface BalanceInfo {
   total_available: number | null
   expires_at: string | null
   currency: string
-  extra: Record<string, any> & {
+  extra: Record<string, unknown> & {
     // Anyrouter 签到信息
     checkin_success?: boolean | null  // true=成功, false=失败, null=已签到/跳过
     checkin_message?: string
@@ -98,7 +98,7 @@ export interface CheckinInfo {
   streak_days: number | null
   next_reward: number | null
   message: string | null
-  extra: Record<string, any>
+  extra: Record<string, unknown>
 }
 
 /** 操作结果响应 */
@@ -115,14 +115,14 @@ export interface ActionResultResponse {
 /** 连接器配置请求 */
 export interface ConnectorConfigRequest {
   auth_type: ConnectorAuthType
-  config: Record<string, any>
-  credentials: Record<string, any>
+  config: Record<string, unknown>
+  credentials: Record<string, unknown>
 }
 
 /** 操作配置请求 */
 export interface ActionConfigRequest {
   enabled: boolean
-  config: Record<string, any>
+  config: Record<string, unknown>
 }
 
 /** 保存配置请求 */
@@ -136,12 +136,12 @@ export interface SaveConfigRequest {
 
 /** 连接请求 */
 export interface ConnectRequest {
-  credentials?: Record<string, any>
+  credentials?: Record<string, unknown>
 }
 
 /** 执行操作请求 */
 export interface ExecuteActionRequest {
-  config?: Record<string, any>
+  config?: Record<string, unknown>
 }
 
 // ==================== API Functions ====================
@@ -186,8 +186,8 @@ export interface ProviderOpsConfigResponse {
   base_url?: string
   connector?: {
     auth_type: string
-    config: Record<string, any>
-    credentials: Record<string, any>
+    config: Record<string, unknown>
+    credentials: Record<string, unknown>
   }
 }
 
@@ -339,9 +339,9 @@ export interface VerifyAuthResponse {
     quota?: number
     used_quota?: number
     request_count?: number
-    extra?: Record<string, any>
+    extra?: Record<string, unknown>
   }
-  updated_credentials?: Record<string, any>
+  updated_credentials?: Record<string, unknown>
 }
 
 /**

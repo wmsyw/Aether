@@ -5,7 +5,6 @@ import type {
   ModelUpdate,
   ModelCatalogResponse,
   ProviderAvailableSourceModelsResponse,
-  UpstreamModel,
   ImportFromUpstreamResponse,
 } from './types'
 

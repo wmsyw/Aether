@@ -719,6 +719,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useUsersStore } from '@/stores/users'
+import type { User, ApiKey } from '@/api/users'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useClipboard } from '@/composables/useClipboard'
@@ -767,6 +768,7 @@ import {
 
 // 功能组件
 import UserFormDialog, { type UserFormData } from '@/features/users/components/UserFormDialog.vue'
+import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
@@ -782,8 +784,8 @@ const userFormDialogRef = ref<InstanceType<typeof UserFormDialog>>()
 // API Keys 对话框状态
 const showApiKeysDialog = ref(false)
 const showNewApiKeyDialog = ref(false)
-const selectedUser = ref<any>(null)
-const userApiKeys = ref<any[]>([])
+const selectedUser = ref<User | null>(null)
+const userApiKeys = ref<ApiKey[]>([])
 const newApiKey = ref('')
 const creatingApiKey = ref(false)
 const apiKeyInput = ref<HTMLInputElement>()
@@ -861,7 +863,7 @@ async function loadUserStats() {
   loadingStats.value = true
   try {
     const data = await usageApi.getUsageByUser()
-    userStats.value = data.reduce((acc: any, stat: any) => {
+    userStats.value = data.reduce((acc: Record<string, UsageByUser>, stat: UsageByUser) => {
       acc[stat.user_id] = stat
       return acc
     }, {})
@@ -886,7 +888,7 @@ function formatNumber(value?: number | null): string {
   return numericValue.toLocaleString()
 }
 
-async function toggleUserStatus(user: any) {
+async function toggleUserStatus(user: User) {
   const action = user.is_active ? '禁用' : '启用'
   const confirmed = await confirmDanger(
     `确定要${action}用户 ${user.username} 吗？`,
@@ -899,8 +901,8 @@ async function toggleUserStatus(user: any) {
   try {
     await usersStore.updateUser(user.id, { is_active: !user.is_active })
     success(`用户已${action}`)
-  } catch (err: any) {
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', `${action}用户失败`)
+  } catch (err: unknown) {
+    error(parseApiError(err, '未知错误'), `${action}用户失败`)
   }
 }
 
@@ -911,7 +913,7 @@ function openCreateDialog() {
   showUserFormDialog.value = true
 }
 
-function editUser(user: any) {
+function editUser(user: User) {
   // 创建数组副本，避免与 store 数据共享引用
   editingUser.value = {
     id: user.id,
@@ -937,7 +939,7 @@ async function handleUserFormSubmit(data: UserFormData & { password?: string }) 
   try {
     if (data.id) {
       // 更新用户
-      const updateData: any = {
+      const updateData: Record<string, unknown> = {
         username: data.username,
         email: data.email || undefined,
         quota_usd: data.quota_usd,
@@ -955,10 +957,10 @@ async function handleUserFormSubmit(data: UserFormData & { password?: string }) 
       // 创建用户
       const newUser = await usersStore.createUser({
         username: data.username,
-        password: data.password!,
+        password: data.password ?? '',
         email: data.email || undefined,
         quota_usd: data.quota_usd,
-        unlimited: (data as any).unlimited,
+        unlimited: (data as Record<string, unknown>).unlimited as boolean | undefined,
         role: data.role,
         allowed_providers: data.allowed_providers,
         allowed_api_formats: data.allowed_api_formats,
@@ -971,15 +973,15 @@ async function handleUserFormSubmit(data: UserFormData & { password?: string }) 
       success('用户创建成功')
     }
     closeUserFormDialog()
-  } catch (err: any) {
+  } catch (err: unknown) {
     const title = data.id ? '更新用户失败' : '创建用户失败'
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', title)
+    error(parseApiError(err, '未知错误'), title)
   } finally {
     userFormDialogRef.value?.setSaving(false)
   }
 }
 
-async function manageApiKeys(user: any) {
+async function manageApiKeys(user: User) {
   selectedUser.value = user
   showApiKeysDialog.value = true
   await loadUserApiKeys(user.id)
@@ -1006,8 +1008,8 @@ async function createApiKey() {
     newApiKey.value = response.key || ''
     showNewApiKeyDialog.value = true
     await loadUserApiKeys(selectedUser.value.id)
-  } catch (err: any) {
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', '创建 API Key 失败')
+  } catch (err: unknown) {
+    error(parseApiError(err, '未知错误'), '创建 API Key 失败')
   } finally {
     creatingApiKey.value = false
   }
@@ -1026,7 +1028,7 @@ async function closeNewApiKeyDialog() {
   newApiKey.value = ''
 }
 
-async function deleteApiKey(apiKey: any) {
+async function deleteApiKey(apiKey: ApiKey) {
   const confirmed = await confirmDanger(
     `确定要删除这个API Key吗？\n\n${apiKey.key_display || 'sk-****'}\n\n此操作无法撤销。`,
     '删除 API Key'
@@ -1038,12 +1040,12 @@ async function deleteApiKey(apiKey: any) {
     await usersStore.deleteApiKey(selectedUser.value.id, apiKey.id)
     await loadUserApiKeys(selectedUser.value.id)
     success('API Key已删除')
-  } catch (err: any) {
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', '删除 API Key 失败')
+  } catch (err: unknown) {
+    error(parseApiError(err, '未知错误'), '删除 API Key 失败')
   }
 }
 
-async function toggleLockApiKey(apiKey: any) {
+async function toggleLockApiKey(apiKey: ApiKey) {
   try {
     const response = await adminApi.toggleLockApiKey(apiKey.id)
     // 更新本地状态
@@ -1052,24 +1054,24 @@ async function toggleLockApiKey(apiKey: any) {
       userApiKeys.value[index].is_locked = response.is_locked
     }
     success(response.message)
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('切换密钥锁定状态失败:', err)
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '操作失败', '锁定/解锁失败')
+    error(parseApiError(err, '操作失败'), '锁定/解锁失败')
   }
 }
 
-async function copyFullKey(apiKey: any) {
+async function copyFullKey(apiKey: ApiKey) {
   try {
     // 调用后端 API 获取完整密钥
     const response = await adminApi.getFullApiKey(apiKey.id)
     await copyToClipboard(response.key)
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('复制密钥失败:', err)
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', '复制密钥失败')
+    error(parseApiError(err, '未知错误'), '复制密钥失败')
   }
 }
 
-async function resetQuota(user: any) {
+async function resetQuota(user: User) {
   const confirmed = await confirmWarning(
     `确定要重置用户 ${user.username} 的配额使用量吗？\n\n这将把已使用金额重置为0。`,
     '重置配额'
@@ -1080,12 +1082,12 @@ async function resetQuota(user: any) {
   try {
     await usersStore.resetUserQuota(user.id)
     success('配额已重置')
-  } catch (err: any) {
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', '重置配额失败')
+  } catch (err: unknown) {
+    error(parseApiError(err, '未知错误'), '重置配额失败')
   }
 }
 
-async function deleteUser(user: any) {
+async function deleteUser(user: User) {
   const confirmed = await confirmDanger(
     `确定要删除用户 ${user.username} 吗？\n\n此操作将删除：\n• 用户账户\n• 所有API密钥\n• 所有使用记录\n\n此操作无法撤销！`,
     '删除用户'
@@ -1096,8 +1098,8 @@ async function deleteUser(user: any) {
   try {
     await usersStore.deleteUser(user.id)
     success('用户已删除')
-  } catch (err: any) {
-    error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', '删除用户失败')
+  } catch (err: unknown) {
+    error(parseApiError(err, '未知错误'), '删除用户失败')
   }
 }
 </script>

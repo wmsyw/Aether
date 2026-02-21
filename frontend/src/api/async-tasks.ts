@@ -56,8 +56,8 @@ export interface AsyncTaskRequestMetadata {
   user_agent: string
   request_id: string
   request_headers?: Record<string, string>
-  poll_raw_response?: any  // 轮询完成时的原始响应
-  billing_snapshot?: any   // 计费快照
+  poll_raw_response?: unknown  // 轮询完成时的原始响应
+  billing_snapshot?: unknown   // 计费快照
 }
 
 // 异步任务详情
@@ -68,8 +68,8 @@ export interface AsyncTaskDetail extends AsyncTaskItem {
   client_api_format: string
   provider_api_format: string
   format_converted: boolean
-  original_request_body: any
-  converted_request_body: any
+  original_request_body: unknown
+  converted_request_body: unknown
   size: string | null
   video_urls: string[] | null
   thumbnail_url: string | null

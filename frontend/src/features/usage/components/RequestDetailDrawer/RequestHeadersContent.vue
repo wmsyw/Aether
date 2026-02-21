@@ -165,11 +165,11 @@ const props = defineProps<{
   detail: RequestDetail
   viewMode: 'compare' | 'formatted' | 'raw'
   dataSource: 'client' | 'provider'
-  currentHeaderData: any
+  currentHeaderData: Record<string, unknown> | null
   currentExpandDepth: number
   hasProviderHeaders: boolean
-  clientHeadersWithDiff: Array<{ key: string; value: any; status: string }>
-  providerHeadersWithDiff: Array<{ key: string; value: any; status: string }>
+  clientHeadersWithDiff: Array<{ key: string; value: unknown; status: string }>
+  providerHeadersWithDiff: Array<{ key: string; value: unknown; status: string }>
   headerStats: { added: number; modified: number; removed: number; unchanged: number }
   isDark: boolean
 }>()

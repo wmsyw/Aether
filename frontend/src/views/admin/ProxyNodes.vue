@@ -587,6 +587,7 @@ import {
 } from '@/components/ui'
 
 import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, Copy } from 'lucide-vue-next'
+import { parseApiError } from '@/utils/errorParser'
 import { formatRegion } from '@/utils/region'
 import HardwareTooltip from './components/HardwareTooltip.vue'
 
@@ -678,8 +679,8 @@ async function handleTestUrl() {
     } else {
       toastError(`连通性测试失败: ${result.error || '未知错误'}`)
     }
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || '测试请求失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '测试请求失败'))
   } finally {
     testingUrl.value = false
   }
@@ -689,8 +690,8 @@ async function copyHmacKey() {
   try {
     const { proxy_hmac_key } = await proxyNodesApi.getHmacKey()
     await copyToClipboard(proxy_hmac_key)
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '获取 HMAC Key 失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '获取 HMAC Key 失败'))
   }
 }
 
@@ -730,8 +731,8 @@ async function handleUpdateManualNode() {
     success('代理节点已更新')
     handleDialogClose(false)
     await store.fetchNodes()
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '更新失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '更新失败'))
   } finally {
     addingNode.value = false
   }
@@ -751,8 +752,8 @@ async function handleAddManualNode() {
     })
     success('代理节点已添加')
     handleDialogClose(false)
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '添加失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '添加失败'))
   } finally {
     addingNode.value = false
   }
@@ -807,8 +808,8 @@ async function handleSaveConfig() {
     success('远程配置已保存，将在下次心跳时生效')
     handleConfigDialogClose(false)
     await store.fetchNodes()
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '保存失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '保存失败'))
   } finally {
     savingConfig.value = false
   }
@@ -830,8 +831,8 @@ async function handleDelete(node: ProxyNode) {
     } else {
       success('代理节点已删除')
     }
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || '删除失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '删除失败'))
   }
 }
 
@@ -848,8 +849,8 @@ async function handleTest(node: ProxyNode) {
     } else {
       toastError(`连通性测试失败: ${result.error || '未知错误'}`)
     }
-  } catch (err: any) {
-    toastError(err.response?.data?.error?.message || '测试请求失败')
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '测试请求失败'))
   } finally {
     testingNodes.value.delete(node.id)
   }

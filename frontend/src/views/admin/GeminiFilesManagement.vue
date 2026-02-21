@@ -436,14 +436,16 @@ import {
   Music,
   Upload
 } from 'lucide-vue-next'
-import { geminiFilesApi } from '@/api/gemini-files'
+import { geminiFilesApi, type FileMappingStatsResponse, type FileMappingResponse, type CapableKeyResponse } from '@/api/gemini-files'
+import { parseApiError } from '@/utils/errorParser'
+import { log } from '@/utils/logger'
 
 const { toast } = useToast()
 
 // 状态
 const loading = ref(false)
-const stats = ref<any>(null)
-const mappings = ref<any[]>([])
+const stats = ref<FileMappingStatsResponse | null>(null)
+const mappings = ref<FileMappingResponse[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = 20
@@ -454,7 +456,7 @@ const includeExpired = ref(false)
 const uploading = ref(false)
 const isDragging = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const capableKeys = ref<any[]>([])
+const capableKeys = ref<CapableKeyResponse[]>([])
 const selectedKeyIds = ref<string[]>([])
 
 // 计算属性
@@ -483,8 +485,8 @@ async function fetchCapableKeys() {
     if (selectedKeyIds.value.length === 0 && keys.length > 0) {
       selectedKeyIds.value = keys.map(k => k.id)
     }
-  } catch (error: any) {
-    console.error('Failed to fetch capable keys:', error)
+  } catch (error: unknown) {
+    log.error('Failed to fetch capable keys', error)
   }
 }
 
@@ -509,10 +511,10 @@ async function fetchStats() {
   try {
     const data = await geminiFilesApi.getStats()
     stats.value = data
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '获取统计失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive'
     })
   }
@@ -529,10 +531,10 @@ async function fetchMappings() {
     })
     mappings.value = data.items
     total.value = data.total
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '获取文件列表失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive'
     })
   } finally {
@@ -540,7 +542,7 @@ async function fetchMappings() {
   }
 }
 
-async function deleteMapping(mapping: any) {
+async function deleteMapping(mapping: FileMappingResponse) {
   if (!confirm(`确定要删除映射 "${mapping.file_name}" 吗？\n\n注意：这只会删除映射记录，不会删除 Google 上的实际文件。`)) {
     return
   }
@@ -552,10 +554,10 @@ async function deleteMapping(mapping: any) {
       description: `已删除映射 ${mapping.file_name}`
     })
     await fetchData()
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '删除失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive'
     })
   }
@@ -573,10 +575,10 @@ async function cleanupExpired() {
       description: `已清理 ${result.deleted_count} 条过期映射`
     })
     await fetchData()
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '清理失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive'
     })
   }
@@ -617,10 +619,10 @@ async function uploadFile(file: globalThis.File) {
         variant: 'destructive'
       })
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '上传失败',
-      description: error.response?.data?.detail || error.message,
+      description: parseApiError(error, '上传失败'),
       variant: 'destructive'
     })
   } finally {

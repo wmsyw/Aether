@@ -55,10 +55,12 @@
         <div class="text-left text-xs font-medium text-muted-foreground mb-2">
           更新内容
         </div>
+        <!-- eslint-disable vue/no-v-html -->
         <div
           class="w-full max-h-48 overflow-y-auto rounded-lg bg-muted/50 p-3 text-left text-sm text-foreground/80 prose prose-sm dark:prose-invert prose-p:my-1 prose-ul:my-1 prose-li:my-0"
           v-html="renderedReleaseNotes"
         />
+        <!-- eslint-enable vue/no-v-html -->
       </div>
 
       <!-- Description (fallback when no release notes) -->

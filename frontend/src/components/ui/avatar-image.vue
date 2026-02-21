@@ -6,7 +6,7 @@ import { computed } from 'vue'
 interface Props {
   class?: string
   src?: string
-  alt: string
+  alt?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {

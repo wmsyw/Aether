@@ -21,7 +21,7 @@ export interface ProxyNode {
   proxy_username?: string
   proxy_password?: string  // 脱敏后的密码
   // 硬件信息（aether-proxy 节点）
-  hardware_info: Record<string, any> | null
+  hardware_info: Record<string, unknown> | null
   estimated_max_concurrency: number | null
   // 远程配置（aether-proxy 节点）
   remote_config: ProxyNodeRemoteConfig | null

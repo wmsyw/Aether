@@ -117,7 +117,7 @@
               size="icon"
               class="h-8 w-8"
               title="编辑映射"
-              @click="editGroup(item.group!)"
+              @click="item.group && editGroup(item.group)"
             >
               <Edit class="w-3.5 h-3.5" />
             </Button>
@@ -126,7 +126,7 @@
               size="icon"
               class="h-8 w-8 hover:text-destructive"
               title="删除映射"
-              @click="deleteGroup(item.group!)"
+              @click="item.group && deleteGroup(item.group)"
             >
               <Trash2 class="w-3.5 h-3.5" />
             </Button>
@@ -362,7 +362,8 @@ import {
 import { type EndpointAPIKey } from '@/api/endpoints/keys'
 import type { ProviderEndpoint } from '@/api/endpoints/types'
 import { updateModel } from '@/api/endpoints/models'
-import { parseTestModelError } from '@/utils/errorParser'
+import { parseApiError, parseTestModelError } from '@/utils/errorParser'
+import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 
 interface MappingItem {
   name: string
@@ -389,7 +390,7 @@ interface CombinedMapping {
 }
 
 const props = defineProps<{
-  provider: any
+  provider: ProviderWithEndpointsSummary
   providerKeys?: EndpointAPIKey[]
   models?: Model[]
   mappingPreview?: ProviderMappingPreviewResponse | null
@@ -456,7 +457,7 @@ const exactMappingGroups = computed<AliasGroup[]>(() => {
         groupMap.set(groupKey, group)
         groups.push(group)
       }
-      groupMap.get(groupKey)!.aliases.push(alias)
+      groupMap.get(groupKey)?.aliases.push(alias)
     }
   }
 
@@ -486,10 +487,11 @@ const regexMappings = computed<CombinedMapping[]>(() => {
           mappings: [],
           matchedKeys: []
         })
-        result.push(modelMap.get(gm.global_model_id)!)
+        result.push(modelMap.get(gm.global_model_id) as CombinedMapping)
       }
 
-      const mapping = modelMap.get(gm.global_model_id)!
+      const mapping = modelMap.get(gm.global_model_id)
+      if (!mapping) continue
 
       // 添加 Key 信息
       const keyMatches: MappingItem[] = gm.matched_models.map(m => ({
@@ -497,7 +499,7 @@ const regexMappings = computed<CombinedMapping[]>(() => {
         pattern: m.mapping_pattern
       }))
 
-      mapping.matchedKeys!.push({
+      mapping.matchedKeys?.push({
         keyId: keyInfo.key_id,
         keyName: keyInfo.key_name,
         maskedKey: keyInfo.masked_key,
@@ -635,8 +637,8 @@ async function confirmDelete() {
     deleteConfirmOpen.value = false
     deletingGroup.value = null
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '删除失败'), '错误')
   }
 }
 
@@ -715,9 +717,8 @@ async function testMapping(item: CombinedMapping, mapping: MappingItem, apiForma
     } else {
       showError(`映射测试失败: ${parseTestModelError(result)}`)
     }
-  } catch (err: any) {
-    const errorMsg = err.response?.data?.detail || err.message || '测试请求失败'
-    showError(`映射测试失败: ${errorMsg}`)
+  } catch (err: unknown) {
+    showError(`映射测试失败: ${parseApiError(err, '测试请求失败')}`)
   } finally {
     testingMapping.value = null
   }
@@ -741,9 +742,8 @@ async function testRegexMapping(item: CombinedMapping, keyItem: MatchedKeyInfo, 
     } else {
       showError(`映射测试失败: ${parseTestModelError(result)}`)
     }
-  } catch (err: any) {
-    const errorMsg = err.response?.data?.detail || err.message || '测试请求失败'
-    showError(`映射测试失败: ${errorMsg}`)
+  } catch (err: unknown) {
+    showError(`映射测试失败: ${parseApiError(err, '测试请求失败')}`)
   } finally {
     testingMapping.value = null
   }

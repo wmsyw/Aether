@@ -291,7 +291,7 @@ async function pollActiveRequests() {
       if (shouldApply && record.status !== update.status) {
         record.status = update.status
       }
-      if (shouldApply && (update.status === 'completed' || update.status === 'failed')) {
+      if (shouldApply && ['completed', 'failed', 'cancelled'].includes(update.status)) {
         shouldRefresh = true
       }
 

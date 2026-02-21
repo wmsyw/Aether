@@ -7,6 +7,7 @@ import {
   type UsersExportData,
   type UsersImportResponse,
 } from '@/api/admin'
+import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 import type { SystemConfig } from './useSystemConfig'
 
@@ -117,8 +118,8 @@ export function useConfigExportImport(systemConfig: { value: SystemConfig }) {
       mergeModeSelectOpen.value = false
       importResultDialogOpen.value = true
       success('配置导入成功')
-    } catch (err: any) {
-      error(err.response?.data?.detail || '导入配置失败')
+    } catch (err: unknown) {
+      error(parseApiError(err, '导入配置失败'))
       log.error('导入配置失败:', err)
     } finally {
       importLoading.value = false
@@ -199,8 +200,8 @@ export function useConfigExportImport(systemConfig: { value: SystemConfig }) {
       usersMergeModeSelectOpen.value = false
       importUsersResultDialogOpen.value = true
       success('用户数据导入成功')
-    } catch (err: any) {
-      error(err.response?.data?.detail || '导入用户数据失败')
+    } catch (err: unknown) {
+      error(parseApiError(err, '导入用户数据失败'))
       log.error('导入用户数据失败:', err)
     } finally {
       importUsersLoading.value = false

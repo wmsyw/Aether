@@ -392,7 +392,7 @@ async function loadAccessRestrictionOptions() {
     ])
     providers.value = providersData
     globalModels.value = modelsData.models || []
-    allApiFormats.value = formatsData.formats?.map((f: any) => f.value) || []
+    allApiFormats.value = formatsData.formats?.map((f: { value: string }) => f.value) || []
   } catch (err) {
     log.error('加载访问限制选项失败:', err)
   }

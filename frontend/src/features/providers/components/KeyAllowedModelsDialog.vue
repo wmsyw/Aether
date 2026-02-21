@@ -191,7 +191,7 @@ import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
 import Checkbox from '@/components/ui/checkbox.vue'
 import { useToast } from '@/composables/useToast'
-import { parseUpstreamModelError } from '@/utils/errorParser'
+import { parseApiError, parseUpstreamModelError } from '@/utils/errorParser'
 import {
   importModelsFromUpstream,
   getProviderModels,
@@ -305,9 +305,8 @@ async function fetchUpstreamModels() {
       // 上游返回空列表但无错误
       hasQueried.value = true
     }
-  } catch (err: any) {
-    const rawError = err.response?.data?.detail || err.message || '获取上游模型失败'
-    errorMessage.value = parseUpstreamModelError(rawError)
+  } catch (err: unknown) {
+    errorMessage.value = parseUpstreamModelError(parseApiError(err, '获取上游模型失败'))
   } finally {
     loading.value = false
   }
@@ -378,8 +377,8 @@ async function handleImport() {
       const errorMsg = response.errors?.[0]?.error || '导入失败'
       showError(errorMsg, '导入失败')
     }
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '导入失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '导入失败'), '错误')
   } finally {
     importing.value = false
   }

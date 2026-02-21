@@ -217,6 +217,7 @@ import {
   type ProviderWithEndpointsSummary,
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
+import { parseApiError } from '@/utils/errorParser'
 
 const { error: showError, success: showSuccess } = useToast()
 const { confirmDanger } = useConfirm()
@@ -303,8 +304,8 @@ async function saveDescription(_event: Event, provider: ProviderWithEndpointsSum
       target.description = trimmed || undefined
     }
     cancelEditDescription()
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '更新备注失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '更新备注失败'), '错误')
   }
 }
 
@@ -353,8 +354,8 @@ async function loadProviders() {
     providers.value = await getProvidersSummary()
     // 异步加载配置了 ops 的 provider 的余额数据
     loadBalances(providers.value)
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '加载提供商列表失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载提供商列表失败'), '错误')
   } finally {
     loading.value = false
   }
@@ -434,8 +435,8 @@ async function handleDeleteProvider(provider: ProviderWithEndpointsSummary) {
     await deleteProvider(provider.id)
     showSuccess('提供商已删除')
     loadProviders()
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除提供商失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '删除提供商失败'), '错误')
   }
 }
 
@@ -455,8 +456,8 @@ async function toggleProviderStatus(provider: ProviderWithEndpointsSummary) {
     }
 
     showSuccess(newStatus ? '提供商已启用' : '提供商已停用')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '操作失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '操作失败'), '错误')
   }
 }
 

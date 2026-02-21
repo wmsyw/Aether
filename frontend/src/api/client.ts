@@ -63,11 +63,13 @@ function createDemoAdapter(defaultAdapter: AxiosAdapter) {
           mockResponse.config = config
           return mockResponse
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         // Mock 错误需要附加 config，否则 handleResponseError 会崩溃
-        if (error.response) {
+        if (axios.isAxiosError(error)) {
           error.config = config
-          error.response.config = config
+          if (error.response) {
+            error.response.config = config
+          }
         }
         throw error
       }
@@ -130,13 +132,17 @@ class ApiClient {
   /**
    * 处理响应错误
    */
-  private async handleResponseError(error: any): Promise<any> {
-    const originalRequest = error.config
-
+  private async handleResponseError(error: unknown): Promise<never> {
     // 请求被取消
     if (axios.isCancel(error)) {
       return Promise.reject(error)
     }
+
+    if (!axios.isAxiosError(error)) {
+      return Promise.reject(error)
+    }
+
+    const originalRequest = error.config
 
     // 网络错误或服务器不可达
     if (!error.response) {
@@ -160,18 +166,18 @@ class ApiClient {
   /**
    * 处理401认证错误
    */
-  private async handle401Error(error: any, originalRequest: any): Promise<any> {
+  private async handle401Error(error: import('axios').AxiosError, originalRequest: InternalAxiosRequestConfig & { _retry?: boolean; _retryCount?: number } | undefined): Promise<AxiosResponse> {
     // 如果不需要认证,直接返回错误
     if (isPublicEndpoint(originalRequest?.url, originalRequest?.method)) {
       return Promise.reject(error)
     }
 
     // 如果已经重试过,不再重试
-    if (originalRequest._retry) {
+    if (!originalRequest || originalRequest._retry) {
       return Promise.reject(error)
     }
 
-    const errorDetail = error.response?.data?.detail || ''
+    const errorDetail = (error.response?.data as Record<string, unknown>)?.detail as string || ''
     log.debug('Got 401 error, attempting token refresh', { errorDetail })
 
     // 检查是否为业务相关的401错误（用户被禁用/删除等）
@@ -221,9 +227,9 @@ class ApiClient {
    */
   private async refreshTokenAndRetry(
     refreshToken: string,
-    originalRequest: any,
-    originalError: any
-  ): Promise<any> {
+    originalRequest: InternalAxiosRequestConfig,
+    originalError: import('axios').AxiosError
+  ): Promise<AxiosResponse> {
     this.isRefreshing = true
     this.refreshPromise = this.refreshToken(refreshToken)
 
@@ -237,8 +243,8 @@ class ApiClient {
       // 重试原始请求
       originalRequest.headers.Authorization = `Bearer ${response.data.access_token}`
       return this.client.request(originalRequest)
-    } catch (refreshError: any) {
-      log.error('Token refresh failed', refreshError)
+    } catch (refreshError: unknown) {
+      log.error('Token refresh failed', refreshError instanceof Error ? refreshError.message : String(refreshError))
       this.isRefreshing = false
       this.refreshPromise = null
       this.clearAuth()
@@ -282,27 +288,27 @@ class ApiClient {
   }
 
   // 以下方法直接委托给 axios client，Demo 模式由 adapter 统一处理
-  async request<T = any>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  async request<T = unknown>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.request<T>(config)
   }
 
-  async get<T = any>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  async get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.get<T>(url, config)
   }
 
-  async post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  async post<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.post<T>(url, data, config)
   }
 
-  async put<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  async put<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.put<T>(url, data, config)
   }
 
-  async patch<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  async patch<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.patch<T>(url, data, config)
   }
 
-  async delete<T = any>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  async delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.delete<T>(url, config)
   }
 }

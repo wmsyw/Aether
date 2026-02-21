@@ -202,6 +202,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { parseApiError } from '@/utils/errorParser'
 import { Loader2, Layers, SquarePen, Plus, Trash2 } from 'lucide-vue-next'
 import {
   Dialog,
@@ -298,7 +299,7 @@ const VIDEO_RESOLUTION_PRICE_PRESETS: Record<
 const form = ref({
   global_model_id: '',
   price_per_request: undefined as number | undefined,
-  config: {} as Record<string, any>,
+  config: {} as Record<string, unknown>,
   // 能力配置
   supports_vision: undefined as boolean | undefined,
   supports_function_calling: undefined as boolean | undefined,
@@ -392,53 +393,54 @@ function resetForm() {
   availableGlobalModels.value = []
 }
 
-function getNested(obj: any, path: string): any {
+function getNested(obj: Record<string, unknown>, path: string): unknown {
   if (!obj || typeof obj !== 'object') return undefined
   const parts = path.split('.').filter(Boolean)
-  let cur: any = obj
+  let cur: unknown = obj
   for (const p of parts) {
     if (!cur || typeof cur !== 'object') return undefined
-    cur = cur[p]
+    cur = (cur as Record<string, unknown>)[p]
   }
   return cur
 }
 
-function setNested(obj: any, path: string, value: any) {
+function setNested(obj: Record<string, unknown>, path: string, value: unknown) {
   if (!obj || typeof obj !== 'object') return
   const parts = path.split('.').filter(Boolean)
   if (parts.length === 0) return
-  let cur: any = obj
+  let cur: Record<string, unknown> = obj
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]
     if (!cur[p] || typeof cur[p] !== 'object') {
       cur[p] = {}
     }
-    cur = cur[p]
+    cur = cur[p] as Record<string, unknown>
   }
   cur[parts[parts.length - 1]] = value
 }
 
-function deleteNested(obj: any, path: string) {
+function deleteNested(obj: Record<string, unknown>, path: string) {
   if (!obj || typeof obj !== 'object') return
   const parts = path.split('.').filter(Boolean)
   if (parts.length === 0) return
-  let cur: any = obj
+  let cur: Record<string, unknown> = obj
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]
     if (!cur[p] || typeof cur[p] !== 'object') return
-    cur = cur[p]
+    cur = cur[p] as Record<string, unknown>
   }
   delete cur[parts[parts.length - 1]]
 }
 
-function pruneEmptyBillingConfig(cfg: Record<string, any>) {
+function pruneEmptyBillingConfig(cfg: Record<string, unknown>) {
   const billing = cfg.billing
   if (!billing || typeof billing !== 'object') return
-  const video = billing.video
+  const billingObj = billing as Record<string, unknown>
+  const video = billingObj.video
   if (video && typeof video === 'object' && Object.keys(video).length === 0) {
-    delete billing.video
+    delete billingObj.video
   }
-  if (Object.keys(billing).length === 0) {
+  if (Object.keys(billingObj).length === 0) {
     delete cfg.billing
   }
 }
@@ -461,7 +463,7 @@ function normalizeResolutionKey(raw: string): string {
   return k
 }
 
-function loadVideoPricingFromConfig(cfg: Record<string, any>) {
+function loadVideoPricingFromConfig(cfg: Record<string, unknown>) {
   const raw = getNested(cfg, 'billing.video.price_per_second_by_resolution')
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     // 按分辨率从低到高排序
@@ -475,7 +477,7 @@ function loadVideoPricingFromConfig(cfg: Record<string, any>) {
   }
 }
 
-function applyVideoPricingToConfig(cfg: Record<string, any>) {
+function applyVideoPricingToConfig(cfg: Record<string, unknown>) {
   // Clean legacy keys
   deleteNested(cfg, 'billing.video.price_per_second')
   deleteNested(cfg, 'billing.video.resolution_multipliers')
@@ -546,8 +548,8 @@ async function loadAvailableGlobalModels() {
     availableGlobalModels.value = allGlobalModels.filter(
       (gm: GlobalModelResponse) => !existingGlobalModelIds.has(gm.id)
     )
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '加载模型列表失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载模型列表失败'), '错误')
   } finally {
     loadingGlobalModels.value = false
   }
@@ -612,8 +614,8 @@ async function handleSubmit() {
     }
     emit('update:open', false)
     emit('saved')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || (isEditing.value ? '更新失败' : '添加失败'), '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, isEditing.value ? '更新失败' : '添加失败'), '错误')
   } finally {
     submitting.value = false
   }

@@ -237,7 +237,7 @@ const filteredBuiltinTools = computed(() => {
 
 // 获取分类图标
 function getCategoryIcon(category: string) {
-  const icons: Record<string, any> = {
+  const icons: Record<string, unknown> = {
     auth: Users,
     monitoring: Gauge,
     security: Shield,

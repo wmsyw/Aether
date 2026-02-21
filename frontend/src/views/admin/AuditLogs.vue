@@ -168,29 +168,29 @@
           </TableHeader>
           <TableBody>
             <TableRow
-              v-for="log in logs"
-              :key="log.id"
+              v-for="entry in logs"
+              :key="entry.id"
               class="cursor-pointer border-b border-border/40 hover:bg-muted/30 transition-colors"
               @mousedown="handleMouseDown"
-              @click="handleRowClick($event, log)"
+              @click="handleRowClick($event, entry)"
             >
               <TableCell class="text-xs py-4">
-                {{ formatDateTime(log.created_at) }}
+                {{ formatDateTime(entry.created_at) }}
               </TableCell>
 
               <TableCell class="py-4">
                 <div
-                  v-if="log.user_id"
+                  v-if="entry.user_id"
                   class="flex flex-col"
                 >
                   <span class="text-sm font-medium">
-                    {{ log.user_email || `用户 ${log.user_id}` }}
+                    {{ entry.user_email || `用户 ${entry.user_id}` }}
                   </span>
                   <span
-                    v-if="log.user_username"
+                    v-if="entry.user_username"
                     class="text-xs text-muted-foreground"
                   >
-                    {{ log.user_username }}
+                    {{ entry.user_username }}
                   </span>
                 </div>
                 <span
@@ -200,39 +200,39 @@
               </TableCell>
 
               <TableCell class="py-4">
-                <Badge :variant="getEventTypeBadgeVariant(log.event_type)">
+                <Badge :variant="getEventTypeBadgeVariant(entry.event_type)">
                   <component
-                    :is="getEventTypeIcon(log.event_type)"
+                    :is="getEventTypeIcon(entry.event_type)"
                     class="h-3 w-3 mr-1"
                   />
-                  {{ getEventTypeLabel(log.event_type) }}
+                  {{ getEventTypeLabel(entry.event_type) }}
                 </Badge>
               </TableCell>
 
               <TableCell
                 class="max-w-xs truncate py-4"
-                :title="log.description"
+                :title="entry.description"
               >
-                {{ log.description || '无描述' }}
+                {{ entry.description || '无描述' }}
               </TableCell>
 
               <TableCell class="py-4">
                 <span
-                  v-if="log.ip_address"
+                  v-if="entry.ip_address"
                   class="flex items-center text-sm"
                 >
                   <Globe class="h-3 w-3 mr-1 text-muted-foreground" />
-                  {{ log.ip_address }}
+                  {{ entry.ip_address }}
                 </span>
                 <span v-else>-</span>
               </TableCell>
 
               <TableCell class="py-4">
                 <Badge
-                  v-if="log.status_code"
-                  :variant="getStatusCodeVariant(log.status_code)"
+                  v-if="entry.status_code"
+                  :variant="getStatusCodeVariant(entry.status_code)"
                 >
-                  {{ log.status_code }}
+                  {{ entry.status_code }}
                 </Badge>
                 <span v-else>-</span>
               </TableCell>
@@ -455,7 +455,7 @@ interface AuditLog {
   ip_address?: string
   status_code?: number
   error_message?: string
-  metadata?: any
+  metadata?: Record<string, unknown>
   created_at: string
 }
 
@@ -657,7 +657,7 @@ function getEventTypeLabel(eventType: string): string {
 }
 
 function getEventTypeIcon(eventType: string) {
-  const icons: Record<string, any> = {
+  const icons: Record<string, unknown> = {
     'login_success': CheckCircle,
     'login_failed': XCircle,
     'logout': User,

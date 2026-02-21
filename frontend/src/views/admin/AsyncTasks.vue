@@ -882,6 +882,7 @@ import {
   ExternalLink,
   Copy,
 } from 'lucide-vue-next'
+import { log } from '@/utils/logger'
 
 const { toast } = useToast()
 const { copyToClipboard } = useClipboard()
@@ -921,10 +922,10 @@ async function fetchTasks() {
     })
     tasks.value = response.items
     total.value = response.total
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '获取任务列表失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive',
     })
   } finally {
@@ -937,7 +938,7 @@ async function fetchStats() {
   try {
     stats.value = await asyncTasksApi.getStats()
   } catch (error) {
-    console.error('Failed to fetch stats:', error)
+    log.error('Failed to fetch stats', error)
   }
 }
 
@@ -946,10 +947,10 @@ async function openTaskDetail(task: AsyncTaskItem) {
   try {
     selectedTask.value = await asyncTasksApi.getDetail(task.id)
     showDetail.value = true
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '获取任务详情失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive',
     })
   }
@@ -960,10 +961,10 @@ async function refreshTaskDetail() {
   if (!selectedTask.value) return
   try {
     selectedTask.value = await asyncTasksApi.getDetail(selectedTask.value.id)
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '刷新失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive',
     })
   }
@@ -1023,10 +1024,10 @@ async function openUsageRecord(task: AsyncTaskItem) {
         variant: 'destructive',
       })
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '获取任务信息失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive',
     })
   }
@@ -1045,10 +1046,10 @@ async function cancelTask(task: AsyncTaskItem | AsyncTaskDetail) {
     if (showDetail.value) {
       closeDetail()
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast({
       title: '取消任务失败',
-      description: error.message,
+      description: error instanceof Error ? error.message : String(error),
       variant: 'destructive',
     })
   }
@@ -1164,7 +1165,7 @@ function calcDuration(startStr: string, endStr: string): string {
 
 
 // 格式化 JSON
-function formatJson(obj: any): string {
+function formatJson(obj: unknown): string {
   try {
     return JSON.stringify(obj, null, 2)
   } catch {

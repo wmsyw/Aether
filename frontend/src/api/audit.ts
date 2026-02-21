@@ -8,7 +8,7 @@ export interface AuditLog {
   ip_address?: string
   status_code?: number
   error_message?: string
-  metadata?: any
+  metadata?: Record<string, unknown>
   created_at: string
 }
 
@@ -22,7 +22,7 @@ export interface PaginationMeta {
 export interface AuditLogsResponse {
   items: AuditLog[]
   meta: PaginationMeta
-  filters?: Record<string, any>
+  filters?: Record<string, unknown>
 }
 
 export interface AuditFilters {
@@ -33,19 +33,19 @@ export interface AuditFilters {
   offset?: number
 }
 
-function normalizeAuditResponse(data: any): AuditLogsResponse {
-  const items: AuditLog[] = data.items ?? data.logs ?? []
-  const meta: PaginationMeta = data.meta ?? {
-    total: data.total ?? items.length,
-    limit: data.limit ?? items.length,
-    offset: data.offset ?? 0,
-    count: data.count ?? items.length
+function normalizeAuditResponse(data: Record<string, unknown>): AuditLogsResponse {
+  const items: AuditLog[] = (data.items ?? data.logs ?? []) as AuditLog[]
+  const meta: PaginationMeta = (data.meta as PaginationMeta) ?? {
+    total: (data.total as number) ?? items.length,
+    limit: (data.limit as number) ?? items.length,
+    offset: (data.offset as number) ?? 0,
+    count: (data.count as number) ?? items.length
   }
 
   return {
     items,
     meta,
-    filters: data.filters
+    filters: data.filters as Record<string, unknown> | undefined
   }
 }
 
@@ -80,7 +80,7 @@ export const auditApi = {
 
   // 分析用户行为 (管理员)
   async analyzeUserBehavior(userId: number, days: number = 7): Promise<{
-    analysis: any
+    analysis: Record<string, unknown>
     recommendations: string[]
   }> {
     const response = await apiClient.get(`/api/admin/monitoring/user-behavior/${userId}`, {

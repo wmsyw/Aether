@@ -432,12 +432,14 @@ import { Dialog } from '@/components/ui'
 import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import { updateProvider, updateProviderKey } from '@/api/endpoints'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
 import { batchQueryBalance, type ActionResultResponse, type BalanceInfo } from '@/api/providerOps'
 import { API_FORMAT_SHORT } from '@/api/endpoints/types'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { log } from '@/utils/logger'
 
 interface KeyWithMeta {
   id: string
@@ -555,7 +557,7 @@ async function loadBalances() {
       }
     }
   } catch (e) {
-    console.warn('[loadBalances] 加载余额数据失败:', e)
+    log.warn('[loadBalances] 加载余额数据失败', e)
   }
 }
 
@@ -632,7 +634,7 @@ async function loadKeysByFormat() {
 
     // 每个格式独立管理优先级，使用后端返回的 format_priority
     const data: Record<string, KeyWithMeta[]> = {}
-    for (const [format, keys] of Object.entries(response.data as Record<string, any[]>)) {
+    for (const [format, keys] of Object.entries(response.data as Record<string, Record<string, unknown>[]>)) {
       // 计算该格式下的默认优先级
       let maxPriority = 0
       for (const key of keys) {
@@ -656,8 +658,8 @@ async function loadKeysByFormat() {
     if (formats.length > 0 && !formats.includes(activeFormatTab.value)) {
       activeFormatTab.value = formats[0]
     }
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '加载 Key 列表失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载 Key 列表失败'), '错误')
   } finally {
     loadingKeys.value = false
   }
@@ -681,8 +683,8 @@ async function toggleKeyActive(format: string, key: KeyWithMeta) {
       keysByFormat.value[fmt] = sortKeysByActiveAndPriority(keysByFormat.value[fmt])
     }
     success(newStatus ? 'Key 已启用' : 'Key 已停用')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '操作失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '操作失败'), '错误')
   }
 }
 
@@ -797,7 +799,7 @@ function handleProviderDrop(dropIndex: number) {
   let currentPriority = 1
 
   items.forEach(provider => {
-    const originalPriority = originalPriorityMap.get(provider.id)!
+    const originalPriority = originalPriorityMap.get(provider.id) ?? 0
 
     if (provider === draggedItem) {
       // 被拖动的项单独成组
@@ -806,7 +808,7 @@ function handleProviderDrop(dropIndex: number) {
     } else {
       if (groupNewPriority.has(originalPriority)) {
         // 同组的其他项使用相同的新优先级
-        provider.provider_priority = groupNewPriority.get(originalPriority)!
+        provider.provider_priority = groupNewPriority.get(originalPriority) ?? currentPriority
       } else {
         // 新组，分配新优先级
         groupNewPriority.set(originalPriority, currentPriority)
@@ -881,7 +883,7 @@ function handleKeyDrop(format: string, dropIndex: number) {
   let currentPriority = 1
 
   items.forEach(key => {
-    const originalPriority = originalPriorityMap.get(key.id)!
+    const originalPriority = originalPriorityMap.get(key.id) ?? 0
 
     if (key === draggedItem) {
       // 被拖动的项单独成组
@@ -890,7 +892,7 @@ function handleKeyDrop(format: string, dropIndex: number) {
     } else {
       if (groupNewPriority.has(originalPriority)) {
         // 同组的其他项使用相同的新优先级
-        key.priority = groupNewPriority.get(originalPriority)!
+        key.priority = groupNewPriority.get(originalPriority) ?? currentPriority
       } else {
         // 新组，分配新优先级
         groupNewPriority.set(originalPriority, currentPriority)
@@ -959,8 +961,8 @@ async function save() {
     if (activeMainTab.value === 'provider') {
       close()
     }
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '保存失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '保存失败'), '错误')
   } finally {
     saving.value = false
   }

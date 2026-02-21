@@ -293,7 +293,7 @@ function parseScopes(input: string): string[] | null {
   return parts.length ? parts : null
 }
 
-function parseJsonOrNull(input: string): Record<string, any> | null {
+function parseJsonOrNull(input: string): Record<string, unknown> | null {
   const raw = input.trim()
   if (!raw) return null
   return JSON.parse(raw)
@@ -387,7 +387,7 @@ async function loadAll() {
     if (selectedType.value) {
       syncFormFromSelected()
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('加载 OAuth 配置失败:', err)
     showError(getErrorMessage(err, '加载失败'))
   } finally {
@@ -420,7 +420,7 @@ async function handleSave() {
     await oauthApi.admin.upsertProviderConfig(selectedType.value, payload)
     success('保存成功')
     await loadAll()
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(getErrorMessage(err, '保存失败'))
   } finally {
     saving.value = false
@@ -441,7 +441,7 @@ async function handleTest() {
     }
     lastTestResult.value = await oauthApi.admin.testProviderConfig(selectedType.value, testPayload)
     success('测试完成')
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(getErrorMessage(err, '测试失败'))
   } finally {
     testing.value = false

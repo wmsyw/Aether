@@ -563,7 +563,7 @@ function parsePatternText(text: string): string[] {
 }
 
 // 解析 Service Account JSON 文本
-function parseAuthConfig(): Record<string, any> | null {
+function parseAuthConfig(): Record<string, unknown> | null {
   if (form.value.auth_type !== 'vertex_ai') return null
   const text = form.value.auth_config_text.trim()
   if (!text) return null
@@ -699,7 +699,7 @@ async function handleSave() {
 
     emit('saved')
     emit('close')
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMessage = parseApiError(err, '保存密钥失败')
     showError(errorMessage, '错误')
   } finally {

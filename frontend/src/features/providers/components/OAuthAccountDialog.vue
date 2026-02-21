@@ -92,34 +92,72 @@
         >
           <!-- Kiro: 设备授权模式 -->
           <template v-if="isKiroProvider">
-            <!-- 初始状态：输入 Start URL / Region + 开始 -->
+            <!-- 初始状态：选择授权类型 + 开始 -->
             <div
               v-if="!device.session_id && !device.starting"
               class="space-y-3"
             >
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium">Start URL</label>
-                <input
-                  v-model="device.start_url"
-                  type="text"
-                  placeholder="https://view.awsapps.com/start"
-                  class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
-                  spellcheck="false"
+              <!-- Builder ID / Identity Center 切换 -->
+              <div class="grid grid-cols-2 gap-1.5">
+                <button
+                  v-for="opt in ([
+                    { key: 'builder_id', label: 'Builder ID' },
+                    { key: 'identity_center', label: 'Identity Center' },
+                  ] as const)"
+                  :key="opt.key"
+                  class="h-8 text-xs font-medium rounded-md border transition-colors"
+                  :class="device.auth_type === opt.key
+                    ? 'border-primary bg-primary/5 text-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/20'"
+                  @click="device.auth_type = opt.key"
                 >
+                  {{ opt.label }}
+                </button>
               </div>
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium">Region</label>
-                <input
-                  v-model="device.region"
-                  type="text"
-                  placeholder="us-east-1"
-                  class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
-                  spellcheck="false"
+
+              <!-- grid 叠放保持高度稳定 -->
+              <div class="grid [&>*]:col-start-1 [&>*]:row-start-1">
+                <!-- Builder ID: 说明文字 -->
+                <div
+                  class="flex items-center justify-center transition-opacity duration-150"
+                  :class="device.auth_type === 'builder_id' ? 'opacity-100' : 'opacity-0 pointer-events-none'"
                 >
+                  <p class="text-xs text-muted-foreground">
+                    使用个人 AWS Builder ID 进行设备授权，无需额外配置。
+                  </p>
+                </div>
+
+                <!-- Identity Center: Start URL + Region -->
+                <div
+                  class="space-y-3 transition-opacity duration-150"
+                  :class="device.auth_type === 'identity_center' ? 'opacity-100' : 'opacity-0 pointer-events-none'"
+                >
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium">Start URL</label>
+                    <input
+                      v-model="device.start_url"
+                      type="text"
+                      placeholder="https://your-org.awsapps.com/start"
+                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
+                      spellcheck="false"
+                    >
+                  </div>
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium">Region</label>
+                    <input
+                      v-model="device.region"
+                      type="text"
+                      placeholder="us-east-1"
+                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
+                      spellcheck="false"
+                    >
+                  </div>
+                </div>
               </div>
+
               <Button
                 class="w-full"
-                :disabled="!device.start_url.trim()"
+                :disabled="device.auth_type === 'identity_center' && !device.start_url.trim()"
                 @click="startDeviceAuth"
               >
                 开始授权
@@ -480,7 +518,10 @@ function createInitialOAuthState(): OAuthState {
 const oauth = ref<OAuthState>(createInitialOAuthState())
 
 // 设备授权状态
+type DeviceAuthType = 'builder_id' | 'identity_center'
+
 interface DeviceAuthState {
+  auth_type: DeviceAuthType
   start_url: string
   region: string
   starting: boolean
@@ -494,8 +535,12 @@ interface DeviceAuthState {
   error: string
 }
 
+const BUILDER_ID_START_URL = 'https://view.awsapps.com/start'
+const BUILDER_ID_REGION = 'us-east-1'
+
 function createInitialDeviceState(): DeviceAuthState {
   return {
+    auth_type: 'builder_id',
     start_url: '',
     region: 'us-east-1',
     starting: false,
@@ -563,8 +608,9 @@ function stopDevicePolling() {
 
 function resetDevice() {
   stopDevicePolling()
-  const { start_url, region } = device.value
+  const { auth_type, start_url, region } = device.value
   device.value = createInitialDeviceState()
+  device.value.auth_type = auth_type
   device.value.start_url = start_url
   device.value.region = region
 }
@@ -635,7 +681,7 @@ async function initOAuth() {
     oauth.value.redirect_uri = resp.redirect_uri
     oauth.value.instructions = resp.instructions
     oauth.value.provider_type = resp.provider_type
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMessage = parseApiError(err, '初始化授权失败')
     showError(errorMessage, '错误')
     mode.value = 'import'
@@ -655,7 +701,7 @@ async function handleCompleteOAuth() {
     success('授权成功，账号已添加')
     emit('saved')
     handleClose()
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMessage = parseApiError(err, '完成授权失败')
     showError(errorMessage, '错误')
   } finally {
@@ -699,13 +745,14 @@ function parseImportText(text: string): { refresh_token: string; name?: string }
   }
 
   try {
-    const parsed = JSON.parse(trimmed)
+    const parsed: unknown = JSON.parse(trimmed)
     if (typeof parsed === 'object' && parsed !== null) {
-      const refreshToken = (parsed as any).refresh_token
+      const obj = parsed as Record<string, unknown>
+      const refreshToken = obj.refresh_token
       if (typeof refreshToken === 'string' && refreshToken.trim()) {
         return {
           refresh_token: refreshToken.trim(),
-          name: (parsed as any).name || (parsed as any).oauth_email || undefined,
+          name: (typeof obj.name === 'string' ? obj.name : undefined) || (typeof obj.oauth_email === 'string' ? obj.oauth_email : undefined),
         }
       }
       return null
@@ -789,7 +836,7 @@ async function handleImport() {
       emit('saved')
       handleClose()
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMessage = parseApiError(err, '导入失败')
     showError(errorMessage, '错误')
   } finally {
@@ -821,9 +868,10 @@ async function startDeviceAuth() {
   device.value.starting = true
   device.value.error = ''
   try {
+    const isBuilderID = device.value.auth_type === 'builder_id'
     const resp = await startDeviceAuthorize(props.providerId, {
-      start_url: device.value.start_url.trim() || undefined,
-      region: device.value.region.trim() || undefined,
+      start_url: isBuilderID ? BUILDER_ID_START_URL : (device.value.start_url.trim() || undefined),
+      region: isBuilderID ? BUILDER_ID_REGION : (device.value.region.trim() || undefined),
       proxy_node_id: selectedProxyNodeId.value || undefined,
     })
     device.value.session_id = resp.session_id
@@ -835,7 +883,7 @@ async function startDeviceAuth() {
     device.value.status = 'pending'
     startCountdown()
     scheduleDevicePoll()
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMessage = parseApiError(err, '发起设备授权失败')
     showError(errorMessage, '错误')
     device.value.status = 'error'
@@ -884,7 +932,7 @@ async function pollDevice() {
         device.value.error = result.error || '授权失败'
         return
     }
-  } catch (err: any) {
+  } catch {
     // 网络错误等，继续轮询
     scheduleDevicePoll()
   }

@@ -167,7 +167,7 @@ export function useScheduledTasks(systemConfig: Ref<SystemConfig>) {
   async function handleQuotaResetConfigSave() {
     const configItems: Array<{
       key: string
-      value: any
+      value: unknown
       description: string
       onSuccess: () => void
     }> = []

@@ -299,3 +299,68 @@ class TestHelperMethods:
 
         assert rate_multiplier == 0.8
         assert is_free_tier is False
+
+
+class TestUsageStatusUpdate:
+    """测试进行中状态更新对请求头/体的补写能力"""
+
+    def test_update_usage_status_can_persist_request_and_provider_payloads(self) -> None:
+        usage = MagicMock()
+        usage.status = "pending"
+        usage.provider_name = "pending"
+        usage.billing_status = "pending"
+        usage.finalized_at = None
+        usage.request_headers = None
+        usage.request_body = None
+        usage.provider_request_headers = None
+        usage.provider_request_body = None
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = usage
+
+        client_headers = {"authorization": "Bearer abc", "x-trace-id": "trace-1"}
+        provider_headers = {"authorization": "Bearer upstream", "x-provider": "demo"}
+        client_body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}
+        provider_body = {
+            "model": "upstream-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        with (
+            patch(
+                "src.services.system.config.SystemConfigService.should_log_headers",
+                return_value=True,
+            ),
+            patch(
+                "src.services.system.config.SystemConfigService.should_log_body",
+                return_value=True,
+            ),
+            patch(
+                "src.services.system.config.SystemConfigService.mask_sensitive_headers",
+                side_effect=lambda _db, h: {"masked": h},
+            ),
+            patch(
+                "src.services.system.config.SystemConfigService.truncate_body",
+                side_effect=lambda _db, b, is_request=True: {
+                    "truncated": b,
+                    "is_request": is_request,
+                },
+            ),
+        ):
+            updated = UsageService.update_usage_status(
+                db=mock_db,
+                request_id="req-streaming-1",
+                status="streaming",
+                provider="demo-provider",
+                request_headers=client_headers,
+                request_body=client_body,
+                provider_request_headers=provider_headers,
+                provider_request_body=provider_body,
+            )
+
+        assert updated is usage
+        assert usage.request_headers == {"masked": client_headers}
+        assert usage.provider_request_headers == {"masked": provider_headers}
+        assert usage.request_body == {"truncated": client_body, "is_request": True}
+        assert usage.provider_request_body == {"truncated": provider_body, "is_request": True}
+        mock_db.commit.assert_called_once()

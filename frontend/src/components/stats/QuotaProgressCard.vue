@@ -71,6 +71,7 @@ interface Props {
 }
 
 withDefaults(defineProps<Props>(), {
+  subtitle: undefined,
   loading: false
 })
 

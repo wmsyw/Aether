@@ -42,6 +42,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  subtitle: undefined,
   loading: false
 })
 
@@ -81,7 +82,7 @@ const chartOptions = computed(() => ({
   plugins: {
     tooltip: {
       callbacks: {
-        label: (context: any) => {
+        label: (context: { parsed?: { y?: number }; dataset: { label?: string } }) => {
           const value = context.parsed?.y ?? 0
           return `${context.dataset.label}: ${formatCurrency(value)}`
         }

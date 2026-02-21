@@ -732,6 +732,7 @@ import {
 
 import { StandaloneKeyFormDialog, type StandaloneKeyFormData } from '@/features/api-keys'
 import { parseNumberInput } from '@/utils/form'
+import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
@@ -843,9 +844,9 @@ async function loadApiKeys() {
     })
     apiKeys.value = response.api_keys
     total.value = response.total
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('加载独立Keys失败:', err)
-    error(err.response?.data?.detail || '加载独立 Keys 失败')
+    error(parseApiError(err, '加载独立 Keys 失败'))
   } finally {
     loading.value = false
   }
@@ -864,9 +865,9 @@ async function toggleApiKey(apiKey: AdminApiKey) {
       apiKeys.value[index].is_active = response.is_active
     }
     success(response.message)
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('切换密钥状态失败:', err)
-    error(err.response?.data?.detail || '操作失败')
+    error(parseApiError(err, '操作失败'))
   }
 }
 
@@ -878,9 +879,9 @@ async function toggleLockApiKey(apiKey: AdminApiKey) {
       apiKeys.value[index].is_locked = response.is_locked
     }
     success(response.message)
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('切换密钥锁定状态失败:', err)
-    error(err.response?.data?.detail || '操作失败')
+    error(parseApiError(err, '操作失败'))
   }
 }
 
@@ -897,9 +898,9 @@ async function deleteApiKey(apiKey: AdminApiKey) {
     apiKeys.value = apiKeys.value.filter(k => k.id !== apiKey.id)
     total.value = total.value - 1
     success(response.message)
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('删除密钥失败:', err)
-    error(err.response?.data?.detail || '删除失败')
+    error(parseApiError(err, '删除失败'))
   }
 }
 
@@ -962,9 +963,9 @@ async function handleAddBalance() {
     const action = addBalanceAmount.value > 0 ? '增加' : '扣除'
     const amount = Math.abs(addBalanceAmount.value).toFixed(2)
     success(response.message || `余额${action}成功，${action} $${amount}`)
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('余额调整失败:', err)
-    error(err.response?.data?.detail || '调整失败')
+    error(parseApiError(err, '调整失败'))
   } finally {
     addingBalance.value = false
   }
@@ -1130,9 +1131,9 @@ async function handleKeyFormSubmit(data: StandaloneKeyFormData) {
     }
     closeKeyFormDialog()
     await loadApiKeys()
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('保存独立Key失败:', err)
-    error(err.response?.data?.detail || '保存失败')
+    error(parseApiError(err, '保存失败'))
   } finally {
     keyFormDialogRef.value?.setSaving(false)
   }

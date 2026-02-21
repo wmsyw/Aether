@@ -153,6 +153,7 @@ import { ref, watch } from 'vue'
 import { Tag, Plus, X, Loader2, GripVertical, Info } from 'lucide-vue-next'
 import { Dialog, Button, Input, Label } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import { updateModel } from '@/api/endpoints/models'
 import type { Model, ProviderModelAlias } from '@/api/endpoints'
 
@@ -262,7 +263,7 @@ function handleDrop(targetIndex: number) {
   items.forEach(alias => {
     // 找到这个映射在原数组中的索引
     const originalIdx = aliases.value.findIndex(a => a === alias)
-    const originalPriority = originalIdx >= 0 ? originalPriorityMap.get(originalIdx)! : alias.priority
+    const originalPriority = originalIdx >= 0 ? (originalPriorityMap.get(originalIdx) ?? alias.priority) : alias.priority
 
     if (alias === draggedItem) {
       // 被拖动的映射是独立的新组，获得当前优先级
@@ -271,7 +272,7 @@ function handleDrop(targetIndex: number) {
     } else {
       if (groupNewPriority.has(originalPriority)) {
         // 这个组已经分配过优先级，使用相同的值
-        alias.priority = groupNewPriority.get(originalPriority)!
+        alias.priority = groupNewPriority.get(originalPriority) ?? currentPriority
       } else {
         // 这个组第一次出现，分配新优先级
         groupNewPriority.set(originalPriority, currentPriority)
@@ -325,8 +326,8 @@ async function handleSubmit() {
     showSuccess('映射配置已保存')
     emit('update:open', false)
     emit('saved')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '保存失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '保存失败'), '错误')
   } finally {
     submitting.value = false
   }

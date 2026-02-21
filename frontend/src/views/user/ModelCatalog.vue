@@ -292,6 +292,7 @@ import {
 import UserModelDetailDrawer from './components/UserModelDetailDrawer.vue'
 import { useRowClick } from '@/composables/useRowClick'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
 
 const { error: showError } = useToast()
 const { copyToClipboard } = useClipboard()
@@ -440,9 +441,9 @@ async function loadModels() {
     // 使用用户认证端点，只获取用户有权限使用的模型
     const response = await meApi.getAvailableModels({ limit: 1000 })
     models.value = (response.models || []) as PublicGlobalModel[]
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('加载模型失败:', err)
-    showError(err.response?.data?.detail || err.message, '加载模型失败')
+    showError(parseApiError(err, ''), '加载模型失败')
   } finally {
     loading.value = false
   }

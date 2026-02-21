@@ -783,6 +783,7 @@ import {
 } from '@/components/ui'
 import { Settings, Trash2, Check, X, Power, ChevronRight, Plus, Shuffle, RotateCcw, Radio, CheckCircle, Save, Filter, HelpCircle } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 import AlertDialog from '@/components/common/AlertDialog.vue'
 import {
@@ -1000,8 +1001,7 @@ function prepareValueForJsonParse(raw: string): string {
 }
 
 // 递归还原: 将 sentinel 字符串还原为 {{$original}}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function restoreOriginalPlaceholder(value: any): any {
+function restoreOriginalPlaceholder(value: unknown): unknown {
   if (typeof value === 'string') {
     if (value === ORIGINAL_SENTINEL) return ORIGINAL_PLACEHOLDER
     if (value.includes(ORIGINAL_SENTINEL)) {
@@ -1011,8 +1011,8 @@ function restoreOriginalPlaceholder(value: any): any {
   }
   if (Array.isArray(value)) return value.map(restoreOriginalPlaceholder)
   if (value !== null && typeof value === 'object') {
-    const result: Record<string, any> = {}
-    for (const [k, v] of Object.entries(value)) result[k] = restoreOriginalPlaceholder(v)
+    const result: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) result[k] = restoreOriginalPlaceholder(v)
     return result
   }
   return value
@@ -1045,7 +1045,7 @@ function parseBodyRulePathParts(path: string): string[] | null {
   return parts
 }
 
-function initBodyRuleSetValueForEditor(value: any): { value: string } {
+function initBodyRuleSetValueForEditor(value: unknown): { value: string } {
   if (value === undefined) return { value: '' }
 
   // 所有值都用 JSON 格式回显
@@ -1110,7 +1110,7 @@ function isCodexUrl(baseUrl: string): boolean {
 // 读取端点的上游流式策略（endpoint.config.upstream_stream_policy）
 function getEndpointUpstreamStreamPolicy(endpoint: ProviderEndpoint): string {
   const cfg = endpoint.config || {}
-  const raw = (cfg.upstream_stream_policy ?? cfg.upstreamStreamPolicy ?? cfg.upstream_stream) as any
+  const raw = (cfg.upstream_stream_policy ?? cfg.upstreamStreamPolicy ?? cfg.upstream_stream) as unknown
   if (raw === null || raw === undefined) return 'auto'
   if (typeof raw === 'boolean') return raw ? 'force_stream' : 'force_non_stream'
   const s = String(raw).trim().toLowerCase()
@@ -1509,7 +1509,7 @@ function validateBodySetValue(rule: EditableBodyRule): string | null {
   if (!raw) return '值不能为空'
   try {
     JSON.parse(prepareValueForJsonParse(raw))
-  } catch (err: any) {
+  } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     return `JSON 格式错误：${msg}`
   }
@@ -1559,7 +1559,7 @@ function getRegexPatternValidationTip(rule: EditableBodyRule): string {
     new RegExp(rule.pattern.trim())
     // 正则有效但 flags 无效
     return '无效的 flags（仅允许 i/m/s）'
-  } catch (err: any) {
+  } catch (err: unknown) {
     return err instanceof Error ? err.message : String(err)
   }
 }
@@ -1576,7 +1576,7 @@ function getBodySetValueValidationTip(rule: EditableBodyRule): string {
   try {
     JSON.parse(prepareValueForJsonParse(rule.value.trim()))
     return ''
-  } catch (err: any) {
+  } catch (err: unknown) {
     return err instanceof Error ? err.message : String(err)
   }
 }
@@ -1729,7 +1729,7 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
       return { path: rule.conditionPath.trim(), op }
     }
     const raw = rule.conditionValue.trim()
-    let val: any = raw
+    let val: unknown = raw
     try { val = JSON.parse(raw) } catch { /* 保留原字符串 */ }
     return { path: rule.conditionPath.trim(), op, value: val }
   }
@@ -1737,7 +1737,7 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
   for (const rule of rules) {
     const condition = buildCondition(rule)
     if (rule.action === 'set' && rule.path.trim()) {
-      let value: any = rule.value
+      let value: unknown = rule.value
       try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
       result.push({ action: 'set', path: rule.path.trim(), value, ...(condition ? { condition } : {}) })
     } else if (rule.action === 'drop' && rule.path.trim()) {
@@ -1745,7 +1745,7 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
     } else if (rule.action === 'rename' && rule.from.trim() && rule.to.trim()) {
       result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim(), ...(condition ? { condition } : {}) })
     } else if ((rule.action === 'insert' || rule.action === 'append') && rule.path.trim()) {
-      let value: any = rule.value
+      let value: unknown = rule.value
       try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
       const indexStr = rule.index.trim()
       if (indexStr === '') {
@@ -1804,7 +1804,7 @@ function getBodyValidationErrorForEndpoint(endpointId: string): string | null {
       if (!rule.pattern.trim()) return `${prefix}正则表达式不能为空`
       try {
         new RegExp(rule.pattern.trim())
-      } catch (err: any) {
+      } catch (err: unknown) {
         return `${prefix}正则表达式无效：${err instanceof Error ? err.message : String(err)}`
       }
       const flags = rule.flags.trim()
@@ -1984,7 +1984,7 @@ async function saveEndpoint(endpoint: ProviderEndpoint) {
   savingEndpointId.value = endpoint.id
   try {
     // 仅提交变更字段，避免 fixed provider 因 base_url/custom_path 被锁定而更新失败
-    const payload: Record<string, any> = {}
+    const payload: Record<string, unknown> = {}
 
     if (!isFixedProvider.value) {
       if (state.url !== endpoint.base_url) payload.base_url = state.url
@@ -2001,8 +2001,8 @@ async function saveEndpoint(endpoint: ProviderEndpoint) {
     await updateEndpoint(endpoint.id, payload)
     success('端点已更新')
     emit('endpointUpdated')
-  } catch (error: any) {
-    showError(error.response?.data?.detail || '更新失败', '错误')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '更新失败'), '错误')
   } finally {
     savingEndpointId.value = null
   }
@@ -2020,8 +2020,8 @@ async function handleToggleFormatConversion(endpoint: ProviderEndpoint) {
     })
     success(newEnabled ? '已启用格式转换' : '已关闭格式转换')
     emit('endpointUpdated')
-  } catch (error: any) {
-    showError(error.response?.data?.detail || '操作失败', '错误')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '操作失败'), '错误')
   } finally {
     togglingFormatEndpointId.value = null
   }
@@ -2070,7 +2070,7 @@ async function handleCycleUpstreamStream(endpoint: ProviderEndpoint) {
 
   savingEndpointId.value = endpoint.id
   try {
-    const merged: Record<string, any> = { ...(endpoint.config || {}) }
+    const merged: Record<string, unknown> = { ...(endpoint.config || {}) }
     // 清理旧的 key
     delete merged.upstream_stream_policy
     delete merged.upstreamStreamPolicy
@@ -2091,8 +2091,8 @@ async function handleCycleUpstreamStream(endpoint: ProviderEndpoint) {
 
     success(`已切换为${nextLabel}`)
     emit('endpointUpdated')
-  } catch (error: any) {
-    showError(error.response?.data?.detail || '操作失败', '错误')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '操作失败'), '错误')
   } finally {
     savingEndpointId.value = null
   }
@@ -2122,8 +2122,8 @@ async function handleAddEndpoint() {
     // 重置表单，保留 URL
     newEndpoint.value = { api_format: '', base_url: baseUrl, custom_path: '' }
     emit('endpointCreated')
-  } catch (error: any) {
-    showError(error.response?.data?.detail || '添加失败', '错误')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '添加失败'), '错误')
   } finally {
     addingEndpoint.value = false
   }
@@ -2137,8 +2137,8 @@ async function handleToggleEndpoint(endpoint: ProviderEndpoint) {
     await updateEndpoint(endpoint.id, { is_active: newStatus })
     success(newStatus ? '端点已启用' : '端点已停用')
     emit('endpointUpdated')
-  } catch (error: any) {
-    showError(error.response?.data?.detail || '操作失败', '错误')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '操作失败'), '错误')
   } finally {
     togglingEndpointId.value = null
   }
@@ -2162,8 +2162,8 @@ async function confirmDeleteEndpoint() {
     await deleteEndpoint(endpoint.id)
     success(`已删除 ${formatApiFormat(endpoint.api_format)} 端点`)
     emit('endpointUpdated')
-  } catch (error: any) {
-    showError(error.response?.data?.detail || '删除失败', '错误')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '删除失败'), '错误')
   } finally {
     deletingEndpointId.value = null
     endpointToDelete.value = null

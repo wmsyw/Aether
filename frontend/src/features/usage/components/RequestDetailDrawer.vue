@@ -699,6 +699,7 @@ const autoRefreshing = ref(false)
 const curlCopying = ref(false)
 const curlCopied = ref(false)
 const replayDialogOpen = ref(false)
+const AUTO_REFRESH_INTERVAL_MS = 1000
 
 // 监听标签页切换
 watch(activeTab, (newTab) => {
@@ -1010,15 +1011,15 @@ const visibleTabs = computed(() => {
   return tabs.filter(tab => {
     switch (tab.name) {
       case 'request-headers':
-        return hasContent(detail.value!.request_headers)
+        return hasContent(detail.value?.request_headers) || hasContent(detail.value?.provider_request_headers)
       case 'request-body':
-        return hasContent(detail.value!.request_body) || hasContent(detail.value!.provider_request_body)
+        return hasContent(detail.value?.request_body) || hasContent(detail.value?.provider_request_body)
       case 'response-headers':
-        return hasContent(detail.value!.response_headers) || hasContent(detail.value!.client_response_headers)
+        return hasContent(detail.value?.response_headers) || hasContent(detail.value?.client_response_headers)
       case 'response-body':
-        return hasContent(detail.value!.response_body) || hasContent(detail.value!.client_response_body)
+        return hasContent(detail.value?.response_body) || hasContent(detail.value?.client_response_body)
       case 'metadata':
-        return hasContent(detail.value!.metadata)
+        return hasContent(detail.value?.metadata)
       default:
         return false
     }
@@ -1078,6 +1079,15 @@ async function loadDetail(id: string, silent = false) {
     if (silent) {
       timelineRef.value?.refresh()
     }
+
+    // 抽屉打开时，对进行中请求自动保持刷新，保证详情实时更新
+    if (props.isOpen) {
+      if (isRequestCompleted()) {
+        stopAutoRefresh()
+      } else {
+        startAutoRefresh()
+      }
+    }
   } catch (err) {
     log.error('Failed to load request detail:', err)
     if (!silent) {
@@ -1108,6 +1118,23 @@ function stopAutoRefresh() {
   autoRefreshing.value = false
 }
 
+function startAutoRefresh() {
+  if (autoRefreshTimer.value || !props.requestId || !props.isOpen) {
+    return
+  }
+  autoRefreshing.value = true
+  autoRefreshTimer.value = setInterval(async () => {
+    if (!props.requestId || !props.isOpen) {
+      stopAutoRefresh()
+      return
+    }
+    await loadDetail(props.requestId, true)
+    if (isRequestCompleted()) {
+      stopAutoRefresh()
+    }
+  }, AUTO_REFRESH_INTERVAL_MS)
+}
+
 async function refreshDetail() {
   if (!props.requestId) return
 
@@ -1132,16 +1159,7 @@ async function refreshDetail() {
     return
   }
 
-  autoRefreshTimer.value = setInterval(async () => {
-    if (!props.requestId || !props.isOpen) {
-      stopAutoRefresh()
-      return
-    }
-    await loadDetail(props.requestId, true)
-    if (isRequestCompleted()) {
-      stopAutoRefresh()
-    }
-  }, 1000)
+  startAutoRefresh()
 }
 
 onBeforeUnmount(() => {
@@ -1300,7 +1318,7 @@ function copyContent(tabName: string) {
     }
   } else {
     // JSON 视图模式：复制原始 JSON
-    let data: any = null
+    let data: unknown = null
     switch (tabName) {
       case 'request-headers':
         data = dataSource.value === 'provider'
@@ -1380,8 +1398,8 @@ function openReplayDialog() {
 interface HeaderEntry {
   key: string
   status: 'added' | 'modified' | 'removed' | 'unchanged'
-  originalValue?: any
-  newValue?: any
+  originalValue?: unknown
+  newValue?: unknown
 }
 
 const mergedHeaderEntries = computed(() => {

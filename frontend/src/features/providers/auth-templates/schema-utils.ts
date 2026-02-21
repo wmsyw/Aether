@@ -190,14 +190,14 @@ function propertyToField(
 export function buildRequestFromSchema(
   schema: CredentialsSchema,
   architectureId: string,
-  formData: Record<string, any>,
+  formData: Record<string, unknown>,
   providerWebsite?: string,
 ): SaveConfigRequest {
-  const baseUrl = formData.base_url || providerWebsite || schema['x-default-base-url'] || ''
+  const baseUrl = (formData.base_url as string) || providerWebsite || schema['x-default-base-url'] || ''
   const authType = schema['x-auth-type'] || 'api_key'
 
   // 构建 credentials：除 base_url 和代理字段外的所有 schema 属性
-  const credentials: Record<string, any> = {}
+  const credentials: Record<string, unknown> = {}
   for (const key of Object.keys(schema.properties)) {
     if (key === 'base_url') continue
     const v = formData[key]
@@ -227,18 +227,21 @@ export function buildRequestFromSchema(
  */
 export function parseConfigFromSchema(
   schema: CredentialsSchema,
-  config: any,
-): Record<string, any> {
-  const proxyData = parseProxyConfig(config?.connector?.config)
-  const result: Record<string, any> = {
-    base_url: config?.base_url || '',
+  config: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const connector = config?.connector as Record<string, unknown> | undefined
+  const connectorConfig = connector?.config as Record<string, unknown> | undefined
+  const proxyData = parseProxyConfig(connectorConfig)
+  const result: Record<string, unknown> = {
+    base_url: (config?.base_url as string) || '',
     ...proxyData,
   }
 
   // 从 credentials 中提取各 schema 属性
+  const credentials = connector?.credentials as Record<string, unknown> | undefined
   for (const key of Object.keys(schema.properties)) {
     if (key === 'base_url') continue
-    result[key] = config?.connector?.credentials?.[key] || ''
+    result[key] = credentials?.[key] || ''
   }
 
   return result
@@ -246,13 +249,18 @@ export function parseConfigFromSchema(
 
 // ==================== 验证 ====================
 
+/** 安全获取字符串值并 trim（表单字段值可能为 string 或其他类型） */
+function trimValue(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : ''
+}
+
 /**
  * 根据 schema 验证表单数据
  * @returns 错误消息，无错误返回 null
  */
 export function validateFromSchema(
   schema: CredentialsSchema,
-  formData: Record<string, any>,
+  formData: Record<string, unknown>,
 ): string | null {
   const validations = schema['x-validation']
   if (!validations) return null
@@ -262,7 +270,7 @@ export function validateFromSchema(
       case 'required': {
         if (!rule.fields) break
         for (const field of rule.fields) {
-          if (!formData[field]?.trim?.()) {
+          if (!trimValue(formData[field])) {
             return rule.message
           }
         }
@@ -270,7 +278,7 @@ export function validateFromSchema(
       }
       case 'any_required': {
         if (!rule.fields) break
-        const hasAny = rule.fields.some((f) => !!formData[f]?.trim?.())
+        const hasAny = rule.fields.some((f) => !!trimValue(formData[f]))
         if (!hasAny) {
           return rule.message
         }
@@ -282,12 +290,12 @@ export function validateFromSchema(
         const thenFields = rule.then
         if (!ifField || !thenFields) break
 
-        const ifHasValue = !!formData[ifField]?.trim?.()
-        const unlessHasValue = unlessField ? !!formData[unlessField]?.trim?.() : false
+        const ifHasValue = !!trimValue(formData[ifField])
+        const unlessHasValue = unlessField ? !!trimValue(formData[unlessField]) : false
 
         if (ifHasValue && !unlessHasValue) {
           for (const field of thenFields) {
-            if (!formData[field]?.trim?.()) {
+            if (!trimValue(formData[field])) {
               return rule.message
             }
           }
@@ -331,7 +339,7 @@ export function formatQuotaFromSchema(
  */
 export function formatBalanceExtraFromSchema(
   schema: CredentialsSchema,
-  extra: Record<string, any>,
+  extra: Record<string, unknown>,
 ): BalanceExtraItem[] {
   const formats = schema['x-balance-extra-format']
   if (!formats) return []
@@ -367,31 +375,35 @@ export function formatBalanceExtraFromSchema(
 }
 
 function formatWindowLimitItem(
-  extra: Record<string, any>,
+  extra: Record<string, unknown>,
   fmt: BalanceExtraFormat,
 ): BalanceExtraItem | null {
   if (!fmt.source) return null
-  const limit = extra[fmt.source]
-  if (!limit || limit.remaining === undefined || limit.limit === undefined || limit.limit === 0) {
+  const rawLimit = extra[fmt.source]
+  if (!rawLimit || typeof rawLimit !== 'object') return null
+  const limit = rawLimit as Record<string, unknown>
+  if (limit.remaining === undefined || limit.limit === undefined || limit.limit === 0) {
     return null
   }
 
-  const percent = Math.round((limit.remaining / limit.limit) * 100)
+  const limitVal = Number(limit.limit)
+  const remainingVal = Number(limit.remaining)
+  const percent = Math.round((remainingVal / limitVal) * 100)
   const divisor = fmt.unit_divisor || 1
-  const remaining = (limit.remaining / divisor).toFixed(2)
-  const total = (limit.limit / divisor).toFixed(2)
+  const remaining = (remainingVal / divisor).toFixed(2)
+  const total = (limitVal / divisor).toFixed(2)
 
   return {
     label: fmt.label,
     value: `${percent}%`,
     percent,
-    resetsAt: limit.resets_at,
+    resetsAt: typeof limit.resets_at === 'number' ? limit.resets_at : undefined,
     tooltip: `$${remaining} / $${total}`,
   }
 }
 
 function formatDailyQuotaItem(
-  extra: Record<string, any>,
+  extra: Record<string, unknown>,
   fmt: BalanceExtraFormat,
 ): BalanceExtraItem | null {
   const limitKey = fmt.source_limit || 'daily_quota_limit'
@@ -410,7 +422,7 @@ function formatDailyQuotaItem(
   const startDateKey = fmt.source_start_date
   if (startDateKey && extra[startDateKey]) {
     try {
-      const startDate = new Date(extra[startDateKey])
+      const startDate = new Date(String(extra[startDateKey]))
       const now = new Date()
       const todayReset = new Date(now)
       todayReset.setHours(startDate.getHours(), startDate.getMinutes(), startDate.getSeconds(), 0)
@@ -432,14 +444,14 @@ function formatDailyQuotaItem(
 }
 
 function formatMonthlyExpiryItem(
-  extra: Record<string, any>,
+  extra: Record<string, unknown>,
   fmt: BalanceExtraFormat,
 ): BalanceExtraItem | null {
   const endDateKey = fmt.source_end_date || 'effective_end_date'
   if (!extra[endDateKey]) return null
 
   try {
-    const endDate = new Date(extra[endDateKey])
+    const endDate = new Date(String(extra[endDateKey]))
     const now = new Date()
     const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     const resetsAt = Math.floor(endDate.getTime() / 1000)
@@ -457,27 +469,27 @@ function formatMonthlyExpiryItem(
 }
 
 function formatWeeklySpentItem(
-  extra: Record<string, any>,
+  extra: Record<string, unknown>,
   fmt: BalanceExtraFormat,
 ): BalanceExtraItem | null {
   const limitKey = fmt.source_limit || 'weekly_limit'
   const spentKey = fmt.source_spent || 'weekly_spent'
   const resetsAtKey = fmt.source_resets_at || 'weekly_resets_at'
 
-  const limit = extra[limitKey]
-  const spent = extra[spentKey]
+  const limitNum = Number(extra[limitKey])
+  const spentNum = Number(extra[spentKey])
 
-  if (limit === undefined || limit <= 0 || spent === undefined) return null
+  if (extra[limitKey] === undefined || limitNum <= 0 || extra[spentKey] === undefined) return null
 
-  const remaining = Math.max(0, limit - spent)
-  const percent = Math.round((remaining / limit) * 100)
+  const remaining = Math.max(0, limitNum - spentNum)
+  const percent = Math.round((remaining / limitNum) * 100)
 
   return {
     label: fmt.label,
     value: `${percent}%`,
     percent,
-    resetsAt: extra[resetsAtKey],
-    tooltip: `$${remaining.toFixed(2)} / $${(limit as number).toFixed(2)}`,
+    resetsAt: typeof extra[resetsAtKey] === 'number' ? extra[resetsAtKey] : undefined,
+    tooltip: `$${remaining.toFixed(2)} / $${limitNum.toFixed(2)}`,
   }
 }
 
@@ -489,8 +501,8 @@ function formatWeeklySpentItem(
 export function handleSchemaFieldChange(
   schema: CredentialsSchema,
   fieldKey: string,
-  value: any,
-  formData: Record<string, any>,
+  value: unknown,
+  formData: Record<string, unknown>,
 ): void {
   const hooks = schema['x-field-hooks']
   if (!hooks) return
@@ -499,9 +511,9 @@ export function handleSchemaFieldChange(
   if (!hook) return
 
   // 目标字段为空时才填充
-  if (formData[hook.target]?.trim?.()) return
+  if (trimValue(formData[hook.target])) return
 
-  const result = executeFieldHook(hook.action, value)
+  const result = executeFieldHook(hook.action, typeof value === 'string' ? value : String(value ?? ''))
   if (result) {
     formData[hook.target] = result
   }

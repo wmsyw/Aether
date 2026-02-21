@@ -113,10 +113,11 @@ import {
 import Button from '@/components/ui/button.vue'
 import { testModel } from '@/api/endpoints/providers'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 
 const props = defineProps<{
   open: boolean
-  metadata: any
+  metadata: Record<string, unknown> | null
   keyName: string
   providerId?: string
   keyId?: string
@@ -138,17 +139,19 @@ const { error: showError, success: showSuccess } = useToast()
 const testingModel = ref<string | null>(null)
 
 const items = computed<QuotaItem[]>(() => {
-  const quotaByModel = props.metadata?.antigravity?.quota_by_model
+  const antigravity = props.metadata?.antigravity
+  if (!antigravity || typeof antigravity !== 'object') return []
+  const quotaByModel = (antigravity as Record<string, unknown>).quota_by_model
   if (!quotaByModel || typeof quotaByModel !== 'object') return []
 
   const result: QuotaItem[] = []
-  for (const [model, rawInfo] of Object.entries(quotaByModel)) {
+  for (const [model, rawInfo] of Object.entries(quotaByModel as Record<string, unknown>)) {
     if (!model) continue
-    const info: any = rawInfo || {}
+    const info = (rawInfo || {}) as Record<string, unknown>
 
-    let usedPercent = Number(info.used_percent)
+    let usedPercent = Number(info['used_percent'])
     if (!Number.isFinite(usedPercent)) {
-      const remainingFraction = Number(info.remaining_fraction)
+      const remainingFraction = Number(info['remaining_fraction'])
       if (Number.isFinite(remainingFraction)) {
         usedPercent = (1 - remainingFraction) * 100
       } else {
@@ -162,8 +165,9 @@ const items = computed<QuotaItem[]>(() => {
     const remainingPercent = Math.max(100 - usedPercent, 0)
 
     let resetSeconds: number | null = null
-    if (typeof info.reset_time === 'string' && info.reset_time.trim()) {
-      const ts = Date.parse(info.reset_time.trim())
+    const resetTime = info['reset_time']
+    if (typeof resetTime === 'string' && resetTime.trim()) {
+      const ts = Date.parse(resetTime.trim())
       if (!Number.isNaN(ts)) {
         const diff = Math.floor((ts - Date.now()) / 1000)
         resetSeconds = diff > 0 ? diff : 0
@@ -203,9 +207,8 @@ async function handleTestModel(modelName: string) {
     } else {
       showError(`模型测试失败: ${result.error || '未知错误'}`)
     }
-  } catch (err: any) {
-    const errorMsg = err?.response?.data?.detail || err?.message || '测试请求失败'
-    showError(`模型测试失败: ${errorMsg}`)
+  } catch (err: unknown) {
+    showError(`模型测试失败: ${parseApiError(err, '测试请求失败')}`)
   } finally {
     testingModel.value = null
   }

@@ -66,21 +66,21 @@
                 class="bg-muted/30"
               >
                 <div
-                  v-for="model in group.models"
-                  :key="model.modelId"
+                  v-for="item in group.models"
+                  :key="item.modelId"
                   class="flex flex-col gap-0.5 pl-7 pr-2.5 py-1.5 cursor-pointer text-xs border-t"
-                  :class="selectedModel?.modelId === model.modelId && selectedModel?.providerId === model.providerId
+                  :class="selectedModel?.modelId === item.modelId && selectedModel?.providerId === item.providerId
                     ? 'bg-primary text-primary-foreground'
                     : 'hover:bg-muted'"
-                  @click="selectModel(model)"
+                  @click="selectModel(item)"
                 >
-                  <span class="truncate font-medium">{{ model.modelName }}</span>
+                  <span class="truncate font-medium">{{ item.modelName }}</span>
                   <span
                     class="truncate text-[10px]"
-                    :class="selectedModel?.modelId === model.modelId && selectedModel?.providerId === model.providerId
+                    :class="selectedModel?.modelId === item.modelId && selectedModel?.providerId === item.providerId
                       ? 'text-primary-foreground/70'
                       : 'text-muted-foreground'"
-                  >{{ model.modelId }}</span>
+                  >{{ item.modelId }}</span>
                 </div>
               </div>
             </div>
@@ -363,6 +363,7 @@ import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseNumberInput, sortResolutionEntries } from '@/utils/form'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
 import TieredPricingEditor from './TieredPricingEditor.vue'
 import {
   getModelsDevList,
@@ -436,7 +437,7 @@ const groupedModels = computed(() => {
         models: []
       })
     }
-    groups.get(model.providerId)!.models.push(model)
+    groups.get(model.providerId)?.models.push(model)
   }
 
   // 转换为数组并排序
@@ -506,7 +507,7 @@ interface FormData {
   display_name: string
   default_price_per_request?: number
   supported_capabilities?: string[]
-  config?: Record<string, any>
+  config?: Record<string, unknown>
   is_active?: boolean
 }
 
@@ -524,7 +525,7 @@ const form = ref<FormData>(defaultForm())
 const KEEP_FALSE_CONFIG_KEYS = new Set(['streaming'])
 
 // 设置 config 字段
-function setConfigField(key: string, value: any) {
+function setConfigField(key: string, value: unknown) {
   if (!form.value.config) {
     form.value.config = {}
   }
@@ -535,41 +536,41 @@ function setConfigField(key: string, value: any) {
   }
 }
 
-function getNested(obj: any, path: string): any {
+function getNested(obj: unknown, path: string): unknown {
   if (!obj || typeof obj !== 'object') return undefined
   const parts = path.split('.').filter(Boolean)
-  let cur: any = obj
+  let cur = obj as Record<string, unknown>
   for (const p of parts) {
     if (!cur || typeof cur !== 'object') return undefined
-    cur = cur[p]
+    cur = cur[p] as Record<string, unknown>
   }
   return cur
 }
 
-function setNested(obj: any, path: string, value: any) {
+function setNested(obj: unknown, path: string, value: unknown) {
   if (!obj || typeof obj !== 'object') return
   const parts = path.split('.').filter(Boolean)
   if (parts.length === 0) return
-  let cur: any = obj
+  let cur = obj as Record<string, unknown>
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]
     if (!cur[p] || typeof cur[p] !== 'object') {
       cur[p] = {}
     }
-    cur = cur[p]
+    cur = cur[p] as Record<string, unknown>
   }
   cur[parts[parts.length - 1]] = value
 }
 
-function deleteNested(obj: any, path: string) {
+function deleteNested(obj: unknown, path: string) {
   if (!obj || typeof obj !== 'object') return
   const parts = path.split('.').filter(Boolean)
   if (parts.length === 0) return
-  let cur: any = obj
+  let cur = obj as Record<string, unknown>
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]
     if (!cur[p] || typeof cur[p] !== 'object') return
-    cur = cur[p]
+    cur = cur[p] as Record<string, unknown>
   }
   delete cur[parts[parts.length - 1]]
 }
@@ -577,9 +578,9 @@ function deleteNested(obj: any, path: string) {
 function pruneEmptyBillingConfig() {
   const cfg = form.value.config
   if (!cfg || typeof cfg !== 'object') return
-  const billing = cfg.billing
+  const billing = cfg.billing as Record<string, unknown> | undefined
   if (!billing || typeof billing !== 'object') return
-  const video = billing.video
+  const video = billing.video as Record<string, unknown> | undefined
   if (video && typeof video === 'object' && Object.keys(video).length === 0) {
     delete billing.video
   }
@@ -611,7 +612,7 @@ function loadVideoPricingFromConfig() {
   const raw = getNested(cfg, 'billing.video.price_per_second_by_resolution')
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     // 按分辨率从低到高排序
-    const sortedEntries = sortResolutionEntries(Object.entries(raw))
+    const sortedEntries = sortResolutionEntries(Object.entries(raw as Record<string, unknown>))
     videoResolutionPrices.value = sortedEntries.map(([k, v]) => ({
       resolution: String(k),
       price_per_second: typeof v === 'number' ? v : undefined,
@@ -722,7 +723,7 @@ function selectModel(model: ModelsDevModelItem) {
   form.value.display_name = model.modelName
 
   // 构建 config
-  const config: Record<string, any> = {
+  const config: Record<string, unknown> = {
     streaming: true,
   }
   if (model.supportsVision) config.vision = true
@@ -848,8 +849,8 @@ async function handleSubmit() {
       success('模型更新成功')
     } else {
       const createData: GlobalModelCreate = {
-        name: form.value.name!,
-        display_name: form.value.display_name!,
+        name: form.value.name ?? '',
+        display_name: form.value.display_name ?? '',
         config: cleanConfig,
         default_price_per_request: form.value.default_price_per_request ?? undefined,
         default_tiered_pricing: finalTieredPricing,
@@ -861,8 +862,8 @@ async function handleSubmit() {
     }
     emit('update:open', false)
     emit('success')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || err.message, isEditMode.value ? '更新失败' : '创建失败')
+  } catch (err: unknown) {
+    showError(parseApiError(err, isEditMode.value ? '更新失败' : '创建失败'), isEditMode.value ? '更新失败' : '创建失败')
   } finally {
     submitting.value = false
   }

@@ -527,10 +527,12 @@
           <span>{{ formatFullDate(viewingAnnouncement.created_at) }}</span>
         </div>
 
+        <!-- eslint-disable vue/no-v-html -->
         <div
           class="prose prose-sm dark:prose-invert max-w-none"
           v-html="renderMarkdown(viewingAnnouncement.content)"
         />
+        <!-- eslint-enable vue/no-v-html -->
       </div>
 
       <template #footer>

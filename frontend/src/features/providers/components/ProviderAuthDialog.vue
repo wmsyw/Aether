@@ -306,6 +306,7 @@ import {
   deleteProviderOpsConfig,
   type ArchitectureInfo,
 } from '@/api/providerOps'
+import { parseApiError } from '@/utils/errorParser'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import type { AuthTemplateFieldGroup } from '../auth-templates/types'
@@ -325,7 +326,7 @@ const props = defineProps<{
   open: boolean
   providerId: string
   providerWebsite?: string
-  currentConfig?: any
+  currentConfig?: Record<string, unknown> | null
 }>()
 
 const emit = defineEmits<{
@@ -373,7 +374,7 @@ const architecturesLoaded = ref(false)
 // 当前选择
 const selectedArchitectureId = ref('new_api')
 const selectedAuthType = ref('')
-const formData = ref<Record<string, any>>({})
+const formData = ref<Record<string, unknown>>({})
 
 // 当前架构支持的认证方式
 const currentAuthTypes = computed(() => {
@@ -446,7 +447,7 @@ function handleAuthTypeChange() {
   formChanged.value = true
 }
 
-function handleFieldChange(fieldKey: string, value: any) {
+function handleFieldChange(fieldKey: string, value: unknown) {
   formChanged.value = true
 
   // 执行 schema 定义的字段钩子
@@ -475,9 +476,9 @@ function resetFormData() {
   }
 
   // 初始化表单数据
-  const data: Record<string, any> = {}
+  const data: Record<string, unknown> = {}
   for (const [key, prop] of Object.entries(schema.properties)) {
-    data[key] = (prop as any)['x-default-value'] ?? ''
+    data[key] = (prop as Record<string, unknown>)['x-default-value'] ?? ''
   }
   // 代理相关默认值
   data.proxy_enabled = false
@@ -581,10 +582,9 @@ async function handleVerify() {
 
       showError(result.message || '验证失败')
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     verifyStatus.value = 'error'
-    const errMsg = error.response?.data?.detail || error.message || '验证失败'
-    showError(errMsg)
+    showError(parseApiError(error, '验证失败'))
   } finally {
     isVerifying.value = false
   }
@@ -632,8 +632,8 @@ async function handleSave() {
     } else {
       showError(result.message || '保存失败')
     }
-  } catch (error: any) {
-    showError(error.response?.data?.detail || error.message, '保存失败')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '保存失败'), '保存失败')
   } finally {
     isSaving.value = false
   }
@@ -666,14 +666,14 @@ async function handleClear() {
     } else {
       showError(result.message || '清除失败')
     }
-  } catch (error: any) {
-    showError(error.response?.data?.detail || error.message, '清除失败')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '清除失败'), '清除失败')
   } finally {
     isClearing.value = false
   }
 }
 
-function loadFromConfig(config: any) {
+function loadFromConfig(config: Record<string, unknown>) {
   if (!config?.connector) return
 
   hasExistingConfig.value = true

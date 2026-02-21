@@ -41,6 +41,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  subtitle: undefined,
   loading: false
 })
 

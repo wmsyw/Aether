@@ -222,6 +222,7 @@
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { authApi } from '@/api/auth'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import { Dialog } from '@/components/ui'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
@@ -576,12 +577,8 @@ const handleSendCode = async () => {
     } else {
       showError(response.message || '请稍后重试', '发送失败')
     }
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail
-      || error.response?.data?.error?.message
-      || error.message
-      || '网络错误，请重试'
-    showError(errorMsg, '发送失败')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '网络错误，请重试'), '发送失败')
   } finally {
     isSendingCode.value = false
   }
@@ -609,13 +606,9 @@ const handleCodeComplete = async (code: string) => {
       // Clear the code input
       clearCodeInputs()
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     verificationError.value = true
-    const errorMsg = error.response?.data?.detail
-      || error.response?.data?.error?.message
-      || error.message
-      || '验证码错误，请重试'
-    showError(errorMsg, '验证失败')
+    showError(parseApiError(error, '验证码错误，请重试'), '验证失败')
     // Clear the code input
     clearCodeInputs()
   } finally {
@@ -662,12 +655,8 @@ const handleSubmit = async () => {
 
     emit('success')
     isOpen.value = false
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail
-      || error.response?.data?.error?.message
-      || error.message
-      || '注册失败，请重试'
-    showError(errorMsg, '注册失败')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '注册失败，请重试'), '注册失败')
   } finally {
     isLoading.value = false
   }

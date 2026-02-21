@@ -388,7 +388,7 @@ interface Props {
 function getModelUserConfigurableCapabilities(): CapabilityDefinition[] {
   if (!props.model?.supported_capabilities || !props.userConfigurableCapabilities) return []
   return props.userConfigurableCapabilities.filter(cap =>
-    props.model!.supported_capabilities!.includes(cap.name)
+    props.model?.supported_capabilities?.includes(cap.name)
   )
 }
 

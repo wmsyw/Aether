@@ -23,7 +23,7 @@ export interface UserPreferences {
   avatar_url?: string
   bio?: string
   default_provider_id?: string // UUID
-  default_provider?: any
+  default_provider?: Record<string, unknown>
   theme: string
   language: string
   timezone?: string
@@ -216,7 +216,7 @@ export const meApi = {
   async getActiveRequests(ids?: string): Promise<{
     requests: Array<{
       id: string
-      status: 'pending' | 'streaming' | 'completed' | 'failed'
+      status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
       input_tokens: number
       output_tokens: number
       cache_creation_input_tokens?: number | null
@@ -237,7 +237,7 @@ export const meApi = {
   },
 
   // 获取可用的提供商
-  async getAvailableProviders(): Promise<any[]> {
+  async getAvailableProviders(): Promise<Array<Record<string, unknown>>> {
     const response = await apiClient.get('/api/users/me/providers')
     return response.data
   },
@@ -256,7 +256,7 @@ export const meApi = {
       default_price_per_request: number | null
       default_tiered_pricing: TieredPricingConfig | null
       supported_capabilities: string[] | null
-      config: Record<string, any> | null
+      config: Record<string, unknown> | null
     }>
     total: number
   }> {
@@ -265,7 +265,7 @@ export const meApi = {
   },
 
   // 获取端点状态（不包含敏感信息）
-  async getEndpointStatus(): Promise<any[]> {
+  async getEndpointStatus(): Promise<Array<Record<string, unknown>>> {
     const response = await apiClient.get('/api/users/me/endpoint-status')
     return response.data
   },

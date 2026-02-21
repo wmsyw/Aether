@@ -40,7 +40,7 @@ function createMockResponse<T>(data: T, status: number = 200): AxiosResponse<T> 
     status,
     statusText: status === 200 ? 'OK' : 'Error',
     headers: {},
-    config: {} as any
+    config: {} as AxiosRequestConfig
   }
 }
 
@@ -422,7 +422,7 @@ function normalizeApiFormat(apiFormat: string): string {
 
 function getMockEndpointExtras(apiFormat: string) {
   const normalizedFormat = normalizeApiFormat(apiFormat)
-  const extras: Record<string, any> = {}
+  const extras: Record<string, unknown> = {}
 
   if (normalizedFormat === 'claude:chat') {
     extras.header_rules = [
@@ -481,7 +481,7 @@ const MOCK_CAPABILITIES = [
 /**
  * Mock API 路由处理器
  */
-const mockHandlers: Record<string, (config: AxiosRequestConfig) => Promise<AxiosResponse<any>>> = {
+const mockHandlers: Record<string, (config: AxiosRequestConfig) => Promise<AxiosResponse<unknown>>> = {
   // ========== 认证相关 ==========
   'POST /api/auth/login': async (config) => {
     await delay()
@@ -1109,11 +1109,11 @@ const mockHandlers: Record<string, (config: AxiosRequestConfig) => Promise<Axios
 
 // 动态路由匹配器 - 支持 :id 形式的参数
 interface RouteMatch {
-  handler: (config: AxiosRequestConfig, params: Record<string, string>) => Promise<AxiosResponse<any>>
+  handler: (config: AxiosRequestConfig, params: Record<string, string>) => Promise<AxiosResponse<unknown>>
   params: Record<string, string>
 }
 
-type DynamicHandler = (config: AxiosRequestConfig, params: Record<string, string>) => Promise<AxiosResponse<any>>
+type DynamicHandler = (config: AxiosRequestConfig, params: Record<string, string>) => Promise<AxiosResponse<unknown>>
 
 // 动态路由注册表
 const dynamicRoutes: Array<{
@@ -1169,7 +1169,7 @@ function matchDynamicRoute(method: string, url: string): RouteMatch | null {
 /**
  * 匹配请求到 handler
  */
-function matchHandler(method: string, url: string): ((config: AxiosRequestConfig) => Promise<AxiosResponse<any>>) | null {
+function matchHandler(method: string, url: string): ((config: AxiosRequestConfig) => Promise<AxiosResponse<unknown>>) | null {
   // 移除查询参数
   const cleanUrl = url.split('?')[0]
   const upperMethod = method.toUpperCase()
@@ -1205,7 +1205,7 @@ function matchHandler(method: string, url: string): ((config: AxiosRequestConfig
 /**
  * 处理 Mock 请求
  */
-export async function handleMockRequest(config: AxiosRequestConfig): Promise<AxiosResponse<any> | null> {
+export async function handleMockRequest(config: AxiosRequestConfig): Promise<AxiosResponse<unknown> | null> {
   if (!isDemoMode()) {
     return null
   }
@@ -1219,16 +1219,18 @@ export async function handleMockRequest(config: AxiosRequestConfig): Promise<Axi
   if (handler) {
     try {
       return await handler(config)
-    } catch (error: any) {
-      if (error.response) {
+    } catch (error: unknown) {
+      if ((error as Record<string, unknown>)?.response) {
         throw error
       }
+      // eslint-disable-next-line no-console
       console.error('[Mock] Handler error:', error)
       throw { response: createMockResponse({ detail: '模拟请求处理失败' }, 500) }
     }
   }
 
   // 未匹配的请求返回默认响应
+  // eslint-disable-next-line no-console
   console.warn(`[Mock] Unhandled request: ${method} ${url}`)
   return createMockResponse({ message: '演示模式：该接口暂未模拟', demo_mode: true })
 }
@@ -1277,7 +1279,7 @@ function generateMockEndpointsForProvider(providerId: string) {
 }
 
 // 为 provider 生成 keys（Key 归属 Provider，通过 api_formats 关联）
-const PROVIDER_KEYS_CACHE: Record<string, any[]> = {}
+const PROVIDER_KEYS_CACHE: Record<string, Record<string, unknown>[]> = {}
 function generateMockKeysForProvider(providerId: string, count: number = 2) {
   const provider = MOCK_PROVIDERS.find(p => p.id === providerId)
   const formats = provider?.api_formats || []
@@ -1331,7 +1333,7 @@ function generateMockModelsForProvider(providerId: string) {
   const hasOpenAI = provider.api_formats.some(f => f.includes('openai'))
   const hasGemini = provider.api_formats.some(f => f.includes('gemini'))
 
-  const models: any[] = []
+  const models: Record<string, unknown>[] = []
   const now = new Date().toISOString()
 
   if (hasClaude) {
@@ -1734,7 +1736,7 @@ mockHandlers['GET /api/admin/endpoints/keys/grouped-by-format'] = async () => {
     }
   }
 
-  const grouped: Record<string, any[]> = {}
+  const grouped: Record<string, Record<string, unknown>[]> = {}
   for (const provider of MOCK_PROVIDERS) {
     const endpoints = generateMockEndpointsForProvider(provider.id)
     const baseUrlByFormat = Object.fromEntries(endpoints.map(e => [e.api_format, e.base_url]))
@@ -1812,7 +1814,7 @@ registerDynamicRoute('POST', '/api/admin/providers/:providerId/models/batch', as
   await delay()
   requireAdmin()
   const body = JSON.parse(config.data || '{}')
-  const models = (body.models || []).map((m: any, i: number) => ({
+  const models = ((body.models || []) as Record<string, unknown>[]).map((m: Record<string, unknown>, i: number) => ({
     id: `pm-demo-${Date.now()}-${i}`,
     provider_id: params.providerId,
     ...m,

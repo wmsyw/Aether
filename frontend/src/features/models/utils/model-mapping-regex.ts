@@ -48,10 +48,12 @@ export function createLRURegexCache(maxSize: number): LRURegexCache {
   return {
     get: (key: string) => {
       if (!cache.has(key)) return undefined
-      const value = cache.get(key)!
-      cache.delete(key)
-      cache.set(key, value)
-      return value
+      const value = cache.get(key)
+      if (value !== undefined) {
+        cache.delete(key)
+        cache.set(key, value)
+      }
+      return value ?? null
     },
     set: (key: string, value: RegExp | null) => {
       if (cache.has(key)) {

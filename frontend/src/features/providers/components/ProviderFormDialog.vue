@@ -500,7 +500,7 @@ const handleSubmit = async () => {
     }
 
     emit('update:modelValue', false)
-  } catch (error: any) {
+  } catch (error: unknown) {
     const action = isEditMode.value ? '更新' : '创建'
     showError(parseApiError(error, `${action}提供商失败`), `${action}失败`)
   } finally {

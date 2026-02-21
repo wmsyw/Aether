@@ -469,6 +469,7 @@ import TableCell from '@/components/ui/table-cell.vue'
 import RoutingTab from './RoutingTab.vue'
 import ModelMappingsTab from './ModelMappingsTab.vue'
 import { sortResolutionEntries } from '@/utils/form'
+import { parseApiError } from '@/utils/errorParser'
 import { getGlobalModelRoutingPreview } from '@/api/global-models'
 
 // 使用外部类型定义
@@ -479,15 +480,16 @@ import type { RoutingProviderInfo } from '@/api/global-models'
 
 const props = withDefaults(defineProps<Props>(), {
   hasBlockingDialogOpen: false,
+  capabilities: () => [],
 })
 const emit = defineEmits<{
   'update:open': [value: boolean]
   'editModel': [model: GlobalModelResponse]
   'toggleModelStatus': [model: GlobalModelResponse]
   'addProvider': []
-  'editProvider': [provider: any]
-  'deleteProvider': [provider: any]
-  'toggleProviderStatus': [provider: any]
+  'editProvider': [provider: Record<string, unknown>]
+  'deleteProvider': [provider: Record<string, unknown>]
+  'toggleProviderStatus': [provider: Record<string, unknown>]
   'refreshModel': []
   'linkProvider': [providerId: string]
   'linkProviders': [providerIds: string[]]
@@ -520,8 +522,8 @@ async function loadRoutingData() {
 
   try {
     routingData.value = await getGlobalModelRoutingPreview(props.model.id)
-  } catch (err: any) {
-    routingError.value = err.response?.data?.detail || '加载失败'
+  } catch (err: unknown) {
+    routingError.value = parseApiError(err, '加载失败')
   } finally {
     routingLoading.value = false
   }

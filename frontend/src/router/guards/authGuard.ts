@@ -4,8 +4,9 @@ import { log } from '@/utils/logger'
 /**
  * 判断错误是否为网络错误
  */
-function isNetworkError(error: any): boolean {
-  return !error.response || error.message?.includes('Network') || error.message?.includes('timeout')
+function isNetworkError(error: unknown): boolean {
+  const err = error as { response?: unknown; message?: string } | null
+  return !err?.response || err?.message?.includes('Network') || err?.message?.includes('timeout') || false
 }
 
 /**
@@ -18,17 +19,18 @@ export async function ensureUserLoaded(
   if (authStore.token && !authStore.user) {
     try {
       await authStore.fetchCurrentUser()
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as { response?: { status?: number }; message?: string }
       // 区分网络错误和认证错误
       if (isNetworkError(error)) {
         log.warn('Network error while fetching user info, keeping session', {
-          error: error?.message
+          error: err?.message
         })
-      } else if (error.response?.status === 401) {
+      } else if (err.response?.status === 401) {
         log.info('Authentication failed, clearing session')
         authStore.logout()
       } else {
-        log.warn('Failed to fetch user info, but keeping session', { error: error?.message })
+        log.warn('Failed to fetch user info, but keeping session', { error: err?.message })
       }
     }
   }

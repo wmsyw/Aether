@@ -10,7 +10,7 @@ interface CacheItem<T> {
 }
 
 class MemoryCache {
-  private cache: Map<string, CacheItem<any>> = new Map()
+  private cache: Map<string, CacheItem<unknown>> = new Map()
   private defaultTTL = 60000 // 默认缓存60秒
 
   /**

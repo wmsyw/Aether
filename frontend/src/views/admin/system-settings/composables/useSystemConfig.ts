@@ -213,7 +213,7 @@ export function useSystemConfig() {
         try {
           const response = await adminApi.getSystemConfig(key)
           if (response.value !== null && response.value !== undefined) {
-            ;(systemConfig.value as any)[key] = response.value
+            ;(systemConfig.value as Record<string, unknown>)[key] = response.value
           }
         } catch {
           // 配置不存在时使用默认值，无需处理

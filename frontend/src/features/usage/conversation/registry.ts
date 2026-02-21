@@ -40,7 +40,7 @@ class ParserRegistry {
   /**
    * 检测 API 格式并返回最佳匹配的解析器
    */
-  detectParser(requestBody: any, responseBody: any, hint?: string): ApiFormatParser | undefined {
+  detectParser(requestBody: unknown, responseBody: unknown, hint?: string): ApiFormatParser | undefined {
     let bestParser: ApiFormatParser | undefined
     let bestScore = 0
 
@@ -58,7 +58,7 @@ class ParserRegistry {
   /**
    * 检测 API 格式
    */
-  detectFormat(requestBody: any, responseBody: any, hint?: string): ApiFormat {
+  detectFormat(requestBody: unknown, responseBody: unknown, hint?: string): ApiFormat {
     const parser = this.detectParser(requestBody, responseBody, hint)
     return parser?.format ?? 'unknown'
   }
@@ -76,8 +76,8 @@ parserRegistry.register(geminiParser)
  * 解析请求体
  */
 export function parseRequest(
-  requestBody: any,
-  responseBody?: any,
+  requestBody: unknown,
+  responseBody?: unknown,
   formatHint?: string
 ): ParsedConversation {
   if (!requestBody) {
@@ -96,8 +96,8 @@ export function parseRequest(
  * 解析响应体
  */
 export function parseResponse(
-  responseBody: any,
-  requestBody?: any,
+  responseBody: unknown,
+  requestBody?: unknown,
   formatHint?: string
 ): ParsedConversation {
   if (!responseBody) {
@@ -121,8 +121,8 @@ export function parseResponse(
  * 检测 API 格式
  */
 export function detectApiFormat(
-  requestBody: any,
-  responseBody: any,
+  requestBody: unknown,
+  responseBody: unknown,
   hint?: string
 ): ApiFormat {
   return parserRegistry.detectFormat(requestBody, responseBody, hint)
@@ -132,8 +132,8 @@ export function detectApiFormat(
  * 渲染请求体
  */
 export function renderRequest(
-  requestBody: any,
-  responseBody?: any,
+  requestBody: unknown,
+  responseBody?: unknown,
   formatHint?: string
 ): RenderResult {
   if (!requestBody) {
@@ -152,8 +152,8 @@ export function renderRequest(
  * 渲染响应体
  */
 export function renderResponse(
-  responseBody: any,
-  requestBody?: any,
+  responseBody: unknown,
+  requestBody?: unknown,
   formatHint?: string
 ): RenderResult {
   if (!responseBody) {

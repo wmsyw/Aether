@@ -18,10 +18,10 @@
           <li>全局模型: {{ importPreview.global_models?.length || 0 }} 个</li>
           <li>提供商: {{ importPreview.providers?.length || 0 }} 个</li>
           <li>
-            端点: {{ importPreview.providers?.reduce((sum: number, p: any) => sum + (p.endpoints?.length || 0), 0) }} 个
+            端点: {{ importPreview.providers?.reduce((sum: number, p: { endpoints?: unknown[] }) => sum + (p.endpoints?.length || 0), 0) }} 个
           </li>
           <li>
-            API Keys: {{ importPreview.providers?.reduce((sum: number, p: any) => sum + (p.api_keys?.length || 0), 0) }} 个
+            API Keys: {{ importPreview.providers?.reduce((sum: number, p: { api_keys?: unknown[] }) => sum + (p.api_keys?.length || 0), 0) }} 个
           </li>
           <li v-if="importPreview.ldap_config">
             LDAP 配置: 1 个

@@ -182,7 +182,7 @@ export const usageApi = {
     limit?: number
     offset?: number
   }): Promise<{
-    records: any[]
+    records: Array<Record<string, unknown>>
     total: number
     limit: number
     offset: number
@@ -198,7 +198,7 @@ export const usageApi = {
   async getActiveRequests(ids?: string[]): Promise<{
     requests: Array<{
       id: string
-      status: 'pending' | 'streaming' | 'completed' | 'failed'
+      status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
       input_tokens: number
       output_tokens: number
       cache_creation_input_tokens?: number | null

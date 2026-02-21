@@ -486,6 +486,7 @@ import { PageHeader, PageContainer, CardSection } from '@/components/layout'
 import { useToast } from '@/composables/useToast'
 import { adminApi, type EmailTemplateInfo } from '@/api/admin'
 import { authApi } from '@/api/auth'
+import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
@@ -764,7 +765,7 @@ async function loadEmailConfig() {
           smtpPasswordIsSet.value = response.is_set === true
           // 不设置 smtp_password 的值，保持为 null
         } else if (response.value !== null && response.value !== undefined) {
-          (emailConfig.value as any)[key] = response.value
+          (emailConfig.value as Record<string, unknown>)[key] = response.value
         }
       } catch {
         // 配置不存在时使用默认值，无需处理
@@ -867,10 +868,9 @@ async function handleTestSmtp() {
     } else {
       error(result.message || '未知错误', 'SMTP 连接测试失败')
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('SMTP 连接测试失败:', err)
-    const errMsg = err.response?.data?.detail || err.message || '未知错误'
-    error(errMsg, 'SMTP 连接测试失败')
+    error(parseApiError(err, '未知错误'), 'SMTP 连接测试失败')
   } finally {
     testSmtpLoading.value = false
   }

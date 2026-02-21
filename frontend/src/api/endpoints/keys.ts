@@ -59,7 +59,7 @@ export interface RevealKeyResult {
   auth_type: 'api_key' | 'vertex_ai' | 'oauth'
   api_key?: string
   refresh_token?: string
-  auth_config?: string | Record<string, any>
+  auth_config?: string | Record<string, unknown>
 }
 
 export async function revealEndpointKey(keyId: string): Promise<RevealKeyResult> {
@@ -70,7 +70,7 @@ export async function revealEndpointKey(keyId: string): Promise<RevealKeyResult>
 /**
  * 导出 OAuth Key 凭据（扁平 JSON，用于跨实例迁移）
  */
-export async function exportKey(keyId: string): Promise<Record<string, any>> {
+export async function exportKey(keyId: string): Promise<Record<string, unknown>> {
   const response = await client.get(`/api/admin/endpoints/keys/${keyId}/export`)
   return response.data
 }
@@ -104,7 +104,7 @@ export async function addProviderKey(
     api_formats: string[]  // 支持的 API 格式列表（必填）
     api_key: string
     auth_type?: 'api_key' | 'vertex_ai' | 'oauth'  // 认证类型
-    auth_config?: Record<string, any>  // 认证配置（Vertex AI Service Account JSON）
+    auth_config?: Record<string, unknown>  // 认证配置（Vertex AI Service Account JSON）
     name: string
     rate_multipliers?: Record<string, number> | null  // 按 API 格式的成本倍率
     internal_priority?: number
@@ -132,7 +132,7 @@ export async function updateProviderKey(
     api_formats: string[]  // 支持的 API 格式列表
     api_key: string
     auth_type: 'api_key' | 'vertex_ai' | 'oauth'  // 认证类型
-    auth_config: Record<string, any>  // 认证配置（Vertex AI Service Account JSON）
+    auth_config: Record<string, unknown>  // 认证配置（Vertex AI Service Account JSON）
     name: string
     rate_multipliers: Record<string, number> | null  // 按 API 格式的成本倍率
     internal_priority: number
@@ -175,7 +175,7 @@ export interface RefreshQuotaResult {
     key_name: string
     status: 'success' | 'no_metadata' | 'error'
     // Codex: 额度字段为扁平结构；Antigravity: 返回 { antigravity: { quota_by_model: ... } }
-    metadata?: Record<string, any>
+    metadata?: Record<string, unknown>
     message?: string
     status_code?: number
   }>

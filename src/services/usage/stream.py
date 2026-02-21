@@ -121,6 +121,9 @@ class StreamUsageTracker:
             maxlen=50
         )  # 仅保留最后50个原始chunk（用于错误诊断）
 
+        # 请求体（由 track_stream 设置，初始化为 None 以消除 hasattr 检查）
+        self.request_data: dict[str, Any] | None = None
+
         # 时间跟踪
         self.start_time = None
         self.end_time = None
@@ -523,9 +526,12 @@ class StreamUsageTracker:
                             api_format=self.api_format,
                             endpoint_api_format=self.endpoint_api_format,
                             has_format_conversion=self.has_format_conversion,
+                            request_headers=self.request_headers,
+                            request_body=self.request_data,
+                            provider_request_headers=self.provider_request_headers,
                         )
                     except Exception as e:
-                        logger.warning(f"更新使用记录状态为 streaming 失败: {e}")
+                        logger.warning("更新使用记录状态为 streaming 失败: {}", e)
 
                 # 解析块以提取内容和使用信息（chunk是原始字节）
                 content, usage = self.parse_stream_chunk(chunk)
@@ -773,7 +779,7 @@ class StreamUsageTracker:
                 status_code=self.status_code,  # 使用实际的状态码
                 error_message=self.error_message,  # 使用实际的错误消息
                 metadata={"stream": True, "content_length": len(self.accumulated_content)},
-                request_body=self.request_data if hasattr(self, "request_data") else None,
+                request_body=self.request_data,
                 request_headers=self.request_headers,
                 provider_request_headers=self.provider_request_headers,
                 response_headers=self.response_headers,
@@ -1026,9 +1032,12 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
                             api_format=self.api_format,
                             endpoint_api_format=self.endpoint_api_format,
                             has_format_conversion=self.has_format_conversion,
+                            request_headers=self.request_headers,
+                            request_body=self.request_data,
+                            provider_request_headers=self.provider_request_headers,
                         )
                     except Exception as e:
-                        logger.warning(f"更新使用记录状态为 streaming 失败: {e}")
+                        logger.warning("更新使用记录状态为 streaming 失败: {}", e)
 
                 # 解析块以提取内容和使用信息（chunk是原始字节）
                 content, usage = self.parse_stream_chunk(chunk)

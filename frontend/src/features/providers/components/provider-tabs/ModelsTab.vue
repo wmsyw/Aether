@@ -266,7 +266,8 @@ import {
   type ProviderMappingPreviewResponse
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
-import { parseTestModelError } from '@/utils/errorParser'
+import { parseApiError, parseTestModelError } from '@/utils/errorParser'
+import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 
 interface Endpoint {
   id: string
@@ -276,7 +277,7 @@ interface Endpoint {
 }
 
 const props = defineProps<{
-  provider: any
+  provider: ProviderWithEndpointsSummary
   endpoints?: Endpoint[]
   models?: Model[]
   mappingPreview?: ProviderMappingPreviewResponse | null
@@ -464,8 +465,8 @@ async function toggleModelActive(model: Model) {
     await updateModel(props.provider.id, model.id, { is_active: newStatus })
     model.is_active = newStatus
     showSuccess(newStatus ? '模型已启用' : '模型已停用')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '操作失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '操作失败'), '错误')
   } finally {
     togglingModelId.value = null
   }
@@ -529,9 +530,8 @@ async function testModelConnection(model: Model, apiFormat?: string) {
     } else {
       showError(`模型测试失败: ${parseTestModelError(result)}`)
     }
-  } catch (err: any) {
-    const errorMsg = err.response?.data?.detail || err.message || '测试请求失败'
-    showError(`模型测试失败: ${errorMsg}`)
+  } catch (err: unknown) {
+    showError(`模型测试失败: ${parseApiError(err, '测试请求失败')}`)
   } finally {
     testingModelId.value = null
   }

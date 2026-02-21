@@ -1007,6 +1007,7 @@ import {
   ShieldX,
   Globe,
 } from 'lucide-vue-next'
+import { parseApiError } from '@/utils/errorParser'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
@@ -1022,7 +1023,8 @@ import {
   updateProvider,
   getProviderModels,
   getProviderMappingPreview,
-  type ProviderMappingPreviewResponse
+  type ProviderMappingPreviewResponse,
+  type ProviderWithEndpointsSummary,
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
 import {
@@ -1074,8 +1076,8 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
-  (e: 'edit', provider: any): void
-  (e: 'toggleStatus', provider: any): void
+  (e: 'edit', provider: ProviderWithEndpointsSummary): void
+  (e: 'toggleStatus', provider: ProviderWithEndpointsSummary): void
   (e: 'refresh'): void
 }>()
 
@@ -1085,7 +1087,7 @@ const { copyToClipboard } = useClipboard()
 const { tick: countdownTick, start: startCountdownTimer, stop: stopCountdownTimer } = useCountdownTimer()
 
 const loading = ref(false)
-const provider = ref<any>(null)
+const provider = ref<ProviderWithEndpointsSummary | null>(null)
 const endpoints = ref<ProviderEndpointWithKeys[]>([])
 const providerKeys = ref<EndpointAPIKey[]>([])  // Provider 级别的 keys
 const providerModels = ref<Model[]>([])  // Provider 级别的 models
@@ -1364,8 +1366,8 @@ async function copyFullKey(key: EndpointAPIKey) {
 
     revealedKeys.value.set(key.id, textToCopy)
     copyToClipboard(textToCopy)
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '获取密钥失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '获取密钥失败'), '错误')
   }
 }
 
@@ -1385,8 +1387,8 @@ async function downloadRefreshToken(key: EndpointAPIKey) {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '导出失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '导出失败'), '错误')
   }
 }
 
@@ -1409,8 +1411,8 @@ async function confirmDeleteKey() {
     // 刷新端点列表及模型数据（删除 Key 触发自动解除模型关联）
     await loadEndpoints()
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除密钥失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '删除密钥失败'), '错误')
   }
 }
 
@@ -1420,8 +1422,8 @@ async function handleRecoverKey(key: EndpointAPIKey) {
     showSuccess(result.message || 'Key已完全恢复')
     await loadEndpoints()
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || 'Key恢复失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, 'Key恢复失败'), '错误')
   }
 }
 
@@ -1446,8 +1448,8 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
     // Antigravity：token 刷新后可能完成了账号激活，触发配额获取
     // （不 emit('refresh')，避免触发全局 provider 余额刷新）
     void autoRefreshQuotaInBackground()
-  } catch (err: any) {
-    showError(err.response?.data?.detail || 'Token 刷新失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, 'Token 刷新失败'), '错误')
   } finally {
     refreshingOAuthKeyId.value = null
   }
@@ -1483,8 +1485,8 @@ async function handleClearOAuthInvalid(key: EndpointAPIKey) {
       keyInList.is_active = true
     }
     await loadEndpoints()
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '清除失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '清除失败'), '错误')
   } finally {
     clearingOAuthInvalidKeyId.value = null
   }
@@ -1703,9 +1705,9 @@ async function autoRefreshQuotaInBackground() {
     } else if (!hadCachedQuota && providerType === 'antigravity') {
       showError('没有获取到配额信息（请检查账号是否已授权、project_id 是否存在）', '提示')
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (!hadCachedQuota && providerType === 'antigravity') {
-      showError(err.response?.data?.detail || '后台刷新配额失败', '错误')
+      showError(parseApiError(err, '后台刷新配额失败'), '错误')
     }
   } finally {
     refreshingQuota.value = false
@@ -1756,8 +1758,8 @@ async function toggleKeyActive(key: EndpointAPIKey) {
     key.is_active = newStatus
     showSuccess(newStatus ? '密钥已启用' : '密钥已停用')
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '操作失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '操作失败'), '错误')
   } finally {
     togglingKeyId.value = null
   }
@@ -1768,7 +1770,7 @@ async function toggleKeyActive(key: EndpointAPIKey) {
 /** 获取 Key 当前代理节点的名称（用于显示） */
 function getKeyProxyNodeName(key: EndpointAPIKey): string | null {
   if (!key.proxy?.node_id) return null
-  const node = proxyNodesStore.nodes.find(n => n.id === key.proxy!.node_id)
+  const node = proxyNodesStore.nodes.find(n => n.id === key.proxy?.node_id)
   return node ? node.name : `${key.proxy.node_id.slice(0, 8)  }...`
 }
 
@@ -1791,8 +1793,8 @@ async function setKeyProxy(key: EndpointAPIKey, nodeId: string) {
     proxyPopoverOpenKeyId.value = null
     showSuccess('代理节点已设置')
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '设置代理失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '设置代理失败'), '错误')
   } finally {
     savingProxyKeyId.value = null
   }
@@ -1807,8 +1809,8 @@ async function clearKeyProxy(key: EndpointAPIKey) {
     proxyPopoverOpenKeyId.value = null
     showSuccess('已清除账号代理，将使用提供商级别代理')
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '清除代理失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '清除代理失败'), '错误')
   } finally {
     savingProxyKeyId.value = null
   }
@@ -1911,8 +1913,8 @@ async function savePriority(key: EndpointAPIKey) {
     // 重新排序
     providerKeys.value.sort((a, b) => (a.internal_priority ?? 0) - (b.internal_priority ?? 0))
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '更新优先级失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '更新优先级失败'), '错误')
   }
 }
 
@@ -1999,8 +2001,8 @@ async function saveMultiplier(key: EndpointAPIKey, format: string) {
       keyToUpdate.rate_multipliers = rateMultipliers
     }
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '更新倍率失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '更新倍率失败'), '错误')
   } finally {
     multiplierSaving.value = false
   }
@@ -2082,7 +2084,7 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
     const newPriorityMap = new Map<string, number>()
 
     items.forEach(key => {
-      const originalPriority = originalPriorityMap.get(key.id)!
+      const originalPriority = originalPriorityMap.get(key.id) ?? 0
 
       if (key === draggedKey) {
         // 被拖动的项单独成组
@@ -2091,7 +2093,7 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
       } else {
         if (groupNewPriority.has(originalPriority)) {
           // 同组的其他项使用相同的新优先级
-          newPriorityMap.set(key.id, groupNewPriority.get(originalPriority)!)
+          newPriorityMap.set(key.id, groupNewPriority.get(originalPriority) ?? currentPriority)
         } else {
           // 新组，分配新优先级
           groupNewPriority.set(originalPriority, currentPriority)
@@ -2115,8 +2117,8 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
     showSuccess('优先级已更新')
     await loadEndpoints()
     emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '更新优先级失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '更新优先级失败'), '错误')
     await loadEndpoints()
   }
 }
@@ -2479,8 +2481,8 @@ async function loadProvider() {
     if (!provider.value) {
       throw new Error('Provider 不存在')
     }
-  } catch (err: any) {
-    showError(err.response?.data?.detail || err.message || '加载失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载失败'), '错误')
   } finally {
     loading.value = false
   }
@@ -2511,8 +2513,8 @@ async function loadEndpoints() {
       if (bIdx === -1) return -1
       return aIdx - bIdx
     })
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '加载端点失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载端点失败'), '错误')
   }
 }
 

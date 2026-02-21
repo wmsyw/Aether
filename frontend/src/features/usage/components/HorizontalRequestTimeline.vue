@@ -371,6 +371,7 @@ import Skeleton from '@/components/ui/skeleton.vue'
 import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-vue-next'
 import { requestTraceApi, type RequestTrace, type CandidateRecord } from '@/api/requestTrace'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 
 // 节点组类型
@@ -459,8 +460,10 @@ const getFinalStatusLabel = (status: string) => {
 }
 
 // 获取最终状态徽章样式
-const getFinalStatusBadgeVariant = (status: string): any => {
-  const variants: Record<string, string> = {
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'dark'
+
+const getFinalStatusBadgeVariant = (status: string): BadgeVariant => {
+  const variants: Record<string, BadgeVariant> = {
     success: 'success',
     failed: 'destructive',
     streaming: 'secondary',
@@ -493,19 +496,19 @@ const formatSize = (bytes: number): string => {
 }
 
 // 代理 timing 分阶段展示
-const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
-  const t = proxy.timing
+const proxyTimingBreakdown = (proxy: Record<string, unknown>): string => {
+  const t = proxy.timing as Record<string, number | null | undefined> | undefined
   if (!t) return ''
 
   const parts: string[] = []
 
   // 兼容旧版 timing（含 body_read_ms/decompress_ms）
-  const readDecompress = (t.body_read_ms || 0) + (t.decompress_ms || 0)
+  const readDecompress = ((t.body_read_ms as number) || 0) + ((t.decompress_ms as number) || 0)
   if (readDecompress > 0) {
     let label = `读取 ${formatLatency(readDecompress)}`
-    if (t.decompress_ms != null && t.decompress_ms > 0 && t.wire_size != null && t.body_size != null && t.body_size > 0) {
-      const ratio = Math.round((1 - t.wire_size / t.body_size) * 100)
-      label += ` ${formatSize(t.wire_size)}→${formatSize(t.body_size)}`
+    if (t.decompress_ms != null && t.decompress_ms > 0 && t.wire_size != null && t.body_size != null && (t.body_size as number) > 0) {
+      const ratio = Math.round((1 - (t.wire_size as number) / (t.body_size as number)) * 100)
+      label += ` ${formatSize(t.wire_size as number)}→${formatSize(t.body_size as number)}`
       if (ratio > 0) label += ` -${ratio}%`
     }
     parts.push(label)
@@ -514,29 +517,29 @@ const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
   const ttfbMs = t.ttfb_ms ?? t.upstream_ms
   const processingMs = t.upstream_processing_ms ?? (
     ttfbMs != null && t.connect_ms != null && t.tls_ms != null
-      ? Math.max(0, ttfbMs - t.connect_ms - t.tls_ms)
+      ? Math.max(0, (ttfbMs as number) - (t.connect_ms as number) - (t.tls_ms as number))
       : null
   )
 
-  if (t.dns_ms != null && t.dns_ms > 0) {
-    parts.push(`DNS ${formatLatency(t.dns_ms)}`)
+  if (t.dns_ms != null && (t.dns_ms as number) > 0) {
+    parts.push(`DNS ${formatLatency(t.dns_ms as number)}`)
   }
-  if (t.connect_ms != null && t.connect_ms > 0) {
-    parts.push(`连接 ${formatLatency(t.connect_ms)}`)
+  if (t.connect_ms != null && (t.connect_ms as number) > 0) {
+    parts.push(`连接 ${formatLatency(t.connect_ms as number)}`)
   }
-  if (t.tls_ms != null && t.tls_ms > 0) {
-    parts.push(`TLS ${formatLatency(t.tls_ms)}`)
+  if (t.tls_ms != null && (t.tls_ms as number) > 0) {
+    parts.push(`TLS ${formatLatency(t.tls_ms as number)}`)
   }
-  if (ttfbMs != null && ttfbMs > 0) {
-    parts.push(`TTFB ${formatLatency(ttfbMs)}`)
+  if (ttfbMs != null && (ttfbMs as number) > 0) {
+    parts.push(`TTFB ${formatLatency(ttfbMs as number)}`)
   }
-  if (processingMs != null && processingMs > 0) {
-    parts.push(`上游处理 ${formatLatency(Math.round(processingMs))}`)
+  if (processingMs != null && (processingMs as number) > 0) {
+    parts.push(`上游处理 ${formatLatency(Math.round(processingMs as number))}`)
   }
 
   // 计算 Aether→代理 之间无法解释的耗时差
   if (proxy.ttfb_ms != null && t.total_ms != null) {
-    const gap = proxy.ttfb_ms - t.total_ms
+    const gap = (proxy.ttfb_ms as number) - (t.total_ms as number)
     if (gap > 500) {
       parts.push(`传输 ${formatLatency(Math.round(gap))}`)
     }
@@ -817,9 +820,9 @@ const loadTrace = async (silent = false) => {
 
   try {
     trace.value = await requestTraceApi.getRequestTrace(props.requestId)
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (!silent) {
-      error.value = err.response?.data?.detail || err.message || '加载失败'
+      error.value = parseApiError(err, '加载失败')
     }
     log.error('加载请求追踪失败:', err)
   } finally {

@@ -541,8 +541,30 @@ import {
   type GlobalModelResponse,
 } from '@/api/global-models'
 import { log } from '@/utils/logger'
-import { getProvidersSummary } from '@/api/endpoints/providers'
+import { getProvidersSummary, type ProviderWithEndpointsSummary } from '@/api/endpoints/providers'
 import { getAllCapabilities, type CapabilityDefinition } from '@/api/endpoints'
+
+
+interface ModelProviderDisplay {
+  id: string
+  model_id?: string | null
+  name: string
+  provider_type: string
+  target_model: string
+  is_active: boolean
+  input_price_per_1m?: number | null
+  output_price_per_1m?: number | null
+  cache_creation_price_per_1m?: number | null
+  cache_read_price_per_1m?: number | null
+  cache_1h_creation_price_per_1m?: number | null
+  price_per_request?: number | null
+  effective_tiered_pricing?: unknown
+  tier_count?: number
+  supports_vision?: boolean | null
+  supports_function_calling?: boolean | null
+  supports_streaming?: boolean | null
+  supports_extended_thinking?: boolean | null
+}
 
 const { success, error: showError } = useToast()
 const { copyToClipboard } = useClipboard()
@@ -558,7 +580,7 @@ const editingModel = ref<GlobalModelResponse | null>(null)
 
 // 数据
 const globalModels = ref<GlobalModelResponse[]>([])
-const providers = ref<any[]>([])
+const providers = ref<ProviderWithEndpointsSummary[]>([])
 const capabilities = ref<CapabilityDefinition[]>([])
 
 // 模型目录分页
@@ -566,13 +588,13 @@ const catalogCurrentPage = ref(1)
 const catalogPageSize = ref(20)
 
 // 选中模型的详细数据
-const selectedModelProviders = ref<any[]>([])
+const selectedModelProviders = ref<ModelProviderDisplay[]>([])
 const loadingModelProviders = ref(false)
 
 // 批量添加关联提供商
 const batchAddProvidersDialogOpen = ref(false)
 const submittingBatchProviders = ref(false)
-const providerOptions = ref<any[]>([])
+const providerOptions = ref<ProviderWithEndpointsSummary[]>([])
 const loadingProviderOptions = ref(false)
 
 // 单列勾选模式所需状态
@@ -582,7 +604,7 @@ const initialBatchProviderIds = ref<Set<string>>(new Set())
 
 // 编辑提供商模型
 const editProviderDialogOpen = ref(false)
-const editingProvider = ref<any>(null)
+const editingProvider = ref<ModelProviderDisplay | null>(null)
 
 // 将 provider 数据转换为 Model 类型供 ProviderModelFormDialog 使用
 const editingProviderModel = computed<Model | null>(() => {
@@ -771,7 +793,7 @@ function toggleAllBatchProviders() {
 
 // 同步初始选择状态
 function syncBatchProviderSelection() {
-  const existingIds = new Set(selectedModelProviders.value.map((p: any) => p.id))
+  const existingIds = new Set(selectedModelProviders.value.map((p) => p.id))
   selectedBatchProviderIds.value = new Set(existingIds)
   initialBatchProviderIds.value = new Set(existingIds)
 }
@@ -789,7 +811,7 @@ async function saveBatchProviderChanges() {
     if (batchProvidersToRemove.value.length > 0) {
       const { deleteModel } = await import('@/api/endpoints')
       const removePromises = batchProvidersToRemove.value.map(async (providerId) => {
-        const existingProvider = selectedModelProviders.value.find((p: any) => p.id === providerId)
+        const existingProvider = selectedModelProviders.value.find((p) => p.id === providerId)
         if (existingProvider && existingProvider.model_id) {
           return deleteModel(providerId, existingProvider.model_id)
         }
@@ -832,7 +854,7 @@ async function saveBatchProviderChanges() {
     // 刷新路由数据
     modelDetailDrawerRef.value?.refreshRoutingData?.()
     closeBatchAddProvidersDialog()
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '保存失败'), '错误')
   } finally {
     submittingBatchProviders.value = false
@@ -890,9 +912,9 @@ async function loadGlobalModels() {
     const response = await listGlobalModels()
     // API 返回 { models: [...], total: number }
     globalModels.value = response.models || []
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('加载模型失败:', err)
-    showError(err.response?.data?.detail || err.message, '加载模型失败')
+    showError(parseApiError(err, '加载模型失败'), '加载模型失败')
   } finally {
     loading.value = false
   }
@@ -967,7 +989,7 @@ async function loadModelProviders(_globalModelId: string) {
       supports_function_calling: p.supports_function_calling,
       supports_streaming: p.supports_streaming
     }))
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('加载关联提供商失败:', err)
     showError(parseApiError(err, '加载关联提供商失败'), '错误')
     selectedModelProviders.value = []
@@ -984,7 +1006,7 @@ async function ensureProviderOptions() {
   try {
     loadingProviderOptions.value = true
     providerOptions.value = await getProvidersSummary()
-  } catch (err: any) {
+  } catch (err: unknown) {
     const message = parseApiError(err, '加载 Provider 列表失败')
     showError(message, '错误')
   } finally {
@@ -1029,7 +1051,7 @@ async function linkProvidersToModel(providerIds: string[]) {
     await loadModelProviders(selectedModel.value.id)
     await loadGlobalModels()
     modelDetailDrawerRef.value?.refreshRoutingData?.()
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '关联失败'), '错误')
   }
 }
@@ -1060,7 +1082,7 @@ function handleDrawerOpenChange(value: boolean) {
 }
 
 // 编辑提供商模型
-function openEditProviderImplementation(provider: any) {
+function openEditProviderImplementation(provider: ModelProviderDisplay) {
   editingProvider.value = provider
   editProviderDialogOpen.value = true
 }
@@ -1081,7 +1103,7 @@ async function handleEditProviderSaved() {
 }
 
 // 切换关联提供商状态
-async function toggleProviderStatus(provider: any) {
+async function toggleProviderStatus(provider: ModelProviderDisplay) {
   if (!provider.model_id) {
     showError('缺少模型 ID')
     return
@@ -1095,13 +1117,13 @@ async function toggleProviderStatus(provider: any) {
     success(newStatus ? '已启用此关联提供商' : '已停用此关联提供商')
     // 刷新路由数据
     modelDetailDrawerRef.value?.refreshRoutingData?.()
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '更新状态失败'))
   }
 }
 
 // 删除关联提供商
-async function confirmDeleteProviderImplementation(provider: any) {
+async function confirmDeleteProviderImplementation(provider: ModelProviderDisplay) {
   if (!provider.model_id) {
     showError('缺少模型 ID')
     return
@@ -1123,7 +1145,7 @@ async function confirmDeleteProviderImplementation(provider: any) {
     }
     // 刷新路由数据
     modelDetailDrawerRef.value?.refreshRoutingData?.()
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '删除模型失败'))
   }
 }
@@ -1167,8 +1189,8 @@ async function deleteModel(model: GlobalModelResponse) {
       selectedModel.value = null
     }
     await loadGlobalModels()
-  } catch (err: any) {
-    showError(err.response?.data?.detail || err.message, '删除失败')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '删除失败'), '删除失败')
   }
 }
 
@@ -1177,8 +1199,8 @@ async function toggleModelStatus(model: GlobalModelResponse) {
     await updateGlobalModel(model.id, { is_active: !model.is_active })
     model.is_active = !model.is_active
     success(model.is_active ? '模型已启用' : '模型已停用')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || err.message, '操作失败')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '操作失败'), '操作失败')
   }
 }
 
@@ -1189,8 +1211,8 @@ async function refreshData() {
 async function loadProviders() {
   try {
     providers.value = await getProvidersSummary()
-  } catch (err: any) {
-    showError(err.response?.data?.detail || err.message, '加载 Provider 列表失败')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '加载 Provider 列表失败'), '加载 Provider 列表失败')
   }
 }
 

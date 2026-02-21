@@ -76,6 +76,7 @@ const warnPasswordType = import.meta.env.DEV
       return () => {
         if (!warned) {
           warned = true
+          // eslint-disable-next-line no-console
           console.warn(
             '[Input] type="password" 已被弃用，请使用 masked 属性代替。\n' +
               '示例：<Input v-model="apiKey" masked />\n' +

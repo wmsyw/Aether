@@ -9,6 +9,7 @@ const props = withDefaults(defineProps<{
   sideOffset?: number
   alignOffset?: number
 }>(), {
+  class: undefined,
   align: 'center',
   side: 'bottom',
   sideOffset: 4,

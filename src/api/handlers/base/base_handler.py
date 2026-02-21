@@ -325,6 +325,8 @@ class BaseMessageHandler:
                         api_format=api_format,
                         endpoint_api_format=endpoint_api_format,
                         has_format_conversion=has_format_conversion,
+                        provider_request_headers=ctx.provider_request_headers or None,
+                        provider_request_body=ctx.provider_request_body,
                     )
                 finally:
                     db.close()

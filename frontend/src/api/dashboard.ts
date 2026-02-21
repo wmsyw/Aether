@@ -165,15 +165,15 @@ export interface RequestDetail {
   error_message?: string
   response_time_ms: number
   created_at: string
-  request_headers?: Record<string, any>
-  request_body?: Record<string, any>
-  provider_request_headers?: Record<string, any>
-  provider_request_body?: Record<string, any>
-  response_headers?: Record<string, any>
-  client_response_headers?: Record<string, any>
-  response_body?: Record<string, any>
-  client_response_body?: Record<string, any>
-  metadata?: Record<string, any>
+  request_headers?: Record<string, unknown>
+  request_body?: Record<string, unknown>
+  provider_request_headers?: Record<string, unknown>
+  provider_request_body?: Record<string, unknown>
+  response_headers?: Record<string, unknown>
+  client_response_headers?: Record<string, unknown>
+  response_body?: Record<string, unknown>
+  client_response_body?: Record<string, unknown>
+  metadata?: Record<string, unknown>
   // 阶梯计费信息
   tiered_pricing?: {
     total_input_context: number  // 总输入上下文 (input + cache_read)
@@ -211,7 +211,7 @@ export interface CurlData {
   url: string
   method: string
   headers: Record<string, string>
-  body: Record<string, any>
+  body: Record<string, unknown>
   curl: string
 }
 
@@ -219,7 +219,7 @@ export interface ReplayRequest {
   provider_id?: string
   endpoint_id?: string
   api_key_id?: string
-  body_override?: Record<string, any>
+  body_override?: Record<string, unknown>
 }
 
 export interface ReplayResponse {
@@ -227,7 +227,7 @@ export interface ReplayResponse {
   provider: string
   status_code: number
   response_headers: Record<string, string>
-  response_body: Record<string, any>
+  response_body: Record<string, unknown>
   response_time_ms: number
 }
 

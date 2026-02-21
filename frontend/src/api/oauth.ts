@@ -44,8 +44,8 @@ export interface OAuthProviderAdminConfig {
   scopes?: string[] | null
   redirect_uri: string
   frontend_callback_url: string
-  attribute_mapping?: Record<string, any> | null
-  extra_config?: Record<string, any> | null
+  attribute_mapping?: Record<string, unknown> | null
+  extra_config?: Record<string, unknown> | null
   is_enabled: boolean
 }
 
@@ -59,8 +59,8 @@ export interface OAuthProviderUpsertRequest {
   scopes?: string[] | null
   redirect_uri: string
   frontend_callback_url: string
-  attribute_mapping?: Record<string, any> | null
-  extra_config?: Record<string, any> | null
+  attribute_mapping?: Record<string, unknown> | null
+  extra_config?: Record<string, unknown> | null
   is_enabled: boolean
   force?: boolean
 }

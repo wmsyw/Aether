@@ -3,6 +3,7 @@ import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import { batchQueryBalance, getArchitectures, type ActionResultResponse, type ArchitectureInfo } from '@/api/providerOps'
 import { formatBalanceExtraFromSchema, type CredentialsSchema } from '@/features/providers/auth-templates/schema-utils'
 import type { BalanceExtraItem } from '@/features/providers/auth-templates'
+import { log } from '@/utils/logger'
 
 const MAX_BALANCE_RETRIES = 3
 
@@ -96,7 +97,7 @@ export function useProviderBalance() {
         pendingTimers.add(timerId)
       }
     } catch (e) {
-      console.warn('[loadBalances] 加载余额数据失败:', e)
+      log.warn('[loadBalances] 加载余额数据失败', e)
     }
   }
 
@@ -127,7 +128,7 @@ export function useProviderBalance() {
         pendingTimers.add(timerId)
       }
     } catch (e) {
-      console.warn('[retryPendingBalances] 重试加载余额失败:', e)
+      log.warn('[retryPendingBalances] 重试加载余额失败', e)
     }
   }
 
@@ -165,7 +166,7 @@ export function useProviderBalance() {
     if (!result || (result.status !== 'success' && result.status !== 'auth_expired') || !result.data) {
       return null
     }
-    const data = result.data as Record<string, any>
+    const data = result.data as Record<string, unknown>
     const extra = data.extra
     if (!extra || extra.balance === undefined || extra.points === undefined) {
       return null
@@ -216,7 +217,7 @@ export function useProviderBalance() {
     if (!result || result.status !== 'success' || !result.data) {
       return null
     }
-    const data = result.data as Record<string, any>
+    const data = result.data as Record<string, unknown>
     const extra = data.extra
     if (!extra || extra.checkin_success === undefined) {
       return null
@@ -236,7 +237,7 @@ export function useProviderBalance() {
     if (result.status !== 'success' && result.status !== 'auth_expired') {
       return null
     }
-    const data = result.data as Record<string, any>
+    const data = result.data as Record<string, unknown>
     const extra = data.extra
     if (!extra || !extra.cookie_expired) {
       return null
@@ -288,7 +289,7 @@ export function useProviderBalance() {
       return []
     }
 
-    const data = result.data as Record<string, any>
+    const data = result.data as Record<string, unknown>
     const extra = data.extra
     if (!extra) return []
 

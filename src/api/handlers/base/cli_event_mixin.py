@@ -445,6 +445,8 @@ class CliEventMixin:
                         api_format=ctx.api_format,
                         endpoint_api_format=ctx.provider_api_format or None,
                         has_format_conversion=ctx.has_format_conversion,
+                        provider_request_headers=ctx.provider_request_headers or None,
+                        provider_request_body=ctx.provider_request_body,
                     )
                 except Exception as e:
                     logger.warning("[{}] 同步更新 streaming 状态失败: {}", self.request_id, e)

@@ -524,7 +524,7 @@ async function handleSave() {
         try {
           await deleteModel(props.providerId, existingModel.id)
           totalSuccess++
-        } catch (err: any) {
+        } catch (err: unknown) {
           allErrors.push(parseApiError(err, '移除失败'))
         }
       }
@@ -541,7 +541,7 @@ async function handleSave() {
         try {
           await deleteModel(props.providerId, existingModel.id)
           totalSuccess++
-        } catch (err: any) {
+        } catch (err: unknown) {
           allErrors.push(parseApiError(err, '移除失败'))
         }
       }
@@ -556,7 +556,7 @@ async function handleSave() {
         if (result.errors.length > 0) {
           allErrors.push(...result.errors.map(e => e.error))
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         allErrors.push(parseApiError(err, '批量添加全局模型失败'))
       }
     }
@@ -570,7 +570,7 @@ async function handleSave() {
         if (result.errors.length > 0) {
           allErrors.push(...result.errors.map(e => e.error))
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         allErrors.push(parseApiError(err, '导入上游模型失败'))
       }
     }
@@ -585,7 +585,7 @@ async function handleSave() {
 
     emit('changed')
     emit('update:open', false)
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '保存失败'), '错误')
     // 即使出错，如果已执行过操作，也通知父组件刷新数据
     if (hasAnyOperation) {
@@ -650,7 +650,7 @@ async function loadGlobalModels() {
     loadingGlobalModels.value = true
     const response = await getGlobalModels({ limit: 1000 })
     allGlobalModels.value = response.models
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '加载全局模型失败'), '错误')
   } finally {
     loadingGlobalModels.value = false
@@ -661,7 +661,7 @@ async function loadGlobalModels() {
 async function loadExistingModels() {
   try {
     existingModels.value = await getProviderModels(props.providerId)
-  } catch (err: any) {
+  } catch (err: unknown) {
     showError(parseApiError(err, '加载已关联模型失败'), '错误')
   }
 }

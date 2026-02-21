@@ -437,6 +437,10 @@ class UsageLifecycleMixin:
         endpoint_api_format: str | None = None,
         has_format_conversion: bool | None = None,
         status_code: int | None = None,
+        request_headers: dict[str, Any] | None = None,
+        request_body: Any | None = None,
+        provider_request_headers: dict[str, Any] | None = None,
+        provider_request_body: Any | None = None,
     ) -> Usage | None:
         """
         快速更新使用记录状态
@@ -456,6 +460,10 @@ class UsageLifecycleMixin:
             endpoint_api_format: 端点原生 API 格式（可选）
             has_format_conversion: 是否发生了格式转换（可选）
             status_code: HTTP 状态码（可选）
+            request_headers: 客户端请求头（可选，用于补写 pending/streaming 记录）
+            request_body: 客户端请求体（可选，用于补写 pending/streaming 记录）
+            provider_request_headers: 提供商请求头（可选，streaming 时可写入）
+            provider_request_body: 提供商请求体（可选，streaming 时可写入）
 
         Returns:
             更新后的 Usage 记录，如果未找到则返回 None
@@ -508,6 +516,28 @@ class UsageLifecycleMixin:
             usage.has_format_conversion = has_format_conversion
         if status_code is not None:
             usage.status_code = status_code
+
+        should_log_headers = SystemConfigService.should_log_headers(db)
+        should_log_body = SystemConfigService.should_log_body(db)
+
+        if should_log_headers:
+            if isinstance(request_headers, dict):
+                usage.request_headers = SystemConfigService.mask_sensitive_headers(
+                    db, request_headers
+                )
+            if isinstance(provider_request_headers, dict):
+                usage.provider_request_headers = SystemConfigService.mask_sensitive_headers(
+                    db, provider_request_headers
+                )
+        if should_log_body:
+            if request_body is not None:
+                usage.request_body = SystemConfigService.truncate_body(
+                    db, request_body, is_request=True
+                )
+            if provider_request_body is not None:
+                usage.provider_request_body = SystemConfigService.truncate_body(
+                    db, provider_request_body, is_request=True
+                )
 
         # 结算状态：当请求进入终态时，将 billing_status 标记为 settled
         # 注意：取消是否应 VOID/部分结算由更高层策略决定；这里默认终态均视为已结算。

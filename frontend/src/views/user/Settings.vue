@@ -174,10 +174,12 @@
                 class="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-4"
               >
                 <div class="flex items-center gap-3 min-w-0 flex-1">
+                  <!-- eslint-disable vue/no-v-html -->
                   <div
                     class="oauth-icon shrink-0"
                     v-html="getOAuthIcon(link.provider_type)"
                   />
+                  <!-- eslint-enable vue/no-v-html -->
                   <div class="min-w-0">
                     <div class="text-sm font-medium truncate">
                       {{ link.display_name }}
@@ -204,10 +206,12 @@
                 class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border p-4 hover:border-primary/50 transition-colors"
               >
                 <div class="flex items-center gap-3 min-w-0 flex-1">
+                  <!-- eslint-disable vue/no-v-html -->
                   <div
                     class="oauth-icon shrink-0"
                     v-html="getOAuthIcon(p.provider_type)"
                   />
+                  <!-- eslint-enable vue/no-v-html -->
                   <div class="min-w-0">
                     <div class="text-sm font-medium truncate">
                       {{ p.display_name }}
@@ -462,7 +466,7 @@ import { useToast } from '@/composables/useToast'
 import { formatCurrency } from '@/utils/format'
 import { getApiUrl } from '@/utils/url'
 import { log } from '@/utils/logger'
-import { getErrorMessage } from '@/types/api-error'
+import { getErrorMessage, getErrorStatus } from '@/types/api-error'
 
 const authStore = useAuthStore()
 const route = useRoute()
@@ -601,8 +605,8 @@ async function loadOAuthBindings() {
     ])
     oauthLinks.value = links
     bindableProviders.value = providers
-  } catch (err: any) {
-    if (err?.response?.status === 503) {
+  } catch (err: unknown) {
+    if (getErrorStatus(err) === 503) {
       oauthUnavailable.value = true
       return
     }

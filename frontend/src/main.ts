@@ -15,7 +15,7 @@ app.use(router)
 preloadCriticalModules()
 
 // 全局错误处理器 - 只在开发环境下记录详细日志
-app.config.errorHandler = (err: any, instance, info) => {
+app.config.errorHandler = (err: unknown, _instance, info) => {
   if (import.meta.env.DEV) {
     console.error('Global error handler:', err, info)
   }

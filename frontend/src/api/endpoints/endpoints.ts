@@ -31,7 +31,7 @@ export async function createEndpoint(
     body_rules?: BodyRule[]
     max_retries?: number
     is_active?: boolean
-    config?: Record<string, any>
+    config?: Record<string, unknown>
     proxy?: ProxyConfig | null
     format_acceptance_config?: FormatAcceptanceConfig | null
   }
@@ -52,7 +52,7 @@ export async function updateEndpoint(
     body_rules: BodyRule[] | null
     max_retries: number
     is_active: boolean
-    config: Record<string, any>
+    config: Record<string, unknown> | null
     proxy: ProxyConfig | null
     format_acceptance_config: FormatAcceptanceConfig | null
   }>

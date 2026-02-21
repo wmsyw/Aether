@@ -17,17 +17,17 @@
     </Card>
     <!-- 非 JSON 响应（如 HTML 错误页面） -->
     <Card
-      v-else-if="data.raw_response && data.metadata?.parse_error"
+      v-else-if="hasParseError"
       class="bg-muted/30 overflow-hidden"
     >
       <div class="p-3 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">
         <div class="flex items-start gap-2">
           <span class="text-amber-600 dark:text-amber-400 text-sm font-medium">Warning: 响应解析失败</span>
-          <span class="text-xs text-amber-700 dark:text-amber-300">{{ data.metadata.parse_error }}</span>
+          <span class="text-xs text-amber-700 dark:text-amber-300">{{ parseErrorMessage }}</span>
         </div>
       </div>
       <div class="p-4 overflow-x-auto max-h-[500px] overflow-y-auto">
-        <pre class="text-xs font-mono whitespace-pre-wrap text-muted-foreground">{{ data.raw_response }}</pre>
+        <pre class="text-xs font-mono whitespace-pre-wrap text-muted-foreground">{{ rawResponseContent }}</pre>
       </div>
     </Card>
     <Card
@@ -74,12 +74,14 @@
                   :style="{ width: `${line.indent * 16}px` }"
                 />
                 <!-- 内容 -->
+                <!-- eslint-disable vue/no-v-html -->
                 <span
                   class="line-content"
                   :class="{ 'clickable-collapsed': line.canFold && collapsedBlocks.has(line.blockId) }"
                   @click="line.canFold && collapsedBlocks.has(line.blockId) && toggleFold(line.blockId)"
                   v-html="getDisplayHtml(line)"
                 />
+                <!-- eslint-enable vue/no-v-html -->
               </div>
             </div>
           </template>
@@ -112,13 +114,46 @@ interface DisplayLine extends JsonLine {
   displayLineNumber: number
 }
 
+/** JSON data can be any serializable value: object, array, string, number, boolean, null */
+type JsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null | undefined
+
 const props = defineProps<{
-  data: any
+  data: JsonValue
   viewMode: 'formatted' | 'raw' | 'compare'
   expandDepth: number
   isDark: boolean
   emptyMessage: string
 }>()
+
+/** Safely cast data to an object for property access in templates */
+const dataAsObject = computed(() => {
+  if (props.data && typeof props.data === 'object' && !Array.isArray(props.data)) {
+    return props.data as Record<string, unknown>
+  }
+  return null
+})
+
+/** Whether the data contains a raw_response with a parse error (non-JSON response) */
+const hasParseError = computed(() => {
+  const obj = dataAsObject.value
+  if (!obj) return false
+  const metadata = obj.metadata as Record<string, unknown> | undefined
+  return Boolean(obj.raw_response && metadata?.parse_error)
+})
+
+/** Parse error message */
+const parseErrorMessage = computed(() => {
+  const obj = dataAsObject.value
+  if (!obj) return ''
+  const metadata = obj.metadata as Record<string, unknown> | undefined
+  return String(metadata?.parse_error || '')
+})
+
+/** Raw response content */
+const rawResponseContent = computed(() => {
+  const obj = dataAsObject.value
+  return obj ? String(obj.raw_response || '') : ''
+})
 
 const collapsedBlocks = ref<Set<string>>(new Set())
 const lines = ref<JsonLine[]>([])
@@ -145,14 +180,14 @@ const escapeHtml = (str: string): string => {
     .replace(/"/g, '&quot;')
 }
 
-const parseJsonToLines = (data: any): JsonLine[] => {
+const parseJsonToLines = (data: unknown): JsonLine[] => {
   const result: JsonLine[] = []
   let lineNumber = 1
   let blockIdCounter = 0
 
   const getBlockId = () => `block-${blockIdCounter++}`
 
-  const processValue = (value: any, indent: number, isLast: boolean, keyPrefix: string = ''): void => {
+  const processValue = (value: unknown, indent: number, isLast: boolean, keyPrefix: string = ''): void => {
     const comma = isLast ? '' : ','
 
     if (value === null) {
@@ -232,7 +267,8 @@ const parseJsonToLines = (data: any): JsonLine[] => {
         result[startLine].blockEnd = result.length - 1
       }
     } else if (typeof value === 'object') {
-      const keys = Object.keys(value)
+      const obj = value as Record<string, unknown>
+      const keys = Object.keys(obj)
       if (keys.length === 0) {
         result.push({
           id: result.length,
@@ -259,7 +295,7 @@ const parseJsonToLines = (data: any): JsonLine[] => {
 
         keys.forEach((key, i) => {
           const keyHtml = getTokenHtml(`"${escapeHtml(key)}"`, 'key') + getTokenHtml(': ', 'punctuation')
-          processValue(value[key], indent + 1, i === keys.length - 1, keyHtml)
+          processValue(obj[key], indent + 1, i === keys.length - 1, keyHtml)
         })
 
         result.push({

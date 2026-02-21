@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { modulesApi, type ModuleStatus } from '@/api/modules'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
 
 export const useModuleStore = defineStore('modules', () => {
   const modules = ref<Record<string, ModuleStatus>>({})
@@ -21,9 +22,9 @@ export const useModuleStore = defineStore('modules', () => {
     try {
       modules.value = await modulesApi.getAllStatus()
       loaded.value = true
-    } catch (err: any) {
+    } catch (err: unknown) {
       log.error('Failed to fetch modules status', err)
-      error.value = err.response?.data?.detail || '获取模块状态失败'
+      error.value = parseApiError(err, '获取模块状态失败')
     } finally {
       loading.value = false
     }
@@ -60,9 +61,9 @@ export const useModuleStore = defineStore('modules', () => {
       // 刷新所有模块状态，确保依赖模块的 active 状态同步更新
       await fetchModules()
       return true
-    } catch (err: any) {
+    } catch (err: unknown) {
       log.error(`Failed to set module ${moduleName} enabled=${enabled}`, err)
-      error.value = err.response?.data?.detail || '设置模块状态失败'
+      error.value = parseApiError(err, '设置模块状态失败')
       // 重新抛出错误，让调用方可以获取详细错误信息
       throw err
     }

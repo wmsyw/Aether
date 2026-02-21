@@ -101,7 +101,7 @@ export const PROXY_FIELD_GROUP: AuthTemplateFieldGroup = {
  * @param formData 表单数据
  * @returns 代理配置对象，展开到 connector.config 中
  */
-export function buildProxyConfig(formData: Record<string, any>): { proxy_node_id?: string } {
+export function buildProxyConfig(formData: Record<string, unknown>): { proxy_node_id?: string } {
   if (!formData.proxy_enabled || !formData.proxy_node_id) {
     return {}
   }
@@ -114,7 +114,7 @@ export function buildProxyConfig(formData: Record<string, any>): { proxy_node_id
  * @param config connector.config 对象
  * @returns 表单数据
  */
-export function parseProxyConfig(config: any): Record<string, any> {
+export function parseProxyConfig(config: Record<string, unknown> | null | undefined): Record<string, unknown> {
   // 代理节点模式
   if (config?.proxy_node_id) {
     return {

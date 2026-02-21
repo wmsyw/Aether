@@ -261,6 +261,7 @@ import {
   SelectValue,
 } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import {
   type Model,
   type ProviderModelAlias,
@@ -461,8 +462,8 @@ async function fetchUpstreamModels() {
     if (result.error) {
       showError(result.error, '获取上游模型失败')
     }
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '获取上游模型列表失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '获取上游模型列表失败'), '错误')
   } finally {
     loadingModels.value = false
     fetchingUpstreamModels.value = false
@@ -579,8 +580,8 @@ async function handleSubmit() {
     showSuccess(props.editingGroup ? '映射组已更新' : '映射已添加')
     emit('update:open', false)
     emit('saved')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '操作失败', '错误')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '操作失败'), '错误')
   } finally {
     submitting.value = false
   }

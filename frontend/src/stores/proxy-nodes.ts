@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { proxyNodesApi, type ProxyNode, type ManualProxyNodeCreateRequest } from '@/api/proxy-nodes'
+import { parseApiError } from '@/utils/errorParser'
 
 export const useProxyNodesStore = defineStore('proxy-nodes', () => {
   const nodes = ref<ProxyNode[]>([])
@@ -24,8 +25,8 @@ export const useProxyNodesStore = defineStore('proxy-nodes', () => {
       nodes.value = data.items
       total.value = data.total
       fetched.value = true
-    } catch (err: any) {
-      error.value = err.response?.data?.error?.message || err.response?.data?.detail || '获取代理节点列表失败'
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '获取代理节点列表失败')
     } finally {
       loading.value = false
     }
@@ -47,8 +48,8 @@ export const useProxyNodesStore = defineStore('proxy-nodes', () => {
       // 重新获取列表以保持排序一致
       await fetchNodes()
       return result
-    } catch (err: any) {
-      error.value = err.response?.data?.error?.message || err.response?.data?.detail || '创建手动代理节点失败'
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '创建手动代理节点失败')
       throw err
     } finally {
       loading.value = false
@@ -63,8 +64,8 @@ export const useProxyNodesStore = defineStore('proxy-nodes', () => {
       await proxyNodesApi.deleteProxyNode(nodeId)
       nodes.value = nodes.value.filter(n => n.id !== nodeId)
       total.value = Math.max(0, total.value - 1)
-    } catch (err: any) {
-      error.value = err.response?.data?.error?.message || err.response?.data?.detail || '删除代理节点失败'
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '删除代理节点失败')
       throw err
     } finally {
       loading.value = false

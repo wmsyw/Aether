@@ -69,8 +69,8 @@ export const MOCK_LOGIN_RESPONSE_USER: LoginResponse = {
 // ========== Profile 数据 ==========
 
 export const MOCK_ADMIN_PROFILE: Profile = {
-  id: MOCK_ADMIN_USER.id!,
-  email: MOCK_ADMIN_USER.email!,
+  id: MOCK_ADMIN_USER.id ?? '',
+  email: MOCK_ADMIN_USER.email ?? '',
   username: MOCK_ADMIN_USER.username,
   role: 'admin',
   is_active: true,
@@ -87,8 +87,8 @@ export const MOCK_ADMIN_PROFILE: Profile = {
 }
 
 export const MOCK_USER_PROFILE: Profile = {
-  id: MOCK_NORMAL_USER.id!,
-  email: MOCK_NORMAL_USER.email!,
+  id: MOCK_NORMAL_USER.id ?? '',
+  email: MOCK_NORMAL_USER.email ?? '',
   username: MOCK_NORMAL_USER.username,
   role: 'user',
   is_active: true,

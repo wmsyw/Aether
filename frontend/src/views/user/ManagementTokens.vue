@@ -545,6 +545,7 @@ import {
 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
+import { parseApiError } from '@/utils/errorParser'
 
 const { success, error: showError } = useToast()
 
@@ -640,13 +641,9 @@ async function loadTokens() {
     if (tokens.value.length === 0 && currentPage.value > 1) {
       currentPage.value = 1
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('加载 Management Tokens 失败:', err)
-    if (!err.response) {
-      showError('无法连接到服务器')
-    } else {
-      showError(`加载失败：${err.response?.data?.detail || err.message}`)
-    }
+    showError(parseApiError(err, '加载失败'))
   } finally {
     loading.value = false
   }
@@ -717,12 +714,9 @@ async function saveToken() {
 
     closeDialog()
     await loadTokens()
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('保存 Token 失败:', err)
-    const message = err.response?.data?.error?.message
-      || err.response?.data?.detail
-      || '保存失败'
-    showError(message)
+    showError(parseApiError(err, '保存失败'))
   } finally {
     saving.value = false
   }
@@ -738,7 +732,7 @@ async function toggleToken(token: ManagementToken) {
       tokens.value[index] = result.data
     }
     success(result.data.is_active ? '令牌已启用' : '令牌已禁用')
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('切换状态失败:', err)
     showError('操作失败')
   }
@@ -760,7 +754,7 @@ async function deleteToken() {
     showDeleteDialog.value = false
     success('令牌已删除')
     await loadTokens()
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('删除 Token 失败:', err)
     showError('删除失败')
   } finally {
@@ -787,7 +781,7 @@ async function regenerateToken() {
     showTokenDialog.value = true
     await loadTokens()
     success('令牌已重新生成')
-  } catch (err: any) {
+  } catch (err: unknown) {
     log.error('重新生成失败:', err)
     showError('重新生成失败')
   } finally {

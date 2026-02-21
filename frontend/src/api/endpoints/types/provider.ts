@@ -52,7 +52,7 @@ export type HeaderRule = HeaderRuleSet | HeaderRuleDrop | HeaderRuleRename
 export interface BodyRuleSet {
   action: 'set'
   path: string
-  value: any
+  value: unknown
 }
 
 /**
@@ -87,7 +87,7 @@ export interface BodyRuleRename {
 export interface BodyRuleAppend {
   action: 'append'
   path: string
-  value: any
+  value: unknown
 }
 
 /**
@@ -101,7 +101,7 @@ export interface BodyRuleInsert {
   action: 'insert'
   path: string
   index: number
-  value: any
+  value: unknown
 }
 
 /**
@@ -132,7 +132,7 @@ export type BodyRuleConditionOp =
 export interface BodyRuleCondition {
   path: string
   op: BodyRuleConditionOp
-  value?: any  // exists / not_exists 不需要 value
+  value?: unknown  // exists / not_exists 不需要 value
 }
 
 /**
@@ -174,7 +174,7 @@ export interface ProviderEndpoint {
   body_rules?: BodyRule[]  // 请求体规则列表，支持 set/drop/rename 操作
   max_retries: number
   is_active: boolean
-  config?: Record<string, any>
+  config?: Record<string, unknown>
   proxy?: ProxyConfig | null
   // 格式转换配置
   format_acceptance_config?: FormatAcceptanceConfig | null
@@ -352,7 +352,7 @@ export interface EndpointAPIKeyUpdate {
   name?: string
   api_key?: string  // 仅在需要更新时提供
   auth_type?: 'api_key' | 'vertex_ai' | 'oauth'  // 认证类型
-  auth_config?: Record<string, any>  // 认证配置（Vertex AI Service Account JSON）
+  auth_config?: Record<string, unknown>  // 认证配置（Vertex AI Service Account JSON）
   rate_multipliers?: Record<string, number> | null  // 按 API 格式的成本倍率
   internal_priority?: number
   global_priority_by_format?: Record<string, number> | null  // 按 API 格式的全局优先级
@@ -492,7 +492,7 @@ export interface HealthStatus {
   key_consecutive_failures?: number
   key_last_failure_at?: string
   key_is_active?: boolean
-  key_statistics?: Record<string, any>
+  key_statistics?: Record<string, unknown>
 }
 
 export interface HealthSummary {
@@ -537,6 +537,6 @@ export interface AdaptiveStatsResponse {
     old_limit: number
     new_limit: number
     reason: string
-    [key: string]: any
+    [key: string]: unknown
   }>
 }

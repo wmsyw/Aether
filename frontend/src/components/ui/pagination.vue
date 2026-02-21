@@ -94,7 +94,8 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   pageSize: 20,
   pageSizeOptions: () => [10, 20, 50, 100],
-  showPageSizeSelector: true
+  showPageSizeSelector: true,
+  cacheKey: undefined
 })
 
 const emit = defineEmits<Emits>()
