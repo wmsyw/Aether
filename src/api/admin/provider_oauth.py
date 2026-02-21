@@ -1964,3 +1964,403 @@ async def _batch_import_kiro_internal(
         failed=failed_count,
         results=results,
     )
+
+
+# ==============================================================================
+# Device Authorization (AWS SSO OIDC - RFC 8628)
+# ==============================================================================
+
+_DEVICE_AUTH_SESSION_PREFIX = "device_auth_session:"
+_DEVICE_AUTH_SESSION_TTL_BUFFER = 60  # Redis TTL = expires_in + buffer
+
+_KIRO_SSO_SCOPES = [
+    "codewhisperer:completions",
+    "codewhisperer:analysis",
+    "codewhisperer:conversations",
+    "codewhisperer:transformations",
+    "codewhisperer:taskassist",
+]
+_KIRO_SSO_DEFAULT_START_URL = "https://view.awsapps.com/start"
+_KIRO_SSO_DEFAULT_REGION = "us-east-1"
+
+
+class DeviceAuthorizeRequest(BaseModel):
+    start_url: str = Field(
+        _KIRO_SSO_DEFAULT_START_URL,
+        description="IAM Identity Center Start URL（如 https://your-org.awsapps.com/start）",
+    )
+    region: str = Field(
+        _KIRO_SSO_DEFAULT_REGION,
+        pattern=r"^[a-z0-9-]+$",
+        description="IAM Identity Center 部署 region",
+    )
+    proxy_node_id: str | None = Field(None, description="代理节点 ID")
+
+
+class DeviceAuthorizeResponse(BaseModel):
+    session_id: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    expires_in: int
+    interval: int
+
+
+class DevicePollRequest(BaseModel):
+    session_id: str = Field(..., description="设备授权会话 ID")
+
+
+class DevicePollResponse(BaseModel):
+    status: str  # pending / authorized / slow_down / expired / error
+    key_id: str | None = None
+    email: str | None = None
+    error: str | None = None
+    replaced: bool = False
+
+
+async def _sso_oidc_post(
+    url: str,
+    body: dict[str, Any],
+    proxy_config: dict[str, Any] | None = None,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """POST to AWS SSO OIDC endpoint, return parsed JSON or raise."""
+    from src.clients.http_client import HTTPClientPool
+
+    client = await HTTPClientPool.get_proxy_client(proxy_config=proxy_config)
+    resp = await client.post(
+        url,
+        json=body,
+        timeout=timeout,
+    )
+    if resp.status_code >= 400:
+        # 返回原始 JSON 让调用方处理错误码
+        try:
+            err_data = resp.json()
+            logger.warning(
+                "SSO OIDC request failed: {} returned {} | body={}",
+                url,
+                resp.status_code,
+                err_data,
+            )
+            return {"_error": True, "_status": resp.status_code, **err_data}
+        except Exception:
+            logger.warning(
+                "SSO OIDC request failed: {} returned {} | text={}",
+                url,
+                resp.status_code,
+                resp.text[:200],
+            )
+            raise InvalidRequestException(f"AWS SSO OIDC 请求失败: HTTP {resp.status_code}")
+    return resp.json()
+
+
+async def _register_sso_oidc_client(
+    region: str,
+    *,
+    start_url: str,
+    proxy_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """注册 AWS SSO OIDC 客户端 (public, device_code grant)。"""
+    url = f"https://oidc.{region}.amazonaws.com/client/register"
+    body = {
+        "clientName": "Aether Gateway",
+        "clientType": "public",
+        "scopes": _KIRO_SSO_SCOPES,
+        "grantTypes": [
+            "urn:ietf:params:oauth:grant-type:device_code",
+            "refresh_token",
+        ],
+        "issuerUrl": start_url,
+    }
+    result = await _sso_oidc_post(url, body, proxy_config=proxy_config)
+    if result.get("_error"):
+        error_desc = result.get("error_description") or result.get("error") or "unknown"
+        raise InvalidRequestException(f"注册 OIDC 客户端失败: {error_desc}")
+    return result
+
+
+async def _start_device_authorization(
+    region: str,
+    client_id: str,
+    client_secret: str,
+    *,
+    start_url: str,
+    proxy_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """发起设备授权，返回 device_code / user_code / verification_uri 等。"""
+    url = f"https://oidc.{region}.amazonaws.com/device_authorization"
+    body = {
+        "clientId": client_id,
+        "clientSecret": client_secret,
+        "startUrl": start_url,
+    }
+    result = await _sso_oidc_post(url, body, proxy_config=proxy_config)
+    if result.get("_error"):
+        error_desc = result.get("error_description") or result.get("error") or "unknown"
+        raise InvalidRequestException(f"发起设备授权失败: {error_desc}")
+    return result
+
+
+async def _poll_device_token(
+    region: str,
+    client_id: str,
+    client_secret: str,
+    device_code: str,
+    proxy_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """轮询设备授权 token 端点，返回原始 JSON（含成功或错误信息）。"""
+    url = f"https://oidc.{region}.amazonaws.com/token"
+    body = {
+        "clientId": client_id,
+        "clientSecret": client_secret,
+        "grantType": "urn:ietf:params:oauth:grant-type:device_code",
+        "deviceCode": device_code,
+    }
+    return await _sso_oidc_post(url, body, proxy_config=proxy_config)
+
+
+@router.post(
+    "/providers/{provider_id}/device-authorize",
+    response_model=DeviceAuthorizeResponse,
+)
+async def device_authorize(
+    provider_id: str,
+    payload: DeviceAuthorizeRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> DeviceAuthorizeResponse:
+    """发起 AWS SSO OIDC 设备授权流程（仅限 Kiro provider）。"""
+    provider = db.query(Provider).filter(Provider.id == provider_id).first()
+    if not provider:
+        raise NotFoundException("Provider 不存在", "provider")
+    provider_type = _require_fixed_provider(provider)
+    if provider_type != ProviderType.KIRO.value:
+        raise InvalidRequestException("设备授权仅支持 Kiro provider")
+
+    proxy_config, key_proxy = _resolve_proxy_for_oauth(
+        getattr(provider, "proxy", None), payload.proxy_node_id
+    )
+
+    region = (payload.region or _KIRO_SSO_DEFAULT_REGION).strip()
+    start_url = (payload.start_url or _KIRO_SSO_DEFAULT_START_URL).strip()
+
+    # 1. 注册 OIDC 客户端
+    client_reg = await _register_sso_oidc_client(
+        region, start_url=start_url, proxy_config=proxy_config
+    )
+    client_id = client_reg["clientId"]
+    client_secret = client_reg["clientSecret"]
+
+    # 2. 发起设备授权
+    device_auth = await _start_device_authorization(
+        region, client_id, client_secret, start_url=start_url, proxy_config=proxy_config
+    )
+    device_code = device_auth.get("deviceCode") or device_auth.get("device_code") or ""
+    user_code = device_auth.get("userCode") or device_auth.get("user_code") or ""
+    verification_uri = (
+        device_auth.get("verificationUri")
+        or device_auth.get("verification_uri")
+        or device_auth.get("verificationUrl")
+        or ""
+    )
+    verification_uri_complete = (
+        device_auth.get("verificationUriComplete")
+        or device_auth.get("verification_uri_complete")
+        or device_auth.get("verificationUrlComplete")
+        or verification_uri
+    )
+    expires_in = int(device_auth.get("expiresIn") or device_auth.get("expires_in") or 600)
+    interval = int(device_auth.get("interval") or 5)
+
+    # 3. 存入 Redis
+    redis = await get_redis_client(require_redis=True)
+    assert redis is not None
+
+    session_id = secrets.token_urlsafe(24)
+    session_data = {
+        "provider_id": provider_id,
+        "region": region,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "device_code": device_code,
+        "interval": interval,
+        "expires_at": int(time.time()) + expires_in,
+        "status": "pending",
+        "proxy_node_id": (payload.proxy_node_id or "").strip() or None,
+        "created_at": int(time.time()),
+    }
+    redis_key = f"{_DEVICE_AUTH_SESSION_PREFIX}{session_id}"
+    await redis.setex(
+        redis_key,
+        expires_in + _DEVICE_AUTH_SESSION_TTL_BUFFER,
+        json.dumps(session_data),
+    )
+
+    return DeviceAuthorizeResponse(
+        session_id=session_id,
+        user_code=user_code,
+        verification_uri=verification_uri,
+        verification_uri_complete=verification_uri_complete,
+        expires_in=expires_in,
+        interval=interval,
+    )
+
+
+@router.post(
+    "/providers/{provider_id}/device-poll",
+    response_model=DevicePollResponse,
+)
+async def device_poll(
+    provider_id: str,
+    payload: DevicePollRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> DevicePollResponse:
+    """轮询设备授权状态，授权成功时自动创建 Key。"""
+    redis = await get_redis_client(require_redis=True)
+    assert redis is not None
+
+    redis_key = f"{_DEVICE_AUTH_SESSION_PREFIX}{payload.session_id}"
+    raw = await redis.get(redis_key)
+    if not raw:
+        return DevicePollResponse(status="expired", error="会话不存在或已过期")
+
+    session = json.loads(raw)
+    if session.get("provider_id") != provider_id:
+        return DevicePollResponse(status="error", error="会话与 Provider 不匹配")
+
+    # 已完成的会话直接返回缓存结果
+    cached_status = session.get("status")
+    if cached_status == "authorized":
+        return DevicePollResponse(
+            status="authorized",
+            key_id=session.get("key_id"),
+            email=session.get("email"),
+            replaced=session.get("replaced", False),
+        )
+    if cached_status in ("expired", "error"):
+        return DevicePollResponse(status=cached_status, error=session.get("error_msg"))
+
+    # 检查是否已过期
+    if int(time.time()) > session.get("expires_at", 0):
+        session["status"] = "expired"
+        await redis.setex(redis_key, 30, json.dumps(session))
+        return DevicePollResponse(status="expired", error="设备码已过期")
+
+    # 解析代理
+    provider = db.query(Provider).filter(Provider.id == provider_id).first()
+    proxy_config, key_proxy = _resolve_proxy_for_oauth(
+        getattr(provider, "proxy", None) if provider else None,
+        session.get("proxy_node_id"),
+    )
+
+    # 轮询 token 端点
+    region = session["region"]
+    token_result = await _poll_device_token(
+        region=region,
+        client_id=session["client_id"],
+        client_secret=session["client_secret"],
+        device_code=session["device_code"],
+        proxy_config=proxy_config,
+    )
+
+    # 处理错误响应
+    if token_result.get("_error"):
+        error_code = token_result.get("error", "")
+        if error_code == "authorization_pending":
+            return DevicePollResponse(status="pending")
+        if error_code == "slow_down":
+            return DevicePollResponse(status="slow_down")
+        if error_code == "expired_token":
+            session["status"] = "expired"
+            await redis.setex(redis_key, 30, json.dumps(session))
+            return DevicePollResponse(status="expired", error="设备码已过期")
+        if error_code == "access_denied":
+            session["status"] = "error"
+            session["error_msg"] = "用户拒绝授权"
+            await redis.setex(redis_key, 30, json.dumps(session))
+            return DevicePollResponse(status="error", error="用户拒绝授权")
+        # 其他错误
+        err_msg = token_result.get("error_description") or error_code or "未知错误"
+        return DevicePollResponse(status="error", error=err_msg)
+
+    # 成功拿到 token，执行导入流程
+    access_token_raw = token_result.get("accessToken") or ""
+    refresh_token_raw = token_result.get("refreshToken") or ""
+    expires_in = token_result.get("expiresIn")
+
+    if not access_token_raw or not refresh_token_raw:
+        return DevicePollResponse(
+            status="error", error="token 响应缺少 accessToken 或 refreshToken"
+        )
+
+    # 构建 KiroAuthConfig 并验证
+    from src.services.provider.adapters.kiro.models.credentials import KiroAuthConfig
+    from src.services.provider.adapters.kiro.token_manager import refresh_access_token
+
+    cfg = KiroAuthConfig(
+        auth_method="idc",
+        refresh_token=refresh_token_raw,
+        client_id=session["client_id"],
+        client_secret=session["client_secret"],
+        region=region,
+        access_token=access_token_raw,
+        expires_at=(int(time.time()) + int(expires_in) if expires_in else 0),
+    )
+    cfg.provider_type = ProviderType.KIRO.value
+
+    # 用 refresh_token 验证有效性并获取最新 token
+    try:
+        verified_access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
+    except Exception as e:
+        logger.warning("设备授权 token 验证失败: {}", e)
+        return DevicePollResponse(status="error", error=f"token 验证失败: {type(e).__name__}")
+
+    # 获取邮箱
+    email = await _fetch_kiro_email(new_cfg.to_dict(), proxy_config=proxy_config)
+    if email and not new_cfg.email:
+        new_cfg.email = email
+
+    # 检查重复
+    try:
+        existing_key = _check_duplicate_oauth_account(db, provider_id, new_cfg.to_dict())
+    except InvalidRequestException as e:
+        return DevicePollResponse(status="error", error=str(e))
+
+    # 创建/更新 Key
+    replaced = False
+    name = _build_kiro_key_name(email, new_cfg.auth_method, new_cfg.refresh_token)
+    api_formats = _get_provider_api_formats(provider) if provider else []
+
+    if existing_key:
+        new_key = _update_existing_oauth_key(
+            db, existing_key, verified_access_token, new_cfg.to_dict(), proxy=key_proxy
+        )
+        replaced = True
+    else:
+        new_key = _create_oauth_key(
+            db,
+            provider_id=provider_id,
+            name=name,
+            access_token=verified_access_token,
+            auth_config=new_cfg.to_dict(),
+            api_formats=api_formats,
+            proxy=key_proxy,
+        )
+
+    await _trigger_auto_fetch_models([str(new_key.id)])
+
+    # 更新 Redis session 为已完成（短 TTL 让前端最后一次轮询能拿到结果）
+    session["status"] = "authorized"
+    session["key_id"] = str(new_key.id)
+    session["email"] = email
+    session["replaced"] = replaced
+    await redis.setex(redis_key, 60, json.dumps(session))
+
+    return DevicePollResponse(
+        status="authorized",
+        key_id=str(new_key.id),
+        email=email,
+        replaced=replaced,
+    )

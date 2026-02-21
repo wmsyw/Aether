@@ -63,16 +63,14 @@
       <div class="flex rounded-lg border border-border p-0.5 bg-muted/30">
         <button
           class="flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all"
-          :disabled="isKiroProvider"
           :class="[
             mode === 'oauth'
               ? 'bg-background text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground',
-            isKiroProvider ? 'opacity-50 cursor-not-allowed' : ''
           ]"
           @click="switchMode('oauth')"
         >
-          获取授权
+          {{ isKiroProvider ? '设备授权' : '获取授权' }}
         </button>
         <button
           class="flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all"
@@ -87,65 +85,196 @@
 
       <!-- Tab 内容：grid 叠放，高度取较高者 -->
       <div class="grid [&>*]:col-start-1 [&>*]:row-start-1">
-        <!-- ===== 获取授权 ===== -->
+        <!-- ===== 获取授权 / 设备授权 ===== -->
         <div
           class="space-y-4 transition-opacity duration-150"
           :class="mode === 'oauth' ? 'opacity-100' : 'opacity-0 pointer-events-none'"
         >
-          <div
-            v-if="oauth.starting && !oauth.authorization_url"
-            class="flex items-center justify-center py-12"
-          >
-            <div class="text-center">
-              <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-3" />
-              <p class="text-xs text-muted-foreground">
-                正在准备授权...
-              </p>
-            </div>
-          </div>
-
-          <template v-else-if="oauth.authorization_url">
-            <div class="space-y-2">
-              <div class="flex items-center gap-2">
-                <span class="flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-semibold shrink-0">1</span>
-                <span class="text-xs font-medium">前往授权</span>
-              </div>
-              <div class="flex gap-2 pl-6">
-                <Button
-                  size="sm"
-                  :disabled="oauthBusy"
-                  @click="openAuthorizationUrl"
-                >
-                  <ExternalLink class="w-3 h-3 mr-1" />
-                  打开
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  :disabled="oauthBusy"
-                  @click="copyToClipboard(oauth.authorization_url)"
-                >
-                  <Copy class="w-3 h-3 mr-1" />
-                  复制
-                </Button>
-              </div>
-            </div>
-
-            <div class="space-y-2">
-              <div class="flex items-center gap-2">
-                <span class="flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-semibold shrink-0">2</span>
-                <span class="text-xs font-medium">粘贴回调 URL</span>
-              </div>
-              <div class="pl-6">
-                <Textarea
-                  v-model="oauth.callback_url"
-                  :disabled="oauthBusy"
-                  placeholder="http://localhost:xxx/callback?code=..."
-                  class="min-h-[120px] text-xs font-mono break-all !rounded-xl"
+          <!-- Kiro: 设备授权模式 -->
+          <template v-if="isKiroProvider">
+            <!-- 初始状态：输入 Start URL / Region + 开始 -->
+            <div
+              v-if="!device.session_id && !device.starting"
+              class="space-y-3"
+            >
+              <div class="space-y-1.5">
+                <label class="text-xs font-medium">Start URL</label>
+                <input
+                  v-model="device.start_url"
+                  type="text"
+                  placeholder="https://view.awsapps.com/start"
+                  class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
                   spellcheck="false"
-                />
+                >
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-xs font-medium">Region</label>
+                <input
+                  v-model="device.region"
+                  type="text"
+                  placeholder="us-east-1"
+                  class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
+                  spellcheck="false"
+                >
+              </div>
+              <Button
+                class="w-full"
+                :disabled="!device.start_url.trim()"
+                @click="startDeviceAuth"
+              >
+                开始授权
+              </Button>
+            </div>
+
+            <!-- 发起中 -->
+            <div
+              v-else-if="device.starting"
+              class="flex items-center justify-center py-12"
+            >
+              <div class="text-center">
+                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-3" />
+                <p class="text-xs text-muted-foreground">
+                  正在注册设备...
+                </p>
               </div>
             </div>
+
+            <!-- 等待用户授权 -->
+            <template v-else-if="device.session_id && device.status === 'pending'">
+              <div class="rounded-xl border border-border bg-muted/20 p-5">
+                <div class="flex flex-col items-center text-center space-y-4">
+                  <!-- 脉冲动画图标 -->
+                  <div class="relative">
+                    <div class="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
+                    <div class="relative w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                      <ExternalLink class="w-5 h-5 text-primary" />
+                    </div>
+                  </div>
+
+                  <!-- 提示文字 -->
+                  <div class="space-y-1">
+                    <p class="text-sm font-medium">
+                      在浏览器中完成授权
+                    </p>
+                    <p class="text-xs text-muted-foreground">
+                      授权完成后此页面将自动更新
+                    </p>
+                  </div>
+
+                  <!-- 倒计时 -->
+                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <div class="animate-spin rounded-full h-3 w-3 border-[1.5px] border-primary/30 border-t-primary" />
+                    <span>剩余 {{ deviceCountdownFormatted }}</span>
+                  </div>
+
+                  <!-- 操作按钮 -->
+                  <div class="flex gap-2 w-full">
+                    <Button
+                      class="flex-1"
+                      size="sm"
+                      @click="openDeviceVerificationUrl"
+                    >
+                      <ExternalLink class="w-3.5 h-3.5 mr-1.5" />
+                      打开授权页面
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      @click="copyToClipboard(device.verification_uri_complete)"
+                    >
+                      <Copy class="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 错误/过期 -->
+            <div
+              v-else-if="device.status === 'error' || device.status === 'expired'"
+            >
+              <div class="rounded-xl border border-destructive/20 bg-destructive/5 p-5">
+                <div class="flex flex-col items-center text-center space-y-3">
+                  <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+                    <AlertCircle class="w-5 h-5 text-destructive" />
+                  </div>
+                  <div class="space-y-1">
+                    <p class="text-sm font-medium text-destructive">
+                      {{ device.status === 'expired' ? '授权已过期' : '授权失败' }}
+                    </p>
+                    <p class="text-xs text-muted-foreground">
+                      {{ device.error || '请重试' }}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    @click="resetDevice"
+                  >
+                    重新开始
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 非 Kiro: 原有 OAuth 流程 -->
+          <template v-else>
+            <div
+              v-if="oauth.starting && !oauth.authorization_url"
+              class="flex items-center justify-center py-12"
+            >
+              <div class="text-center">
+                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-3" />
+                <p class="text-xs text-muted-foreground">
+                  正在准备授权...
+                </p>
+              </div>
+            </div>
+
+            <template v-else-if="oauth.authorization_url">
+              <div class="space-y-2">
+                <div class="flex items-center gap-2">
+                  <span class="flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-semibold shrink-0">1</span>
+                  <span class="text-xs font-medium">前往授权</span>
+                </div>
+                <div class="flex gap-2 pl-6">
+                  <Button
+                    size="sm"
+                    :disabled="oauthBusy"
+                    @click="openAuthorizationUrl"
+                  >
+                    <ExternalLink class="w-3 h-3 mr-1" />
+                    打开
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    :disabled="oauthBusy"
+                    @click="copyToClipboard(oauth.authorization_url)"
+                  >
+                    <Copy class="w-3 h-3 mr-1" />
+                    复制
+                  </Button>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="flex items-center gap-2">
+                  <span class="flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-semibold shrink-0">2</span>
+                  <span class="text-xs font-medium">粘贴回调 URL</span>
+                </div>
+                <div class="pl-6">
+                  <Textarea
+                    v-model="oauth.callback_url"
+                    :disabled="oauthBusy"
+                    placeholder="http://localhost:xxx/callback?code=..."
+                    class="min-h-[120px] text-xs font-mono break-all !rounded-xl"
+                    spellcheck="false"
+                  />
+                </div>
+              </div>
+            </template>
           </template>
         </div>
 
@@ -260,14 +389,14 @@
         取消
       </Button>
       <Button
-        v-if="mode === 'oauth'"
+        v-if="mode === 'oauth' && !isKiroProvider"
         :disabled="!canCompleteOAuth"
         @click="handleCompleteOAuth"
       >
         {{ oauth.completing ? '验证中...' : '验证' }}
       </Button>
       <Button
-        v-else
+        v-if="mode === 'import'"
         :disabled="!canImport"
         @click="handleImport"
       >
@@ -278,9 +407,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Dialog, Button, Textarea, Popover, PopoverTrigger, PopoverContent } from '@/components/ui'
-import { UserPlus, Copy, ExternalLink, Upload, Globe } from 'lucide-vue-next'
+import { UserPlus, Copy, ExternalLink, Upload, Globe, AlertCircle } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import { parseApiError } from '@/utils/errorParser'
@@ -289,6 +418,8 @@ import {
   completeProviderLevelOAuth,
   importProviderRefreshToken,
   batchImportOAuth,
+  startDeviceAuthorize,
+  pollDeviceAuthorize,
 } from '@/api/endpoints'
 import ProxyNodeSelect from './ProxyNodeSelect.vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
@@ -348,6 +479,42 @@ function createInitialOAuthState(): OAuthState {
 
 const oauth = ref<OAuthState>(createInitialOAuthState())
 
+// 设备授权状态
+interface DeviceAuthState {
+  start_url: string
+  region: string
+  starting: boolean
+  session_id: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete: string
+  expires_at: number  // unix timestamp (ms)
+  interval: number    // 轮询间隔 (秒)
+  status: 'idle' | 'pending' | 'authorized' | 'expired' | 'error'
+  error: string
+}
+
+function createInitialDeviceState(): DeviceAuthState {
+  return {
+    start_url: '',
+    region: 'us-east-1',
+    starting: false,
+    session_id: '',
+    user_code: '',
+    verification_uri: '',
+    verification_uri_complete: '',
+    expires_at: 0,
+    interval: 5,
+    status: 'idle',
+    error: '',
+  }
+}
+
+const device = ref<DeviceAuthState>(createInitialDeviceState())
+let devicePollTimer: ReturnType<typeof setTimeout> | null = null
+const deviceCountdown = ref(0)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
 // 导入状态
 const importText = ref('')
 const importFileName = ref('')
@@ -360,6 +527,13 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const isOpen = computed(() => props.open)
 
 const isKiroProvider = computed(() => (props.providerType || '').toLowerCase() === 'kiro')
+
+const deviceCountdownFormatted = computed(() => {
+  const s = deviceCountdown.value
+  const min = Math.floor(s / 60)
+  const sec = s % 60
+  return `${min}:${String(sec).padStart(2, '0')}`
+})
 
 const oauthBusy = computed(() =>
   oauth.value.starting || oauth.value.completing
@@ -376,8 +550,29 @@ const canImport = computed(() => {
   return text.trim().length > 0 && !importing.value
 })
 
+function stopDevicePolling() {
+  if (devicePollTimer) {
+    clearTimeout(devicePollTimer)
+    devicePollTimer = null
+  }
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+}
+
+function resetDevice() {
+  stopDevicePolling()
+  const { start_url, region } = device.value
+  device.value = createInitialDeviceState()
+  device.value.start_url = start_url
+  device.value.region = region
+}
+
 function resetForm() {
   oauth.value = createInitialOAuthState()
+  stopDevicePolling()
+  device.value = createInitialDeviceState()
   importText.value = ''
   importFileName.value = ''
   manualPasteText.value = ''
@@ -386,7 +581,7 @@ function resetForm() {
   showManualInput.value = false
   proxyPopoverOpen.value = false
   selectedProxyNodeId.value = ''
-  mode.value = isKiroProvider.value ? 'import' : 'oauth'
+  mode.value = 'oauth'
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
   }
@@ -405,14 +600,8 @@ function clearImport() {
 function switchMode(newMode: DialogMode) {
   if (mode.value === newMode) return
 
-  if (newMode === 'oauth' && isKiroProvider.value) {
-    showError('Kiro \u4e0d\u652f\u6301 OAuth \u6388\u6743\uff0c\u8bf7\u4f7f\u7528\u5bfc\u5165\u6388\u6743', '\u63d0\u793a')
-    mode.value = 'import'
-    return
-  }
-
   mode.value = newMode
-  if (newMode === 'oauth' && !oauth.value.authorization_url && !oauth.value.starting) {
+  if (newMode === 'oauth' && !isKiroProvider.value && !oauth.value.authorization_url && !oauth.value.starting) {
     initOAuth()
   }
 }
@@ -608,13 +797,107 @@ async function handleImport() {
   }
 }
 
+// ==== 设备授权 ====
+
+function openDeviceVerificationUrl() {
+  const url = device.value.verification_uri_complete || device.value.verification_uri
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function startCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer)
+  deviceCountdown.value = Math.max(0, Math.round((device.value.expires_at - Date.now()) / 1000))
+  countdownTimer = setInterval(() => {
+    deviceCountdown.value = Math.max(0, Math.round((device.value.expires_at - Date.now()) / 1000))
+    if (deviceCountdown.value <= 0 && countdownTimer) {
+      clearInterval(countdownTimer)
+      countdownTimer = null
+    }
+  }, 1000)
+}
+
+async function startDeviceAuth() {
+  if (!props.providerId) return
+  device.value.starting = true
+  device.value.error = ''
+  try {
+    const resp = await startDeviceAuthorize(props.providerId, {
+      start_url: device.value.start_url.trim() || undefined,
+      region: device.value.region.trim() || undefined,
+      proxy_node_id: selectedProxyNodeId.value || undefined,
+    })
+    device.value.session_id = resp.session_id
+    device.value.user_code = resp.user_code
+    device.value.verification_uri = resp.verification_uri
+    device.value.verification_uri_complete = resp.verification_uri_complete
+    device.value.expires_at = Date.now() + resp.expires_in * 1000
+    device.value.interval = resp.interval || 5
+    device.value.status = 'pending'
+    startCountdown()
+    scheduleDevicePoll()
+  } catch (err: any) {
+    const errorMessage = parseApiError(err, '发起设备授权失败')
+    showError(errorMessage, '错误')
+    device.value.status = 'error'
+    device.value.error = errorMessage
+  } finally {
+    device.value.starting = false
+  }
+}
+
+function scheduleDevicePoll() {
+  if (devicePollTimer) clearTimeout(devicePollTimer)
+  devicePollTimer = setTimeout(() => pollDevice(), device.value.interval * 1000)
+}
+
+async function pollDevice() {
+  if (!props.providerId || !device.value.session_id || device.value.status !== 'pending') return
+
+  try {
+    const result = await pollDeviceAuthorize(props.providerId, {
+      session_id: device.value.session_id,
+    })
+
+    switch (result.status) {
+      case 'authorized':
+        stopDevicePolling()
+        device.value.status = 'authorized'
+        success(result.email ? `授权成功: ${result.email}` : '授权成功，账号已添加')
+        emit('saved')
+        handleClose()
+        return
+      case 'pending':
+        scheduleDevicePoll()
+        return
+      case 'slow_down':
+        device.value.interval = Math.min(device.value.interval + 5, 30)
+        scheduleDevicePoll()
+        return
+      case 'expired':
+        stopDevicePolling()
+        device.value.status = 'expired'
+        device.value.error = result.error || '设备码已过期'
+        return
+      case 'error':
+        stopDevicePolling()
+        device.value.status = 'error'
+        device.value.error = result.error || '授权失败'
+        return
+    }
+  } catch (err: any) {
+    // 网络错误等，继续轮询
+    scheduleDevicePoll()
+  }
+}
+
+onBeforeUnmount(() => {
+  stopDevicePolling()
+})
+
 watch(() => props.open, (newOpen) => {
   if (newOpen) {
-    // 预加载代理节点列表
     proxyNodesStore.ensureLoaded()
-    if (isKiroProvider.value) {
-      mode.value = 'import'
-    } else {
+    if (!isKiroProvider.value) {
       initOAuth()
     }
   } else {

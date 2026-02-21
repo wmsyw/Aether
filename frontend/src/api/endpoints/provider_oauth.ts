@@ -55,3 +55,48 @@ export async function importProviderRefreshToken(
   const resp = await client.post(`/api/admin/provider-oauth/providers/${providerId}/import-refresh-token`, data)
   return resp.data
 }
+
+// Device Authorization (AWS SSO OIDC)
+
+export interface DeviceAuthorizeRequest {
+  start_url?: string
+  region?: string
+  proxy_node_id?: string
+}
+
+export interface DeviceAuthorizeResponse {
+  session_id: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete: string
+  expires_in: number
+  interval: number
+}
+
+export interface DevicePollRequest {
+  session_id: string
+}
+
+export interface DevicePollResponse {
+  status: 'pending' | 'authorized' | 'slow_down' | 'expired' | 'error'
+  key_id?: string
+  email?: string
+  error?: string
+  replaced?: boolean
+}
+
+export async function startDeviceAuthorize(
+  providerId: string,
+  data: DeviceAuthorizeRequest
+): Promise<DeviceAuthorizeResponse> {
+  const resp = await client.post(`/api/admin/provider-oauth/providers/${providerId}/device-authorize`, data)
+  return resp.data
+}
+
+export async function pollDeviceAuthorize(
+  providerId: string,
+  data: DevicePollRequest
+): Promise<DevicePollResponse> {
+  const resp = await client.post(`/api/admin/provider-oauth/providers/${providerId}/device-poll`, data)
+  return resp.data
+}
