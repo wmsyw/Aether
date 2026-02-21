@@ -114,6 +114,8 @@ class BaseMessageHandler:
         allowed_api_formats: list[str] | None = None,
         adapter_detector: AdapterDetectorType | None = None,
         perf_metrics: dict[str, Any] | None = None,
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
     ) -> None:
         self.db = db
         self.user = user
@@ -127,6 +129,9 @@ class BaseMessageHandler:
         self.primary_api_format = normalize_endpoint_signature(self.allowed_api_formats[0])
         self.adapter_detector = adapter_detector
         self.perf_metrics = perf_metrics
+        # 结构化格式维度（从 Adapter 层透传）
+        self.api_family = api_family
+        self.endpoint_kind = endpoint_kind
 
         redis_client = get_redis_client_sync()
         self.redis = redis_client

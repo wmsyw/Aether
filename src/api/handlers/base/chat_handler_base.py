@@ -141,6 +141,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             Callable[[dict[str, str], dict[str, Any] | None], dict[str, bool]]
         ) = None,
         perf_metrics: dict[str, Any] | None = None,
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
     ):
         allowed = allowed_api_formats or [self.FORMAT_ID]
         super().__init__(
@@ -154,6 +156,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             allowed_api_formats=allowed,
             adapter_detector=adapter_detector,
             perf_metrics=perf_metrics,
+            api_family=api_family,
+            endpoint_kind=endpoint_kind,
         )
         self._parser: ResponseParser | None = None
         self._request_builder = PassthroughRequestBuilder()
@@ -483,7 +487,12 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         request_body_ref: dict[str, Any] = {"body": original_request_body}
 
         # 创建类型安全的流式上下文
-        ctx = StreamContext(model=model, api_format=api_format)
+        ctx = StreamContext(
+            model=model,
+            api_format=api_format,
+            api_family=self.api_family,
+            endpoint_kind=self.endpoint_kind,
+        )
         ctx.request_id = self.request_id
         ctx.client_api_format = (
             api_format.value if hasattr(api_format, "value") else str(api_format)

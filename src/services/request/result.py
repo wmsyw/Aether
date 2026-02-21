@@ -52,6 +52,10 @@ class RequestMetadata:
     provider: str = "unknown"
     model: str = "unknown"
 
+    # 结构化格式维度（从 Adapter 层透传，优先于从 api_format 字符串解析）
+    api_family: str | None = None  # 协议族: claude, openai, gemini
+    endpoint_kind: str | None = None  # 端点类型: chat, cli, video
+
     # Provider 追踪信息
     provider_id: str | None = None
     provider_endpoint_id: str | None = None
@@ -80,6 +84,8 @@ class RequestMetadata:
             api_format=self.api_format,
             provider=provider,
             model=self.model,
+            api_family=self.api_family,
+            endpoint_kind=self.endpoint_kind,
             provider_id=provider_id,
             provider_endpoint_id=provider_endpoint_id,
             provider_api_key_id=provider_api_key_id,
@@ -96,6 +102,8 @@ class RequestMetadata:
             api_format=self.api_format,
             provider=self.provider,
             model=self.model,
+            api_family=self.api_family,
+            endpoint_kind=self.endpoint_kind,
             provider_id=self.provider_id,
             provider_endpoint_id=self.provider_endpoint_id,
             provider_api_key_id=self.provider_api_key_id,
@@ -274,6 +282,8 @@ class RequestResult:
                 api_format=get_meta_value(existing_metadata, "api_format") or api_format,
                 provider=get_meta_value(existing_metadata, "provider", "unknown") or "unknown",
                 model=get_meta_value(existing_metadata, "model", model) or model,
+                api_family=get_meta_value(existing_metadata, "api_family"),
+                endpoint_kind=get_meta_value(existing_metadata, "endpoint_kind"),
                 provider_id=get_meta_value(existing_metadata, "provider_id"),
                 provider_endpoint_id=get_meta_value(existing_metadata, "provider_endpoint_id"),
                 provider_api_key_id=get_meta_value(existing_metadata, "provider_api_key_id"),

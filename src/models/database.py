@@ -366,7 +366,11 @@ class Usage(Base):
     # 请求详情
     request_type = Column(String(50))  # chat, completion, embedding等
     api_format = Column(String(50), nullable=True)  # API 格式: CLAUDE, OPENAI 等（用户请求格式）
+    api_family = Column(String(50), nullable=True)  # 协议族: claude, openai, gemini
+    endpoint_kind = Column(String(50), nullable=True)  # 端点类型: chat, cli, video
     endpoint_api_format = Column(String(50), nullable=True)  # 端点原生 API 格式
+    provider_api_family = Column(String(50), nullable=True)  # 提供商协议族
+    provider_endpoint_kind = Column(String(50), nullable=True)  # 提供商端点类型
     has_format_conversion = Column(Boolean, nullable=True, default=False)  # 是否发生了格式转换
     is_stream = Column(Boolean, default=False)  # 是否为流式请求
     status_code = Column(Integer)

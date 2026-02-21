@@ -219,6 +219,16 @@ def get_parser_for_format(format_id: str) -> ResponseParser:
         )
 
     normalized = normalize_signature_key(format_id)
-    if normalized not in _PARSER_REGISTRY:
-        raise KeyError(f"Unknown format: {normalized}")
-    return _PARSER_REGISTRY[normalized]()
+    # 1. 精确匹配
+    if normalized in _PARSER_REGISTRY:
+        return _PARSER_REGISTRY[normalized]()
+    # 2. data_format_id 回退：如 "claude:cli" (dfid="claude") -> ClaudeResponseParser (dfid="claude")
+    from src.core.api_format.metadata import get_data_format_id_for_endpoint
+
+    target_dfid = get_data_format_id_for_endpoint(normalized)
+    if target_dfid:
+        for reg_key, parser_cls in _PARSER_REGISTRY.items():
+            reg_dfid = get_data_format_id_for_endpoint(reg_key)
+            if reg_dfid == target_dfid:
+                return parser_cls()
+    raise KeyError(f"Unknown format: {normalized}")

@@ -54,7 +54,22 @@ class FormatConversionRegistry:
         logger.info(f"[FormatConversionRegistry] 注册 normalizer: {normalizer.FORMAT_ID}")
 
     def get_normalizer(self, format_id: str) -> FormatNormalizer | None:
-        return self._normalizers.get(str(format_id).upper())
+        key = str(format_id).upper()
+        # 1. 精确匹配
+        normalizer = self._normalizers.get(key)
+        if normalizer is not None:
+            return normalizer
+        # 2. data_format_id 回退：如 "claude:cli" (dfid="claude") -> ClaudeNormalizer (dfid="claude")
+        from src.core.api_format.metadata import get_data_format_id_for_endpoint
+
+        target_dfid = get_data_format_id_for_endpoint(format_id)
+        if not target_dfid:
+            return None
+        for reg_key, reg_normalizer in self._normalizers.items():
+            reg_dfid = get_data_format_id_for_endpoint(reg_key)
+            if reg_dfid == target_dfid:
+                return reg_normalizer
+        return None
 
     def _require_normalizer(self, format_id: str) -> FormatNormalizer:
         normalizer = self.get_normalizer(format_id)

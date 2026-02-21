@@ -108,6 +108,8 @@ class CliStreamMixin:
         ctx = StreamContext(
             model=model,
             api_format=self.allowed_api_formats[0],
+            api_family=self.api_family,
+            endpoint_kind=self.endpoint_kind,
             request_id=self.request_id,
             user_id=self.user.id,
             api_key_id=self.api_key.id,

@@ -248,7 +248,12 @@ class ClaudeChatAdapter(ChatAdapterBase):
             return [], error_msg
 
     @classmethod
-    def build_endpoint_url(cls, base_url: str) -> str:
+    def build_endpoint_url(
+        cls,
+        base_url: str,
+        request_data: dict[str, Any] | None = None,
+        model_name: str | None = None,
+    ) -> str:
         """构建Claude API端点URL"""
         base_url = base_url.rstrip("/")
         if base_url.endswith("/v1"):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -23,6 +23,8 @@ class UsageRecordParams:
     cache_read_input_tokens: int
     request_type: str
     api_format: str | None
+    api_family: str | None  # 协议族（从 Adapter 层透传）
+    endpoint_kind: str | None  # 端点类型（从 Adapter 层透传）
     endpoint_api_format: str | None  # 端点原生 API 格式
     has_format_conversion: bool  # 是否发生了格式转换
     is_stream: bool

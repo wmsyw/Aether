@@ -11,9 +11,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from src.core.api_format.conversion.normalizers.claude import ClaudeNormalizer
-from src.core.api_format.conversion.normalizers.claude_cli import ClaudeCliNormalizer
 from src.core.api_format.conversion.normalizers.gemini import GeminiNormalizer
-from src.core.api_format.conversion.normalizers.gemini_cli import GeminiCliNormalizer
 from src.core.api_format.conversion.normalizers.openai import OpenAINormalizer
 from src.core.api_format.conversion.normalizers.openai_cli import OpenAICliNormalizer
 from src.core.api_format.conversion.registry import FormatConversionRegistry
@@ -26,9 +24,8 @@ def _make_registry_with_cli() -> FormatConversionRegistry:
     reg.register(OpenAINormalizer())
     reg.register(OpenAICliNormalizer())
     reg.register(ClaudeNormalizer())
-    reg.register(ClaudeCliNormalizer())
     reg.register(GeminiNormalizer())
-    reg.register(GeminiCliNormalizer())
+    # claude:cli / gemini:cli 通过 data_format_id 回退自动复用对应的 Chat normalizer
     return reg
 
 
@@ -405,15 +402,13 @@ def test_stream_openai_cli_noop_and_unknown_events() -> None:
 
     # noop 事件不应产生内部事件
     assert (
-        normalizer.stream_chunk_to_internal({"type": "response.function_call_arguments.done"}, state)
+        normalizer.stream_chunk_to_internal(
+            {"type": "response.function_call_arguments.done"}, state
+        )
         == []
     )
-    assert (
-        normalizer.stream_chunk_to_internal({"type": "response.content_part.added"}, state) == []
-    )
-    assert (
-        normalizer.stream_chunk_to_internal({"type": "response.content_part.done"}, state) == []
-    )
+    assert normalizer.stream_chunk_to_internal({"type": "response.content_part.added"}, state) == []
+    assert normalizer.stream_chunk_to_internal({"type": "response.content_part.done"}, state) == []
 
     # unknown 事件应返回 UnknownStreamEvent
     events = normalizer.stream_chunk_to_internal(

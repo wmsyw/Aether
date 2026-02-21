@@ -135,6 +135,8 @@ class UsageBillingIntegrationMixin:
             cache_read_input_tokens=params.cache_read_input_tokens,
             request_type=params.request_type,
             api_format=params.api_format,
+            api_family=params.api_family,
+            endpoint_kind=params.endpoint_kind,
             endpoint_api_format=params.endpoint_api_format,
             has_format_conversion=params.has_format_conversion,
             is_stream=params.is_stream,

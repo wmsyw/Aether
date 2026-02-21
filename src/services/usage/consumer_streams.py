@@ -70,6 +70,8 @@ def _event_to_record(event: UsageEvent) -> dict[str, Any]:
         "cache_read_input_tokens": data.get("cache_read_input_tokens") or 0,
         "request_type": data.get("request_type") or "chat",
         "api_format": data.get("api_format"),
+        "api_family": data.get("api_family"),
+        "endpoint_kind": data.get("endpoint_kind"),
         "endpoint_api_format": data.get("endpoint_api_format"),
         "has_format_conversion": data.get("has_format_conversion"),
         "is_stream": data.get("is_stream", True),

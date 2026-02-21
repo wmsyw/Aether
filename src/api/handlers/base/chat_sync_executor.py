@@ -210,6 +210,8 @@ class ChatSyncExecutor:
                 is_stream=False,
                 provider_request_headers=ctx.provider_request_headers,
                 api_format=api_format,
+                api_family=handler.api_family,
+                endpoint_kind=handler.endpoint_kind,
                 # 格式转换追踪
                 endpoint_api_format=ctx.provider_api_format_for_error or None,
                 has_format_conversion=is_format_converted(
@@ -290,6 +292,8 @@ class ChatSyncExecutor:
                 error_message=str(e),
                 is_stream=False,
                 api_format=api_format,
+                api_family=handler.api_family,
+                endpoint_kind=handler.endpoint_kind,
                 provider_request_headers=ctx.provider_request_headers,
                 response_headers=ctx.response_headers,
                 client_response_headers={"content-type": "application/json"},
@@ -349,6 +353,8 @@ class ChatSyncExecutor:
                 provider_request_body=ctx.provider_request_body,
                 is_stream=False,
                 api_format=api_format,
+                api_family=handler.api_family,
+                endpoint_kind=handler.endpoint_kind,
                 provider_request_headers=ctx.provider_request_headers,
                 response_headers=error_response_headers,
                 # 非流式失败返回给客户端的是 JSON 错误响应
@@ -719,6 +725,8 @@ class ChatSyncExecutor:
             provider_request_body=ctx.provider_request_body,
             is_stream=True,
             api_format=ctx.api_format,
+            api_family=handler.api_family,
+            endpoint_kind=handler.endpoint_kind,
             provider_request_headers=ctx.provider_request_headers,
             response_headers=ctx.response_headers,
             client_response_headers=client_response_headers,

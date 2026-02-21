@@ -10,6 +10,17 @@ from src.services.system.config import SystemConfigService
 from src.services.usage._types import UsageCostInfo
 from src.services.usage.error_classifier import classify_error
 
+
+def _parse_format_dimensions(api_format: str | None) -> tuple[str | None, str | None]:
+    """从 api_format (如 'claude:chat') 解析出 (api_family, endpoint_kind)"""
+    if not api_format:
+        return None, None
+    parts = api_format.lower().split(":", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return parts[0], None
+
+
 # Metadata pruning configuration (ordered by priority - drop first to last)
 METADATA_PRUNE_KEYS: tuple[str, ...] = (
     "raw_response_ref",
@@ -45,7 +56,11 @@ def build_usage_params(
     cache_read_input_tokens: int,
     request_type: str,
     api_format: str | None,
+    api_family: str | None = None,
+    endpoint_kind: str | None = None,
     endpoint_api_format: str | None,
+    provider_api_family: str | None = None,
+    provider_endpoint_kind: str | None = None,
     has_format_conversion: bool,
     is_stream: bool,
     response_time_ms: int | None,
@@ -160,6 +175,16 @@ def build_usage_params(
     if status_code >= 400 or error_message or status in {"failed", "cancelled"}:
         error_category = classify_error(status_code, error_message, status).value
 
+    # 从 api_format / endpoint_api_format 解析 api_family + endpoint_kind
+    # 优先使用透传值，fallback 到字符串解析
+    parsed_family, parsed_kind = _parse_format_dimensions(api_format)
+    client_family = api_family or parsed_family
+    client_kind = endpoint_kind or parsed_kind
+
+    parsed_ep_family, parsed_ep_kind = _parse_format_dimensions(endpoint_api_format)
+    ep_family = provider_api_family or parsed_ep_family
+    ep_kind = provider_endpoint_kind or parsed_ep_kind
+
     return {
         "user_id": user.id if user else None,
         "api_key_id": api_key.id if api_key else None,
@@ -196,7 +221,11 @@ def build_usage_params(
         "price_per_request": request_price,
         "request_type": request_type,
         "api_format": api_format,
+        "api_family": client_family,
+        "endpoint_kind": client_kind,
         "endpoint_api_format": endpoint_api_format,
+        "provider_api_family": ep_family,
+        "provider_endpoint_kind": ep_kind,
         "has_format_conversion": has_format_conversion,
         "is_stream": is_stream,
         "status_code": status_code,
@@ -228,7 +257,11 @@ def update_existing_usage(
     existing_usage.model = usage_params["model"]
     existing_usage.request_type = usage_params["request_type"]
     existing_usage.api_format = usage_params["api_format"]
+    existing_usage.api_family = usage_params.get("api_family")
+    existing_usage.endpoint_kind = usage_params.get("endpoint_kind")
     existing_usage.endpoint_api_format = usage_params["endpoint_api_format"]
+    existing_usage.provider_api_family = usage_params.get("provider_api_family")
+    existing_usage.provider_endpoint_kind = usage_params.get("provider_endpoint_kind")
     existing_usage.has_format_conversion = usage_params["has_format_conversion"]
     existing_usage.is_stream = usage_params["is_stream"]
     existing_usage.status = usage_params["status"]

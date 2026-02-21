@@ -525,17 +525,6 @@ class ClaudeResponseParser(ResponseParser):
         return is_error
 
 
-class ClaudeCliResponseParser(ClaudeResponseParser):
-    """Claude CLI 格式响应解析器"""
-
-    API_FORMAT = "claude:cli"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.name = self.API_FORMAT
-        self.api_format = self.API_FORMAT
-
-
 class GeminiResponseParser(ResponseParser):
     """Gemini 格式响应解析器"""
 
@@ -694,17 +683,6 @@ class GeminiResponseParser(ResponseParser):
         return bool(self._parser.is_error_event(response))
 
 
-class GeminiCliResponseParser(GeminiResponseParser):
-    """Gemini CLI 格式响应解析器"""
-
-    API_FORMAT = "gemini:cli"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.name = self.API_FORMAT
-        self.api_format = self.API_FORMAT
-
-
 # 注册解析器到 core 层注册表（供 services 层通过 format_id 获取）
 from src.core.stream_types import get_parser_for_format, register_parser
 
@@ -735,9 +713,7 @@ __all__ = [
     "OpenAIResponseParser",
     "OpenAICliResponseParser",
     "ClaudeResponseParser",
-    "ClaudeCliResponseParser",
     "GeminiResponseParser",
-    "GeminiCliResponseParser",
     "register_default_parsers",
     "get_parser_for_format",
     "is_cli_format",

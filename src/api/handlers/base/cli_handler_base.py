@@ -79,6 +79,8 @@ class CliMessageHandlerBase(
             Callable[[dict[str, str], dict[str, Any] | None], dict[str, bool]]
         ) = None,
         perf_metrics: dict[str, Any] | None = None,
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
     ):
         allowed = allowed_api_formats or [self.FORMAT_ID]
         super().__init__(
@@ -92,6 +94,8 @@ class CliMessageHandlerBase(
             allowed_api_formats=allowed,
             adapter_detector=adapter_detector,
             perf_metrics=perf_metrics,
+            api_family=api_family,
+            endpoint_kind=endpoint_kind,
         )
         self._parser: ResponseParser | None = None
         self._request_builder = PassthroughRequestBuilder()

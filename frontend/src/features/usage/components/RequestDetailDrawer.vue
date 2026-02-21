@@ -403,97 +403,51 @@
                     v-model="activeTab"
                     :default-value="activeTab"
                   >
-                    <!-- Tab + 图标工具栏同行 -->
-                    <div class="flex items-center justify-between border-b pb-2 mb-3 gap-2">
-                      <!-- 左侧 Tab -->
-                      <div class="flex items-center min-w-0">
-                        <button
-                          v-for="tab in visibleTabs"
-                          :key="tab.name"
-                          class="px-2 sm:px-3 py-1.5 text-sm transition-colors border-b-2 -mb-[9px] whitespace-nowrap"
-                          :class="activeTab === tab.name
-                            ? 'border-primary text-foreground font-medium'
-                            : 'border-transparent text-muted-foreground hover:text-foreground'"
-                          @click="activeTab = tab.name"
-                        >
-                          {{ tab.label }}
-                        </button>
-                      </div>
-                      <!-- 右侧图标工具栏 -->
-                      <div class="flex items-center gap-0.5 shrink-0">
-                        <!-- 请求头专用：对比/客户端/提供商 切换组 -->
-                        <template v-if="activeTab === 'request-headers' && hasProviderHeaders">
+                    <!-- Tab 行 -->
+                    <div class="flex items-center border-b pb-2 mb-3">
+                      <button
+                        v-for="tab in visibleTabs"
+                        :key="tab.name"
+                        class="px-2 sm:px-3 py-1.5 text-sm transition-colors border-b-2 -mb-[9px] whitespace-nowrap"
+                        :class="activeTab === tab.name
+                          ? 'border-primary text-foreground font-medium'
+                          : 'border-transparent text-muted-foreground hover:text-foreground'"
+                        @click="activeTab = tab.name"
+                      >
+                        {{ tab.label }}
+                      </button>
+                    </div>
+
+                    <!-- Tab 内容（统一容器） -->
+                    <div class="content-block rounded-md border overflow-hidden">
+                      <!-- 表头栏：工具按钮 -->
+                      <div class="flex items-center justify-end gap-0.5 px-3 py-1 border-b bg-muted/40">
+                        <!-- 区域1：条件性按钮（cURL、视图切换、对比） -->
+                        <!-- cURL 复制（仅在请求头/请求体 Tab） -->
+                        <template v-if="['request-headers', 'request-body'].includes(activeTab)">
                           <button
-                            title="对比"
-                            class="p-1.5 rounded transition-colors"
-                            :class="viewMode === 'compare' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="viewMode = 'compare'"
+                            :title="curlCopied ? '已复制 cURL' : '复制 cURL'"
+                            class="p-1 rounded transition-colors text-muted-foreground hover:bg-muted"
+                            :disabled="curlCopying"
+                            @click="copyCurlCommand"
                           >
-                            <Columns2 class="w-4 h-4" />
-                          </button>
-                          <button
-                            title="客户端"
-                            class="p-1.5 rounded transition-colors"
-                            :class="viewMode === 'formatted' && dataSource === 'client' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="viewMode = 'formatted'; dataSource = 'client'"
-                          >
-                            <Monitor class="w-4 h-4" />
-                          </button>
-                          <button
-                            title="提供商"
-                            class="p-1.5 rounded transition-colors"
-                            :class="viewMode === 'formatted' && dataSource === 'provider' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="viewMode = 'formatted'; dataSource = 'provider'"
-                          >
-                            <Server class="w-4 h-4" />
+                            <Check
+                              v-if="curlCopied"
+                              class="w-3.5 h-3.5 text-green-500"
+                            />
+                            <Terminal
+                              v-else
+                              class="w-3.5 h-3.5"
+                              :class="{ 'animate-pulse': curlCopying }"
+                            />
                           </button>
                         </template>
 
-                        <!-- 响应头：客户端/提供商切换 -->
-                        <template v-if="activeTab === 'response-headers' && hasProviderResponseHeaders">
-                          <button
-                            title="客户端"
-                            class="p-1.5 rounded transition-colors"
-                            :class="dataSource === 'client' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="dataSource = 'client'"
-                          >
-                            <Monitor class="w-4 h-4" />
-                          </button>
-                          <button
-                            title="提供商"
-                            class="p-1.5 rounded transition-colors"
-                            :class="dataSource === 'provider' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="dataSource = 'provider'"
-                          >
-                            <Server class="w-4 h-4" />
-                          </button>
-                        </template>
-
-                        <!-- 请求体/响应体：客户端/提供商切换 -->
-                        <template v-if="['request-body', 'response-body'].includes(activeTab) && hasProviderBody">
-                          <button
-                            title="客户端"
-                            class="p-1.5 rounded transition-colors"
-                            :class="dataSource === 'client' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="dataSource = 'client'"
-                          >
-                            <Monitor class="w-4 h-4" />
-                          </button>
-                          <button
-                            title="提供商"
-                            class="p-1.5 rounded transition-colors"
-                            :class="dataSource === 'provider' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
-                            @click="dataSource = 'provider'"
-                          >
-                            <Server class="w-4 h-4" />
-                          </button>
-                        </template>
-
-                        <!-- 请求体/响应体专用：JSON/对话 视图切换（单按钮） -->
+                        <!-- 请求体/响应体专用：JSON/对话 视图切换 -->
                         <template v-if="supportsConversationView">
                           <button
                             :title="contentViewMode === 'json' ? '切换到对话视图' : '切换到 JSON 视图'"
-                            class="p-1.5 rounded transition-colors"
+                            class="p-1 rounded transition-colors"
                             :class="hasValidConversation || contentViewMode === 'conversation'
                               ? 'text-muted-foreground hover:bg-muted'
                               : 'text-muted-foreground/40 cursor-not-allowed'"
@@ -502,43 +456,57 @@
                           >
                             <Code2
                               v-if="contentViewMode === 'conversation'"
-                              class="w-4 h-4"
+                              class="w-3.5 h-3.5"
                             />
                             <MessageSquareText
                               v-else
-                              class="w-4 h-4"
+                              class="w-3.5 h-3.5"
                             />
                           </button>
                         </template>
 
-                        <!-- cURL 复制（仅在请求头/请求体 Tab） -->
-                        <template v-if="['request-headers', 'request-body'].includes(activeTab)">
+                        <!-- 请求头专用：对比模式 -->
+                        <template v-if="activeTab === 'request-headers' && hasProviderHeaders">
                           <button
-                            :title="curlCopied ? '已复制 cURL' : '复制 cURL'"
-                            class="p-1.5 rounded transition-colors text-muted-foreground hover:bg-muted"
-                            :disabled="curlCopying"
-                            @click="copyCurlCommand"
+                            title="对比"
+                            class="p-1 rounded transition-colors"
+                            :class="viewMode === 'compare' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
+                            @click="viewMode = 'compare'"
                           >
-                            <Check
-                              v-if="curlCopied"
-                              class="w-4 h-4 text-green-500"
-                            />
-                            <Terminal
-                              v-else
-                              class="w-4 h-4"
-                              :class="{ 'animate-pulse': curlCopying }"
-                            />
+                            <Columns2 class="w-3.5 h-3.5" />
                           </button>
                         </template>
-                      </div>
-                    </div>
 
-                    <!-- Tab 内容（统一容器：表头栏 + 内容区融为一体） -->
-                    <div class="content-block rounded-md border overflow-hidden">
-                      <!-- 表头栏：操作按钮 -->
-                      <div class="flex items-center justify-end gap-0.5 px-3 py-1 border-b bg-muted/40">
+                        <!-- 区域2：客户端/提供商切换 -->
+                        <template v-if="showDataSourceToggle">
+                          <div class="w-px h-3.5 bg-border mx-0.5" />
+                          <button
+                            title="客户端"
+                            class="p-1 rounded transition-colors"
+                            :class="activeDataSource === 'client' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
+                            @click="setDataSource('client')"
+                          >
+                            <Monitor class="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            title="提供商"
+                            class="p-1 rounded transition-colors"
+                            :class="activeDataSource === 'provider' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
+                            @click="setDataSource('provider')"
+                          >
+                            <Server class="w-3.5 h-3.5" />
+                          </button>
+                        </template>
+
+                        <!-- 区域3：常驻按钮（展开/收缩、复制） -->
+                        <div
+                          v-if="activeTab !== 'metadata'"
+                          class="w-px h-3.5 bg-border mx-0.5"
+                        />
+
                         <!-- 展开/收缩 -->
                         <button
+                          v-if="activeTab !== 'metadata'"
                           :title="currentExpandDepth === 0 ? '展开全部' : '收缩全部'"
                           class="p-1 rounded transition-colors"
                           :class="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')
@@ -556,8 +524,10 @@
                             class="w-3.5 h-3.5"
                           />
                         </button>
+
                         <!-- 复制 -->
                         <button
+                          v-if="activeTab !== 'metadata'"
                           :title="copiedStates[activeTab] ? '已复制' : '复制'"
                           class="p-1 rounded transition-colors"
                           :class="viewMode === 'compare'
@@ -576,7 +546,6 @@
                           />
                         </button>
                       </div>
-
                       <TabsContent value="request-headers">
                         <RequestHeadersContent
                           :detail="detail"
@@ -740,6 +709,12 @@ watch(activeTab, (newTab) => {
   if (!['request-body', 'response-body'].includes(newTab)) {
     contentViewMode.value = 'json'
   }
+  // 请求头/体默认选中服务端，响应头/体默认选中客户端
+  if (['request-headers', 'request-body'].includes(newTab)) {
+    dataSource.value = 'provider'
+  } else if (['response-headers', 'response-body'].includes(newTab)) {
+    dataSource.value = 'client'
+  }
 })
 
 // 检测暗色模式
@@ -766,6 +741,28 @@ const hasProviderResponseHeaders = computed(() => {
          !!(detail.value?.client_response_headers &&
          Object.keys(detail.value.client_response_headers).length > 0)
 })
+
+// 是否显示客户端/提供商切换按钮
+const showDataSourceToggle = computed(() => {
+  if (activeTab.value === 'request-headers') return hasProviderHeaders.value
+  if (activeTab.value === 'response-headers') return hasProviderResponseHeaders.value
+  if (['request-body', 'response-body'].includes(activeTab.value)) return hasProviderBody.value
+  return false
+})
+
+// 当前高亮的数据源（请求头对比模式下两个都不高亮）
+const activeDataSource = computed(() => {
+  if (activeTab.value === 'request-headers' && viewMode.value === 'compare') return null
+  return dataSource.value
+})
+
+// 设置数据源（请求头需要同时退出对比模式）
+function setDataSource(source: 'client' | 'provider') {
+  dataSource.value = source
+  if (activeTab.value === 'request-headers' && viewMode.value === 'compare') {
+    viewMode.value = 'formatted'
+  }
+}
 
 // 获取当前数据源的请求体数据
 const currentRequestBody = computed(() => {

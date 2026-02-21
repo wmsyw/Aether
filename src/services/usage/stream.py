@@ -42,6 +42,9 @@ class StreamUsageTracker:
         provider_api_key_id: str | None = None,
         # API 格式（用于选择正确的响应解析器）
         api_format: str | None = None,
+        # 结构化格式维度（从 Adapter 层透传）
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
         # 格式转换信息
         endpoint_api_format: str | None = None,
         has_format_conversion: bool = False,
@@ -85,6 +88,8 @@ class StreamUsageTracker:
 
         # API 格式和响应解析器
         self.api_format = api_format or "claude:chat"
+        self.api_family = api_family
+        self.endpoint_kind = endpoint_kind
         self.endpoint_api_format = endpoint_api_format
         self.has_format_conversion = has_format_conversion
         self.response_parser = get_parser_for_format(self.api_format)
@@ -759,6 +764,8 @@ class StreamUsageTracker:
                 cache_read_input_tokens=self.cache_read_input_tokens,
                 request_type="chat",
                 api_format=self.api_format,
+                api_family=self.api_family,
+                endpoint_kind=self.endpoint_kind,
                 endpoint_api_format=self.endpoint_api_format,
                 has_format_conversion=self.has_format_conversion,
                 is_stream=True,
@@ -854,6 +861,9 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
         provider_api_key_id: str | None = None,
         # API 格式（用于选择正确的响应解析器）
         api_format: str | None = None,
+        # 结构化格式维度（从 Adapter 层透传）
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
         # 格式转换信息
         endpoint_api_format: str | None = None,
         has_format_conversion: bool = False,
@@ -873,6 +883,8 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
             provider_endpoint_id,
             provider_api_key_id,
             api_format,
+            api_family,
+            endpoint_kind,
             endpoint_api_format,
             has_format_conversion,
         )
@@ -1126,6 +1138,9 @@ def create_stream_tracker(
     provider_api_key_id: str | None = None,
     # API 格式（用于选择正确的响应解析器）
     api_format: str | None = None,
+    # 结构化格式维度（从 Adapter 层透传）
+    api_family: str | None = None,
+    endpoint_kind: str | None = None,
     # 格式转换信息
     endpoint_api_format: str | None = None,
     has_format_conversion: bool = False,
@@ -1171,6 +1186,8 @@ def create_stream_tracker(
             provider_endpoint_id,
             provider_api_key_id,
             api_format,
+            api_family,
+            endpoint_kind,
             endpoint_api_format,
             has_format_conversion,
         )
@@ -1190,6 +1207,8 @@ def create_stream_tracker(
             provider_endpoint_id,
             provider_api_key_id,
             api_format,
+            api_family,
+            endpoint_kind,
             endpoint_api_format,
             has_format_conversion,
         )

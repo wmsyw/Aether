@@ -538,6 +538,8 @@ class CliSyncMixin:
                 is_stream=False,
                 provider_request_headers=provider_request_headers,
                 api_format=api_format,
+                api_family=self.api_family,
+                endpoint_kind=self.endpoint_kind,
                 # 格式转换追踪
                 endpoint_api_format=provider_api_format or None,
                 has_format_conversion=is_format_converted(provider_api_format, str(api_format)),
@@ -579,6 +581,8 @@ class CliSyncMixin:
                 error_message=str(e),
                 is_stream=False,
                 api_format=api_format,
+                api_family=self.api_family,
+                endpoint_kind=self.endpoint_kind,
                 request_metadata=request_metadata or None,
             )
             raise
@@ -615,6 +619,8 @@ class CliSyncMixin:
                 provider_request_body=provider_request_body,
                 is_stream=False,
                 api_format=api_format,
+                api_family=self.api_family,
+                endpoint_kind=self.endpoint_kind,
                 provider_request_headers=provider_request_headers,
                 response_headers=error_response_headers,
                 # 非流式失败返回给客户端的是 JSON 错误响应

@@ -225,6 +225,10 @@ class QueueTelemetryWriter(TelemetryWriter):
             data["request_type"] = request_type
         if kwargs.get("api_format"):
             data["api_format"] = kwargs["api_format"]
+        if kwargs.get("api_family"):
+            data["api_family"] = kwargs["api_family"]
+        if kwargs.get("endpoint_kind"):
+            data["endpoint_kind"] = kwargs["endpoint_kind"]
         if kwargs.get("endpoint_api_format"):
             data["endpoint_api_format"] = kwargs["endpoint_api_format"]
         if kwargs.get("has_format_conversion"):

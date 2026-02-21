@@ -237,7 +237,12 @@ class GeminiChatAdapter(ChatAdapterBase):
             return [], error_msg
 
     @classmethod
-    def build_endpoint_url(cls, base_url: str) -> str:
+    def build_endpoint_url(
+        cls,
+        base_url: str,
+        request_data: dict[str, Any] | None = None,
+        model_name: str | None = None,
+    ) -> str:
         """构建Gemini API端点URL"""
         base_url = base_url.rstrip("/")
         if base_url.endswith("/v1beta"):
@@ -292,6 +297,8 @@ class GeminiChatAdapter(ChatAdapterBase):
         if is_antigravity:
             from src.services.provider.adapters.antigravity.constants import (
                 V1INTERNAL_PATH_TEMPLATE,
+            )
+            from src.services.provider.adapters.antigravity.constants import (
                 get_http_user_agent as _get_antigravity_ua,
             )
             from src.services.provider.adapters.antigravity.url_availability import url_availability

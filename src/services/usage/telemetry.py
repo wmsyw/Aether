@@ -81,6 +81,9 @@ class MessageTelemetry:
         provider_endpoint_id: str | None = None,
         provider_api_key_id: str | None = None,
         api_format: str | None = None,
+        # 结构化格式维度（从 Adapter 层透传）
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
         # 格式转换追踪
         endpoint_api_format: str | None = None,  # 端点原生 API 格式
         has_format_conversion: bool = False,  # 是否发生了格式转换
@@ -110,6 +113,8 @@ class MessageTelemetry:
             cache_read_input_tokens=cache_read_tokens,
             request_type="chat",
             api_format=api_format,
+            api_family=api_family,
+            endpoint_kind=endpoint_kind,
             endpoint_api_format=endpoint_api_format,
             has_format_conversion=has_format_conversion,
             is_stream=is_stream,
@@ -167,6 +172,8 @@ class MessageTelemetry:
         request_headers: dict[str, Any],
         is_stream: bool,
         api_format: str | None = None,
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
         provider_request_headers: dict[str, Any] | None = None,
         provider_request_body: Any | None = None,
         # 预估 token 信息（来自 message_start 事件，用于中断请求的成本估算）
@@ -222,6 +229,8 @@ class MessageTelemetry:
             cache_read_input_tokens=cache_read_tokens,
             request_type="chat",
             api_format=api_format,
+            api_family=api_family,
+            endpoint_kind=endpoint_kind,
             endpoint_api_format=endpoint_api_format,
             has_format_conversion=has_format_conversion,
             is_stream=is_stream,
@@ -259,6 +268,8 @@ class MessageTelemetry:
         request_headers: dict[str, Any],
         is_stream: bool,
         api_format: str | None = None,
+        api_family: str | None = None,
+        endpoint_kind: str | None = None,
         provider_request_headers: dict[str, Any] | None = None,
         provider_request_body: Any | None = None,
         input_tokens: int = 0,
@@ -299,6 +310,8 @@ class MessageTelemetry:
             cache_read_input_tokens=cache_read_tokens,
             request_type="chat",
             api_format=api_format,
+            api_family=api_family,
+            endpoint_kind=endpoint_kind,
             endpoint_api_format=endpoint_api_format,
             has_format_conversion=has_format_conversion,
             is_stream=is_stream,
