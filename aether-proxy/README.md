@@ -4,7 +4,7 @@ Aether 正向代理节点，部署在海外 VPS 上，为墙内的 Aether 实例
 
 ## 安装
 
-### Docker 部署
+### Docker Compose 部署
 
 ```bash
 # 拉取镜像
