@@ -32,9 +32,9 @@ async def create_message(
     Claude Messages API
 
     兼容 Anthropic Claude Messages API 格式的代理接口。
-    根据请求头 `x-app` 自动在标准 API 和 Claude Code CLI 模式之间切换。
-
-    **认证方式**: x-api-key 请求头
+    根据认证头自动在标准 API 和 Claude Code CLI 模式之间切换:
+    - x-api-key -> Chat 模式
+    - Authorization: Bearer -> CLI 模式
 
     **请求格式**:
     ```json
@@ -44,12 +44,8 @@ async def create_message(
         "messages": [{"role": "user", "content": "Hello"}]
     }
     ```
-
-    **必需请求头**:
-    - `x-api-key`: API 密钥
-    - `anthropic-version`: API 版本（如 2023-06-01）
     """
-    adapter = build_claude_adapter(http_request.headers.get("x-app", ""))
+    adapter = build_claude_adapter(http_request)
     return await pipeline.run(
         adapter=adapter,
         http_request=http_request,

@@ -264,9 +264,17 @@ class ClaudeChatAdapter(ChatAdapterBase):
     # build_request_body 使用基类实现，通过 format_conversion_registry 自动转换 OPENAI -> CLAUDE
 
 
-def build_claude_adapter(x_app_header: str | None) -> Any:
-    """根据 x-app 头部构造 Chat 或 Claude Code 适配器。"""
-    if x_app_header and x_app_header.lower() == "cli":
+def build_claude_adapter(request: Request) -> Any:
+    """根据认证头构造 Chat 或 Claude Code 适配器。
+
+    - Authorization: Bearer (且无 x-api-key) -> CLI 模式
+    - x-api-key -> Chat 模式
+    """
+    auth_header = request.headers.get("authorization", "")
+    has_bearer = auth_header.lower().startswith("bearer ")
+    has_api_key = bool(request.headers.get("x-api-key"))
+
+    if has_bearer and not has_api_key:
         from src.api.handlers.claude_cli.adapter import ClaudeCliAdapter
 
         return ClaudeCliAdapter()

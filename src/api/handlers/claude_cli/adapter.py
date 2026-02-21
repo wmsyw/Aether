@@ -138,12 +138,5 @@ class ClaudeCliAdapter(CliAdapterBase):
         """获取Claude CLI User-Agent"""
         return config.internal_user_agent_claude_cli
 
-    @classmethod
-    def get_cli_extra_headers(cls, *, base_url: str | None = None) -> dict[str, str]:
-        """获取Claude CLI额外请求头，包含 x-app: cli 标识"""
-        headers = super().get_cli_extra_headers(base_url=base_url)
-        headers["x-app"] = "cli"  # 标识 CLI 模式，让上游使用正确的认证方式
-        return headers
-
 
 __all__ = ["ClaudeCliAdapter"]
