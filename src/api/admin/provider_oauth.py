@@ -337,7 +337,7 @@ async def _fetch_kiro_email(
             if parsed and parsed.get("email"):
                 return parsed["email"]
     except Exception as e:
-        logger.warning("[KIRO] 获取用户邮箱失败: {}", e)
+        logger.warning("[KIRO] 获取用户邮箱失败: {} | {}", type(e).__name__, e, exc_info=True)
 
     return None
 

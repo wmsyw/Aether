@@ -80,21 +80,22 @@ async def fetch_kiro_usage_limits(
         raise RuntimeError("无法获取 Kiro access_token")
 
     # 构建请求
-    from src.services.provider.adapters.kiro.constants import DEFAULT_REGION
-
-    region = (updated_cfg.region if updated_cfg else cfg.region) or DEFAULT_REGION
+    effective_cfg = updated_cfg or cfg
+    region = effective_cfg.effective_api_region()
     host = f"q.{region}.amazonaws.com"
-    machine_id = generate_machine_id(updated_cfg or cfg)
-    kiro_version = (updated_cfg.kiro_version if updated_cfg else cfg.kiro_version) or "0.8.0"
+    machine_id = generate_machine_id(effective_cfg)
+    kiro_version = (effective_cfg.kiro_version or "0.8.0").strip() or "0.8.0"
 
     # 构建 URL（添加 isEmailRequired=true 获取邮箱）
     url = f"https://{host}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST&isEmailRequired=true"
 
-    profile_arn = updated_cfg.profile_arn if updated_cfg else cfg.profile_arn
+    profile_arn = effective_cfg.profile_arn
     if profile_arn:
         from urllib.parse import quote
 
         url += f"&profileArn={quote(profile_arn, safe='')}"
+
+    logger.debug("[KIRO_QUOTA] 请求 URL: {}", url)
 
     # 构建 headers
     headers = {
@@ -141,9 +142,7 @@ async def fetch_kiro_usage_limits(
                 if response.status_code == 423:
                     ban_reason = response_text[:200] if response_text else "HTTP 423 Locked"
                 else:
-                    ban_reason = (
-                        response_text[:200] if response_text else "HTTP 403 权限被拒绝"
-                    )
+                    ban_reason = response_text[:200] if response_text else "HTTP 403 权限被拒绝"
 
         error_msg = {
             401: "认证失败，Token 无效或已过期",

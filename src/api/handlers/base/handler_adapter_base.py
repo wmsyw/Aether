@@ -358,11 +358,12 @@ class HandlerAdapterBase(ApiAdapter):
         # ---- URL ----
         if is_kiro:
             from src.services.provider.adapters.kiro.constants import (
-                DEFAULT_REGION,
                 KIRO_GENERATE_ASSISTANT_PATH,
             )
+            from src.services.provider.adapters.kiro.models.credentials import KiroAuthConfig
 
-            region = (decrypted_auth_config or {}).get("region") or DEFAULT_REGION
+            _kiro_cfg = KiroAuthConfig.from_dict(decrypted_auth_config or {})
+            region = _kiro_cfg.effective_api_region()
             effective_base_url = (
                 base_url.replace("{region}", region) if "{region}" in base_url else base_url
             )
@@ -401,7 +402,7 @@ class HandlerAdapterBase(ApiAdapter):
             from src.services.provider.adapters.kiro.token_manager import generate_machine_id
 
             kiro_cfg = KiroAuthConfig.from_dict(decrypted_auth_config or {})
-            region = kiro_cfg.region or DEFAULT_REGION
+            region = kiro_cfg.effective_api_region()
             machine_id = generate_machine_id(kiro_cfg)
             kiro_headers = build_generate_assistant_headers(
                 host=f"q.{region}.amazonaws.com",

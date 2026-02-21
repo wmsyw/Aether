@@ -76,13 +76,13 @@ def is_token_expired(expires_at: int | None, *, skew_seconds: int = 120) -> bool
 
 
 def _resolve_region(cfg: KiroAuthConfig) -> str:
-    region = str(cfg.region or "").strip()
-    if region and _REGION_RE.fullmatch(region):
+    """解析 token 刷新端点的 region。"""
+    region = cfg.effective_auth_region()
+    if _REGION_RE.fullmatch(region):
         return region
-    # Keep best-effort fallback; actual host parsing happens in transport hook.
     from src.services.provider.adapters.kiro.constants import DEFAULT_REGION
 
-    return region or DEFAULT_REGION
+    return DEFAULT_REGION
 
 
 def _try_extract_email_from_jwt(token: str) -> str | None:

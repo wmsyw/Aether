@@ -22,10 +22,8 @@ from src.services.provider.adapters.kiro.token_manager import generate_machine_i
 
 
 def _resolve_region(cfg: KiroAuthConfig) -> str:
-    from src.services.provider.adapters.kiro.constants import DEFAULT_REGION
-
-    region = str(cfg.region or "").strip()
-    return region or DEFAULT_REGION
+    """解析 API 服务端点的 region（q.{region}.amazonaws.com）。"""
+    return cfg.effective_api_region()
 
 
 def _is_thinking_enabled(request_body: dict[str, Any]) -> bool:

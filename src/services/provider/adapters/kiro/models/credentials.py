@@ -29,6 +29,13 @@ def _get_str(raw: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
+def _nonempty(s: str | None) -> str | None:
+    """Return *s* if it's a non-empty stripped string, else ``None``."""
+    if isinstance(s, str) and s.strip():
+        return s.strip()
+    return None
+
+
 def _parse_iso_to_epoch_seconds(value: object) -> int | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -54,7 +61,13 @@ class KiroAuthConfig:
     expires_at: int = 0
 
     profile_arn: str | None = None
-    region: str | None = None
+    region: str | None = None  # OIDC region（IdC token 刷新用）
+
+    # 独立的 auth / api region（与 kiro.rs 对齐）
+    # auth_region: token 刷新端点，未设置时回退到 region
+    # api_region: q.{region} 服务端点，未设置时回退到 DEFAULT_REGION
+    auth_region: str | None = None
+    api_region: str | None = None
 
     client_id: str | None = None
     client_secret: str | None = None
@@ -68,6 +81,26 @@ class KiroAuthConfig:
 
     # 缓存的 access_token（可选，用于避免频繁刷新）
     access_token: str | None = None
+
+    def effective_auth_region(self) -> str:
+        """Token 刷新用的 region。
+
+        优先级: auth_region > region > DEFAULT_REGION
+        """
+        from src.services.provider.adapters.kiro.constants import DEFAULT_REGION
+
+        return _nonempty(self.auth_region) or _nonempty(self.region) or DEFAULT_REGION
+
+    def effective_api_region(self) -> str:
+        """API 服务端点（q.{region}）用的 region。
+
+        优先级: api_region > DEFAULT_REGION
+        注意: 不从 region 继承，因为 region 通常是 OIDC region（如 eu-north-1），
+        而 q.{region} 端点目前仅 us-east-1 可用。
+        """
+        from src.services.provider.adapters.kiro.constants import DEFAULT_REGION
+
+        return _nonempty(self.api_region) or DEFAULT_REGION
 
     @staticmethod
     def infer_auth_method(raw: dict[str, Any]) -> str:
@@ -140,6 +173,8 @@ class KiroAuthConfig:
             expires_at=int(expires_at),
             profile_arn=_get_str(raw, "profile_arn", "profileArn"),
             region=_get_str(raw, "region"),
+            auth_region=_get_str(raw, "auth_region", "authRegion"),
+            api_region=_get_str(raw, "api_region", "apiRegion"),
             client_id=_get_str(raw, "client_id", "clientId"),
             client_secret=_get_str(raw, "client_secret", "clientSecret"),
             machine_id=_get_str(raw, "machine_id", "machineId"),
@@ -164,6 +199,8 @@ class KiroAuthConfig:
             "expires_at": self.expires_at,
             "profile_arn": self.profile_arn,
             "region": self.region,
+            "auth_region": self.auth_region,
+            "api_region": self.api_region,
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "machine_id": self.machine_id,
