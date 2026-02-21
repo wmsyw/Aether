@@ -339,6 +339,37 @@ async def test_queue_writer_include_headers_bodies(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_queue_writer_failure_preserves_empty_request_headers(monkeypatch: Any) -> None:
+    """失败事件在传入空请求头时也应保留 request_headers 字段。"""
+    dummy = DummyRedis()
+
+    async def _get_redis_client(require_redis: bool = False) -> Any:
+        return dummy
+
+    monkeypatch.setattr("src.services.usage.telemetry_writer.get_redis_client", _get_redis_client)
+
+    writer = QueueTelemetryWriter(
+        request_id="req-empty-hdr",
+        user_id="user-1",
+        api_key_id="key-1",
+        log_level="full",
+    )
+    await writer.record_failure(
+        provider="test",
+        model="model",
+        status_code=500,
+        error_message="boom",
+        request_headers={},
+        request_body={"message": "x"},
+    )
+
+    event = UsageEvent.from_stream_fields(dummy.calls[0][1])
+    assert "request_headers" in event.data
+    assert event.data["request_headers"] == {}
+    assert event.data["request_body"] == {"message": "x"}
+
+
+@pytest.mark.asyncio
 async def test_event_to_record_body_deserialization(monkeypatch: Any) -> None:
     """测试 _event_to_record 正确反序列化 body 字符串为 dict"""
     from src.services.usage.consumer_streams import _event_to_record

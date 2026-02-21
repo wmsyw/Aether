@@ -1704,6 +1704,15 @@ class TaskService:
             delta = task.completed_at - task.submitted_at
             response_time_ms = int(delta.total_seconds() * 1000)
 
+        request_headers: dict[str, Any] | None = None
+        if isinstance(getattr(task, "request_metadata", None), dict):
+            task_meta = task.request_metadata
+            for header_key in ("request_headers", "headers", "original_headers"):
+                raw_headers = task_meta.get(header_key)
+                if isinstance(raw_headers, dict):
+                    request_headers = dict(raw_headers)
+                    break
+
         try:
             await UsageService.record_usage_with_custom_cost(
                 db=self.db,
@@ -1734,11 +1743,7 @@ class TaskService:
                     "fallback_created": True,
                     "video_task_id": task.id,
                 },
-                request_headers=(
-                    (task.request_metadata or {}).get("request_headers")
-                    if isinstance(task.request_metadata, dict)
-                    else None
-                ),
+                request_headers=request_headers,
                 request_body=getattr(task, "original_request_body", None),
                 provider_request_headers=None,
                 response_headers=None,

@@ -189,3 +189,40 @@ async def test_video_finalize_strict_mode_missing_required_marks_failed(
     kwargs = update_settled.call_args.kwargs
     assert kwargs["total_cost_usd"] == 0.0
     assert kwargs["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_video_finalize_fallback_reads_headers_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    usage_query = MagicMock()
+    usage_query.filter.return_value.first.return_value = None
+    user_query = MagicMock()
+    user_query.filter.return_value.first.return_value = SimpleNamespace(id="u1")
+    api_key_query = MagicMock()
+    api_key_query.filter.return_value.first.return_value = SimpleNamespace(id="ak1")
+    provider_query = MagicMock()
+    provider_query.filter.return_value.first.return_value = SimpleNamespace(
+        id="p1",
+        name="prov1",
+    )
+
+    db = MagicMock()
+    db.query.side_effect = [usage_query, user_query, api_key_query, provider_query]
+
+    task = _make_task(
+        status=VideoStatus.FAILED.value,
+        error_message="boom",
+        request_metadata={"headers": {"x-test-header": "1"}},
+    )
+
+    record_usage = AsyncMock(return_value=SimpleNamespace(id="usage-1"))
+    monkeypatch.setattr(
+        "src.services.usage.service.UsageService.record_usage_with_custom_cost",
+        record_usage,
+    )
+
+    svc = TaskService(db)
+    ok = await svc.finalize_video_task(task)
+
+    assert ok is True
+    kwargs = record_usage.call_args.kwargs
+    assert kwargs["request_headers"] == {"x-test-header": "1"}

@@ -709,12 +709,7 @@ watch(activeTab, (newTab) => {
   if (!['request-body', 'response-body'].includes(newTab)) {
     contentViewMode.value = 'json'
   }
-  // 请求头/体默认选中服务端，响应头/体默认选中客户端
-  if (['request-headers', 'request-body'].includes(newTab)) {
-    dataSource.value = 'provider'
-  } else if (['response-headers', 'response-body'].includes(newTab)) {
-    dataSource.value = 'client'
-  }
+  dataSource.value = getDefaultDataSourceForTab(newTab)
 })
 
 // 检测暗色模式
@@ -728,10 +723,14 @@ const hasProviderHeaders = computed(() => {
          Object.keys(detail.value.provider_request_headers).length > 0)
 })
 
-// 检测是否有提供商请求体（格式转换后的）
-const hasProviderBody = computed(() => {
-  return !!(detail.value?.provider_request_body && hasContent(detail.value.provider_request_body))
-    || !!(detail.value?.client_response_body && hasContent(detail.value.client_response_body))
+// 请求体：仅当 provider_request_body 存在时才展示来源切换
+const hasProviderRequestBody = computed(() => {
+  return hasContent(detail.value?.provider_request_body)
+})
+
+// 响应体：只有客户端侧和 provider 侧都存在时才展示来源切换
+const hasProviderResponseBody = computed(() => {
+  return hasContent(detail.value?.response_body) && hasContent(detail.value?.client_response_body)
 })
 
 // 检测是否有两套响应头（客户端侧 + 提供商侧）
@@ -746,7 +745,8 @@ const hasProviderResponseHeaders = computed(() => {
 const showDataSourceToggle = computed(() => {
   if (activeTab.value === 'request-headers') return hasProviderHeaders.value
   if (activeTab.value === 'response-headers') return hasProviderResponseHeaders.value
-  if (['request-body', 'response-body'].includes(activeTab.value)) return hasProviderBody.value
+  if (activeTab.value === 'request-body') return hasProviderRequestBody.value
+  if (activeTab.value === 'response-body') return hasProviderResponseBody.value
   return false
 })
 
@@ -785,9 +785,17 @@ const currentResponseBody = computed(() => {
 // 获取当前数据源的请求头数据
 const currentHeaderData = computed(() => {
   if (!detail.value) return null
-  return dataSource.value === 'client'
-    ? detail.value.request_headers
-    : detail.value.provider_request_headers
+  if (dataSource.value === 'client' && hasContent(detail.value.request_headers)) {
+    return detail.value.request_headers
+  }
+  if (dataSource.value === 'provider' && hasContent(detail.value.provider_request_headers)) {
+    return detail.value.provider_request_headers
+  }
+  // 回退：优先 client，再 provider
+  if (hasContent(detail.value.request_headers)) {
+    return detail.value.request_headers
+  }
+  return detail.value.provider_request_headers
 })
 
 // 请求体渲染结果
@@ -945,6 +953,40 @@ function hasContent(data: unknown): boolean {
   return true
 }
 
+function getDefaultDataSourceForTab(tab: string): 'client' | 'provider' {
+  if (!detail.value) {
+    if (['request-headers', 'request-body'].includes(tab)) return 'provider'
+    if (['response-headers', 'response-body'].includes(tab)) return 'client'
+    return dataSource.value
+  }
+
+  if (tab === 'request-headers') {
+    if (hasContent(detail.value.provider_request_headers)) return 'provider'
+    if (hasContent(detail.value.request_headers)) return 'client'
+    return 'provider'
+  }
+
+  if (tab === 'request-body') {
+    if (hasContent(detail.value.provider_request_body)) return 'provider'
+    if (hasContent(detail.value.request_body)) return 'client'
+    return 'provider'
+  }
+
+  if (tab === 'response-headers') {
+    if (hasContent(detail.value.client_response_headers)) return 'client'
+    if (hasContent(detail.value.response_headers)) return 'provider'
+    return 'client'
+  }
+
+  if (tab === 'response-body') {
+    if (hasContent(detail.value.client_response_body)) return 'client'
+    if (hasContent(detail.value.response_body)) return 'provider'
+    return 'client'
+  }
+
+  return dataSource.value
+}
+
 // 获取当前数据源的响应头数据
 const currentResponseHeaderData = computed(() => {
   if (!detail.value) return null
@@ -1018,11 +1060,8 @@ async function loadDetail(id: string, silent = false) {
       }
     }
 
-    // 根据数据可用性自动选择请求头数据源
-    // provider_request_headers 在 streaming 完成后才写入，pending/streaming 期间为空
-    const hasProviderReqHeaders = detail.value.provider_request_headers &&
-      Object.keys(detail.value.provider_request_headers).length > 0
-    dataSource.value = hasProviderReqHeaders ? 'provider' : 'client'
+    // 根据当前 Tab 的数据可用性自动选择默认数据源
+    dataSource.value = getDefaultDataSourceForTab(activeTab.value)
 
     // 使用请求记录中保存的历史价格
     if (detail.value.input_price_per_1m || detail.value.output_price_per_1m || detail.value.price_per_request) {

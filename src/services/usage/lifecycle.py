@@ -45,14 +45,14 @@ class UsageLifecycleMixin:
 
         # 处理请求头
         processed_request_headers = None
-        if should_log_headers and request_headers:
+        if should_log_headers and request_headers is not None:
             processed_request_headers = SystemConfigService.mask_sensitive_headers(
                 db, request_headers
             )
 
         # 处理请求体
         processed_request_body = None
-        if should_log_body and request_body:
+        if should_log_body and request_body is not None:
             processed_request_body = SystemConfigService.truncate_body(
                 db, request_body, is_request=True
             )
@@ -265,17 +265,17 @@ class UsageLifecycleMixin:
         should_log_body = SystemConfigService.should_log_body(db)
 
         processed_provider_headers = None
-        if should_log_headers and provider_request_headers:
+        if should_log_headers and provider_request_headers is not None:
             processed_provider_headers = SystemConfigService.mask_sensitive_headers(
                 db, provider_request_headers
             )
 
         processed_response_headers = None
-        if should_log_headers and response_headers:
+        if should_log_headers and response_headers is not None:
             processed_response_headers = dict(response_headers)
 
         processed_response_body = None
-        if should_log_body and response_body:
+        if should_log_body and response_body is not None:
             processed_response_body = SystemConfigService.truncate_body(
                 db, response_body, is_request=False
             )

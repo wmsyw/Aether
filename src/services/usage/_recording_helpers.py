@@ -108,12 +108,12 @@ def build_usage_params(
 
     # 处理请求头（可能需要脱敏）
     processed_request_headers = None
-    if should_log_headers and request_headers:
+    if should_log_headers and request_headers is not None:
         processed_request_headers = SystemConfigService.mask_sensitive_headers(db, request_headers)
 
     # 处理提供商请求头（可能需要脱敏）
     processed_provider_request_headers = None
-    if should_log_headers and provider_request_headers:
+    if should_log_headers and provider_request_headers is not None:
         processed_provider_request_headers = SystemConfigService.mask_sensitive_headers(
             db, provider_request_headers
         )
@@ -124,33 +124,33 @@ def build_usage_params(
     processed_response_body = None
     processed_client_response_body = None
     if should_log_body:
-        if request_body:
+        if request_body is not None:
             processed_request_body = SystemConfigService.truncate_body(
                 db, request_body, is_request=True
             )
-        if provider_request_body:
+        if provider_request_body is not None:
             processed_provider_request_body = SystemConfigService.truncate_body(
                 db, provider_request_body, is_request=True
             )
-        if response_body:
+        if response_body is not None:
             processed_response_body = SystemConfigService.truncate_body(
                 db, response_body, is_request=False
             )
-        if client_response_body:
+        if client_response_body is not None:
             processed_client_response_body = SystemConfigService.truncate_body(
                 db, client_response_body, is_request=False
             )
 
     # 处理响应头
     processed_response_headers = None
-    if should_log_headers and response_headers:
+    if should_log_headers and response_headers is not None:
         processed_response_headers = SystemConfigService.mask_sensitive_headers(
             db, response_headers
         )
 
     # 处理返回给客户端的响应头
     processed_client_response_headers = None
-    if should_log_headers and client_response_headers:
+    if should_log_headers and client_response_headers is not None:
         processed_client_response_headers = SystemConfigService.mask_sensitive_headers(
             db, client_response_headers
         )

@@ -252,18 +252,14 @@ class QueueTelemetryWriter(TelemetryWriter):
 
         # Optional: Headers (masked)
         if self.include_headers:
-            if kwargs.get("request_headers"):
-                data["request_headers"] = self._mask_headers(kwargs["request_headers"])
-            if kwargs.get("provider_request_headers"):
-                data["provider_request_headers"] = self._mask_headers(
-                    kwargs["provider_request_headers"]
-                )
-            if kwargs.get("response_headers"):
-                data["response_headers"] = self._mask_headers(kwargs["response_headers"])
-            if kwargs.get("client_response_headers"):
-                data["client_response_headers"] = self._mask_headers(
-                    kwargs["client_response_headers"]
-                )
+            for _hdr_key in (
+                "request_headers",
+                "provider_request_headers",
+                "response_headers",
+                "client_response_headers",
+            ):
+                if kwargs.get(_hdr_key) is not None:
+                    data[_hdr_key] = self._mask_headers(kwargs[_hdr_key])
 
         # Optional: Bodies (truncated)
         if self.include_bodies:

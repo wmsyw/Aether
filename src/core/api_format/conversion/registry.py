@@ -77,6 +77,16 @@ class FormatConversionRegistry:
             raise FormatConversionError(format_id, format_id, f"未注册 Normalizer: {format_id}")
         return normalizer
 
+    def _same_normalizer(self, source_format: str, target_format: str) -> bool:
+        """判断两个 format_id 是否解析到同一个 normalizer 实例（即底层数据格式相同，可直接透传）。
+        例如 claude:chat / claude:cli 共享 ClaudeNormalizer，gemini:chat / gemini:cli 共享 GeminiNormalizer。
+        """
+        if str(source_format).upper() == str(target_format).upper():
+            return True
+        src = self.get_normalizer(source_format)
+        tgt = self.get_normalizer(target_format)
+        return src is not None and src is tgt
+
     def _repair_internal_tool_call_ids(self, internal: InternalRequest) -> None:
         """修复 InternalRequest 中空的 tool id/tool_use_id，避免上游校验报错。"""
 
@@ -122,11 +132,11 @@ class FormatConversionRegistry:
         target_variant: str | None = None,
         output_limit: int | None = None,
     ) -> dict[str, Any]:
-        if str(source_format).upper() == str(target_format).upper() and not target_variant:
+        if self._same_normalizer(source_format, target_format) and not target_variant:
             return request
 
-        # 同格式 + variant: 优先尝试轻量补丁（跳过 internal 转换）
-        if str(source_format).upper() == str(target_format).upper() and target_variant:
+        # 同 normalizer + variant: 优先尝试轻量补丁（跳过 internal 转换）
+        if self._same_normalizer(source_format, target_format) and target_variant:
             normalizer = self._require_normalizer(source_format)
             with _track_conversion_metrics(
                 "request_patch", str(source_format).upper(), str(target_format).upper()
@@ -159,11 +169,11 @@ class FormatConversionRegistry:
         output_limit: int | None = None,
     ) -> dict[str, Any]:
         """异步版本的 convert_request，在 internal 阶段执行图片 URL 下载等异步操作。"""
-        if str(source_format).upper() == str(target_format).upper() and not target_variant:
+        if self._same_normalizer(source_format, target_format) and not target_variant:
             return request
 
-        # 同格式 + variant: 优先尝试轻量补丁（跳过 internal 转换）
-        if str(source_format).upper() == str(target_format).upper() and target_variant:
+        # 同 normalizer + variant: 优先尝试轻量补丁（跳过 internal 转换）
+        if self._same_normalizer(source_format, target_format) and target_variant:
             normalizer = self._require_normalizer(source_format)
             with _track_conversion_metrics(
                 "request_patch", str(source_format).upper(), str(target_format).upper()
@@ -208,7 +218,7 @@ class FormatConversionRegistry:
                             如果提供，响应中的 model 字段将使用此值，
                             而不是上游返回的映射后模型名。
         """
-        if str(source_format).upper() == str(target_format).upper():
+        if self._same_normalizer(source_format, target_format):
             # 即使格式相同，也需要替换 model 字段
             if requested_model and isinstance(response, dict):
                 response = dict(response)  # 避免修改原始响应
@@ -237,7 +247,7 @@ class FormatConversionRegistry:
         source_format: str,
         target_format: str,
     ) -> dict[str, Any]:
-        if str(source_format).upper() == str(target_format).upper():
+        if self._same_normalizer(source_format, target_format):
             return error_response
 
         src = self._require_normalizer(source_format)
@@ -375,7 +385,7 @@ class FormatConversionRegistry:
         target_format: str,
         state: StreamState | None = None,
     ) -> list[dict[str, Any]]:
-        if str(source_format).upper() == str(target_format).upper():
+        if self._same_normalizer(source_format, target_format):
             return [chunk]
 
         src = self._require_normalizer(source_format)
@@ -412,7 +422,7 @@ class FormatConversionRegistry:
     # ==================== 能力查询 ====================
 
     def can_convert_request(self, source_format: str, target_format: str) -> bool:
-        if str(source_format).upper() == str(target_format).upper():
+        if self._same_normalizer(source_format, target_format):
             return True
         return (
             self.get_normalizer(source_format) is not None
@@ -423,7 +433,7 @@ class FormatConversionRegistry:
         return self.can_convert_request(source_format, target_format)
 
     def can_convert_stream(self, source_format: str, target_format: str) -> bool:
-        if str(source_format).upper() == str(target_format).upper():
+        if self._same_normalizer(source_format, target_format):
             return True
         src = self.get_normalizer(source_format)
         tgt = self.get_normalizer(target_format)
@@ -432,7 +442,7 @@ class FormatConversionRegistry:
         return bool(src.capabilities.supports_stream and tgt.capabilities.supports_stream)
 
     def can_convert_error(self, source_format: str, target_format: str) -> bool:
-        if str(source_format).upper() == str(target_format).upper():
+        if self._same_normalizer(source_format, target_format):
             return True
         src = self.get_normalizer(source_format)
         tgt = self.get_normalizer(target_format)
