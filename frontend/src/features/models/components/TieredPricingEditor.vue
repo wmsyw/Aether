@@ -402,14 +402,14 @@ function getFinalTiers(): PricingTier[] {
     // 缓存创建价格：手动设置则用设置值，否则自动计算
     if (cacheManuallySet[i]?.creation && t.cache_creation_price_per_1m != null) {
       tier.cache_creation_price_per_1m = t.cache_creation_price_per_1m
-    } else if (t.input_price_per_1m > 0) {
+    } else {
       tier.cache_creation_price_per_1m = getAutoCacheCreation(i)
     }
 
     // 缓存读取价格：手动设置则用设置值，否则自动计算
     if (cacheManuallySet[i]?.read && t.cache_read_price_per_1m != null) {
       tier.cache_read_price_per_1m = t.cache_read_price_per_1m
-    } else if (t.input_price_per_1m > 0) {
+    } else {
       tier.cache_read_price_per_1m = getAutoCacheRead(i)
     }
 
@@ -417,7 +417,7 @@ function getFinalTiers(): PricingTier[] {
     if (props.showCache1h) {
       if (cacheManuallySet[i]?.cache1h && t.cache_ttl_pricing?.length) {
         tier.cache_ttl_pricing = t.cache_ttl_pricing
-      } else if (t.input_price_per_1m > 0) {
+      } else {
         tier.cache_ttl_pricing = [{ ttl_minutes: 60, cache_creation_price_per_1m: getAutoCache1h(i) }]
       }
     }
