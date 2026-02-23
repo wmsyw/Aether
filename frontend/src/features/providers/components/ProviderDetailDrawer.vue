@@ -50,6 +50,52 @@
                       <Shuffle class="w-4 h-4" />
                     </Button>
                   </span>
+                  <Popover
+                    v-if="provider.provider_type !== 'custom'"
+                    :open="providerProxyPopoverOpen"
+                    @update:open="handleProviderProxyPopoverToggle"
+                  >
+                    <PopoverTrigger as-child>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        :class="provider.proxy?.node_id ? 'text-blue-500' : ''"
+                        :disabled="savingProviderProxy"
+                        :title="provider.proxy?.node_id ? `代理: ${getProviderProxyNodeName()}` : '设置代理节点'"
+                      >
+                        <Globe class="w-4 h-4" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      class="w-72 p-3"
+                      side="bottom"
+                      align="end"
+                    >
+                      <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                          <span class="text-xs font-medium">代理节点</span>
+                          <Button
+                            v-if="provider.proxy?.node_id"
+                            variant="ghost"
+                            size="sm"
+                            class="h-6 px-2 text-[10px] text-muted-foreground"
+                            :disabled="savingProviderProxy"
+                            @click="clearProviderProxy"
+                          >
+                            清除
+                          </Button>
+                        </div>
+                        <ProxyNodeSelect
+                          :model-value="provider.proxy?.node_id || ''"
+                          trigger-class="h-8"
+                          @update:model-value="setProviderProxy"
+                        />
+                        <p class="text-[10px] text-muted-foreground">
+                          {{ provider.proxy?.node_id ? '当前使用独立代理' : '未设置代理节点' }}
+                        </p>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -1145,8 +1191,12 @@ const refreshingQuota = ref(false)
 const antigravityQuotaDialogOpen = ref(false)
 const antigravityQuotaDialogKey = ref<EndpointAPIKey | null>(null)
 
-// Key 级别代理配置状态
+// Provider 级别代理配置状态
 const proxyNodesStore = useProxyNodesStore()
+const providerProxyPopoverOpen = ref(false)
+const savingProviderProxy = ref(false)
+
+// Key 级别代理配置状态
 const savingProxyKeyId = ref<string | null>(null)
 const proxyPopoverOpenKeyId = ref<string | null>(null)
 
@@ -1286,6 +1336,55 @@ async function toggleFormatConversion() {
     emit('refresh')
   } catch {
     showError('切换格式转换失败')
+  }
+}
+
+// Provider 级别代理配置
+function handleProviderProxyPopoverToggle(open: boolean) {
+  providerProxyPopoverOpen.value = open
+  if (open) {
+    proxyNodesStore.ensureLoaded()
+  }
+}
+
+function getProviderProxyNodeName(): string {
+  const nodeId = provider.value?.proxy?.node_id
+  if (!nodeId) return '未知节点'
+  const node = proxyNodesStore.nodes.find(n => n.id === nodeId)
+  return node ? node.name : `${nodeId.slice(0, 8)}...`
+}
+
+async function setProviderProxy(nodeId: string) {
+  if (!provider.value) return
+  savingProviderProxy.value = true
+  try {
+    const updated = await updateProvider(provider.value.id, {
+      proxy: { node_id: nodeId, enabled: true },
+    })
+    provider.value = updated
+    providerProxyPopoverOpen.value = false
+    showSuccess('代理节点已设置')
+    emit('refresh')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '设置代理失败'))
+  } finally {
+    savingProviderProxy.value = false
+  }
+}
+
+async function clearProviderProxy() {
+  if (!provider.value) return
+  savingProviderProxy.value = true
+  try {
+    const updated = await updateProvider(provider.value.id, { proxy: null })
+    provider.value = updated
+    providerProxyPopoverOpen.value = false
+    showSuccess('已清除提供商代理')
+    emit('refresh')
+  } catch (err: unknown) {
+    showError(parseApiError(err, '清除代理失败'))
+  } finally {
+    savingProviderProxy.value = false
   }
 }
 
@@ -2269,10 +2368,10 @@ interface AntigravityQuotaGroup {
 }
 
 const ANTIGRAVITY_QUOTA_GROUPS: AntigravityQuotaGroup[] = [
-  { key: 'claude-gpt', label: 'Claude 4.5', match: m => m.includes('claude') },
-  { key: 'gemini-3-pro', label: 'Gemini 3 Pro', match: m => m.includes('gemini-3-pro') && !m.includes('image') },
-  { key: 'gemini-3-flash', label: 'Gemini 3 Flash', match: m => m.includes('gemini-3-flash') },
-  { key: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image', match: m => m.includes('gemini-3-pro-image') },
+  { key: 'claude', label: 'Claude', match: m => m.includes('claude') },
+  { key: 'gemini-2.5', label: 'Gemini 2.5', match: m => m.includes('gemini-2.5') || m.includes('gemini-2-5') },
+  { key: 'gemini-3', label: 'Gemini 3', match: m => m.includes('gemini-3') && !m.includes('image') },
+  { key: 'gemini-3-image', label: 'Gemini 3 Image', match: m => m.includes('gemini-3') && m.includes('image') },
 ]
 
 interface AntigravityQuotaSummaryItem {

@@ -125,9 +125,8 @@ def merge_upstream_metadata(
 ) -> dict[str, Any]:
     """合并上游元数据，对 quota_by_model 做模型级深度合并。
 
-    上游 API 在配额耗尽后可能不再返回该模型的 quotaInfo，因此需要：
-    1. 保留旧数据中已有的 reset_time（当新数据缺少时）
-    2. 保留旧数据中存在但新数据中缺失的模型条目（标记为 100% 已用）
+    以上游返回为准（全量替换），不再保留上游已下架的模型。
+    仅对上游返回的模型补充旧数据中的 reset_time（当新数据缺少时）。
     """
     merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
     for ns_key, ns_val in incoming.items():
@@ -152,13 +151,6 @@ def merge_upstream_metadata(
                         and "reset_time" not in new_info
                     ):
                         new_info["reset_time"] = old_info["reset_time"]
-                # 保留新数据中缺失但旧数据中存在的模型（配额耗尽后上游可能不返回）
-                for model_id, old_info in old_qbm.items():
-                    if model_id not in new_qbm and isinstance(old_info, dict):
-                        exhausted = dict(old_info)
-                        exhausted["remaining_fraction"] = 0.0
-                        exhausted["used_percent"] = 100.0
-                        new_qbm[model_id] = exhausted
         merged[ns_key] = ns_val
     return merged
 
