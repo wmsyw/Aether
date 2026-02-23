@@ -254,7 +254,7 @@ const shadows = computed(() => {
         <!-- Gemini:  center X=572, w=100 => left=522 -->
         <div class="absolute w-full top-[24px] z-10">
           <div
-            class="absolute left-[138px] w-[100px] h-[36px] rounded-full flex items-center justify-center gap-2 transition-transform hover:-translate-y-0.5 cursor-pointer"
+            class="absolute left-[138px] w-[100px] h-[36px] rounded-full flex items-center justify-center gap-2 "
             :style="{ backgroundColor: colors.cardBg, border: `1px solid ${colors.cardBorder}`, boxShadow: shadows.sm }"
           >
             <div
@@ -267,7 +267,7 @@ const shadows = computed(() => {
             >Claude</span>
           </div>
           <div
-            class="absolute left-[330px] w-[100px] h-[36px] rounded-full flex items-center justify-center gap-2 transition-transform hover:-translate-y-0.5 cursor-pointer"
+            class="absolute left-[330px] w-[100px] h-[36px] rounded-full flex items-center justify-center gap-2 "
             :style="{ backgroundColor: colors.cardBg, border: `1px solid ${colors.cardBorder}`, boxShadow: shadows.sm }"
           >
             <div
@@ -280,7 +280,7 @@ const shadows = computed(() => {
             >OpenAI</span>
           </div>
           <div
-            class="absolute left-[522px] w-[100px] h-[36px] rounded-full flex items-center justify-center gap-2 transition-transform hover:-translate-y-0.5 cursor-pointer"
+            class="absolute left-[522px] w-[100px] h-[36px] rounded-full flex items-center justify-center gap-2 "
             :style="{ backgroundColor: colors.cardBg, border: `1px solid ${colors.cardBorder}`, boxShadow: shadows.sm }"
           >
             <div
@@ -346,8 +346,8 @@ const shadows = computed(() => {
             </div>
           </div>
           <div
-            class="w-full h-[28px] rounded-xl flex items-center justify-center font-sans text-[10px] font-bold"
-            :style="{ border: `1px solid ${colors.coreBorder}`, color: colors.textMain, backgroundColor: colors.brandSoft }"
+            class="w-full h-[28px] rounded-xl flex items-center justify-center font-sans text-[10px] font-semibold"
+            :style="{ border: `1px solid ${colors.cardBorder}`, color: colors.textMain }"
           >
             智能调度 / 故障转移
           </div>
