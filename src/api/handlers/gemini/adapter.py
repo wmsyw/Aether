@@ -297,9 +297,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         if is_antigravity:
             from src.services.provider.adapters.antigravity.constants import (
                 V1INTERNAL_PATH_TEMPLATE,
-            )
-            from src.services.provider.adapters.antigravity.constants import (
-                get_http_user_agent as _get_antigravity_ua,
+                get_v1internal_extra_headers,
             )
             from src.services.provider.adapters.antigravity.url_availability import url_availability
 
@@ -316,7 +314,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         # Antigravity 需要特定的 User-Agent
         merged_extra = dict(extra_headers) if extra_headers else {}
         if is_antigravity:
-            merged_extra["User-Agent"] = _get_antigravity_ua()
+            merged_extra.update(get_v1internal_extra_headers())
         headers = cls.build_headers_with_extra(api_key, merged_extra if merged_extra else None)
 
         # OAuth 统一处理：替换端点默认认证头（x-goog-api-key）为 Authorization: Bearer

@@ -2037,12 +2037,21 @@ async def _sso_oidc_post(
         # 返回原始 JSON 让调用方处理错误码
         try:
             err_data = resp.json()
-            logger.warning(
-                "SSO OIDC request failed: {} returned {} | body={}",
-                url,
-                resp.status_code,
-                err_data,
-            )
+            err_code = err_data.get("error", "")
+            if err_code in ("authorization_pending", "slow_down"):
+                logger.debug(
+                    "SSO OIDC polling: {} returned {} ({})",
+                    url,
+                    resp.status_code,
+                    err_code,
+                )
+            else:
+                logger.warning(
+                    "SSO OIDC request failed: {} returned {} | body={}",
+                    url,
+                    resp.status_code,
+                    err_data,
+                )
             return {"_error": True, "_status": resp.status_code, **err_data}
         except Exception:
             logger.warning(

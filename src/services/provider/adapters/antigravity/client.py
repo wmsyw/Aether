@@ -15,7 +15,7 @@ from src.services.provider.adapters.antigravity.constants import (
     PROD_BASE_URL,
     SANDBOX_BASE_URL,
     VERSION_FETCH_URL,
-    get_http_user_agent,
+    get_v1internal_extra_headers,
     parse_version_string,
     update_user_agent_version,
 )
@@ -242,8 +242,8 @@ async def load_code_assist(
 
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "User-Agent": get_http_user_agent(),
         "Content-Type": "application/json",
+        **get_v1internal_extra_headers(),
     }
     body = {"metadata": _CODE_ASSIST_METADATA}
 
@@ -339,8 +339,8 @@ async def onboard_user(
 
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "User-Agent": get_http_user_agent(),
         "Content-Type": "application/json",
+        **get_v1internal_extra_headers(),
     }
     body = {
         "tierId": tier_id,
@@ -447,9 +447,9 @@ async def fetch_available_models(
 
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "User-Agent": get_http_user_agent(),
         "Content-Type": "application/json",
         "Accept": "application/json",
+        **get_v1internal_extra_headers(),
     }
     body = {"project": project_id}
 

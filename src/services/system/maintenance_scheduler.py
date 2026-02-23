@@ -251,6 +251,14 @@ class MaintenanceScheduler:
             name="Gemini文件映射清理",
         )
 
+        # Antigravity User-Agent 版本刷新 - 每 6 小时
+        scheduler.add_interval_job(
+            self._scheduled_antigravity_ua_refresh,
+            hours=6,
+            job_id="antigravity_ua_refresh",
+            name="Antigravity UA版本刷新",
+        )
+
         # Provider 签到任务 - 根据配置时间执行
         checkin_hour, checkin_minute = self._get_checkin_time()
         scheduler.add_cron_job(
@@ -279,6 +287,14 @@ class MaintenanceScheduler:
         # 延迟执行，等待系统完全启动（Redis 连接、其他后台任务稳定）
         # 增加延迟时间避免与 UsageQueueConsumer 等后台任务竞争数据库连接
         await asyncio.sleep(10)
+
+        # 刷新 Antigravity User-Agent 版本号（不阻塞其他启动任务）
+        try:
+            from src.services.provider.adapters.antigravity.client import refresh_user_agent
+
+            await refresh_user_agent()
+        except Exception as e:
+            logger.debug("启动时刷新 Antigravity UA 版本失败（不影响运行）: {}", e)
 
         try:
             logger.info("启动时执行首次清理任务...")
@@ -337,6 +353,15 @@ class MaintenanceScheduler:
     async def _scheduled_gemini_file_mapping_cleanup(self) -> None:
         """Gemini 文件映射清理任务（定时调用）"""
         await self._perform_gemini_file_mapping_cleanup()
+
+    async def _scheduled_antigravity_ua_refresh(self) -> None:
+        """Antigravity User-Agent 版本刷新（定时调用）"""
+        try:
+            from src.services.provider.adapters.antigravity.client import refresh_user_agent
+
+            await refresh_user_agent()
+        except Exception as e:
+            logger.debug("定时刷新 Antigravity UA 版本失败: {}", e)
 
     async def _scheduled_provider_checkin(self) -> None:
         """Provider 签到任务（定时调用）"""

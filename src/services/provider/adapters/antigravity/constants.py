@@ -9,6 +9,7 @@ from __future__ import annotations
 import platform
 import re
 import threading
+import uuid
 
 # ============== API 端点 ==============
 # 唯一定义在 core 层，此处 re-export 保持向后兼容
@@ -19,25 +20,31 @@ SANDBOX_BASE_URL = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 
 # ============== User-Agent ==============
 VERSION_FETCH_URL = "https://antigravity-auto-updater-974169037036.us-central1.run.app"
-_FALLBACK_VERSION = "1.15.8"
+_FALLBACK_VERSION = "1.18.4"
+_FALLBACK_CHROME = "132.0.6834.160"
+_FALLBACK_ELECTRON = "39.2.3"
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
-def _detect_platform_tag() -> str:
-    """检测当前运行平台，格式与 Go runtime 保持一致。"""
-    os_name = platform.system().lower()  # linux, darwin, windows
-    arch = platform.machine().lower()
-    if arch in ("x86_64", "amd64"):
-        arch = "amd64"
-    elif arch in ("aarch64", "arm64"):
-        arch = "arm64"
-    return f"{os_name}/{arch}"
+def _detect_platform_info() -> str:
+    """检测当前运行平台，格式对齐 AM constants.rs 的 Electron UA。"""
+    os_name = platform.system().lower()
+    if os_name == "darwin":
+        return "Macintosh; Intel Mac OS X 10_15_7"
+    elif os_name == "windows":
+        return "Windows NT 10.0; Win64; x64"
+    else:
+        return "X11; Linux x86_64"
 
 
-_PLATFORM_TAG = _detect_platform_tag()
+_PLATFORM_INFO = _detect_platform_info()
 
-# HTTP Header User-Agent（向后兼容：模块级常量保留，新代码应使用 get_http_user_agent()）
-HTTP_USER_AGENT = f"antigravity/{_FALLBACK_VERSION} {_PLATFORM_TAG}"
+# HTTP Header User-Agent（对齐 AM constants.rs: 完整 Electron 浏览器格式）
+HTTP_USER_AGENT = (
+    f"Mozilla/5.0 ({_PLATFORM_INFO}) AppleWebKit/537.36 (KHTML, like Gecko) "
+    f"Antigravity/{_FALLBACK_VERSION} Chrome/{_FALLBACK_CHROME} "
+    f"Electron/{_FALLBACK_ELECTRON} Safari/537.36"
+)
 
 # V1InternalRequest.userAgent 字段（固定值）
 REQUEST_USER_AGENT = "antigravity"
@@ -48,9 +55,13 @@ _ua_version: str = _FALLBACK_VERSION
 
 
 def get_http_user_agent() -> str:
-    """返回当前 HTTP User-Agent 字符串（支持动态版本号更新）。"""
+    """返回当前 HTTP User-Agent 字符串（对齐 AM Electron UA 格式）。"""
     with _ua_lock:
-        return f"antigravity/{_ua_version} {_PLATFORM_TAG}"
+        return (
+            f"Mozilla/5.0 ({_PLATFORM_INFO}) AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Antigravity/{_ua_version} Chrome/{_FALLBACK_CHROME} "
+            f"Electron/{_FALLBACK_ELECTRON} Safari/537.36"
+        )
 
 
 def update_user_agent_version(version: str) -> None:
@@ -61,8 +72,11 @@ def update_user_agent_version(version: str) -> None:
         return
     with _ua_lock:
         _ua_version = version
-        # Backward compat: keep module-level constant in sync.
-        HTTP_USER_AGENT = f"antigravity/{_ua_version} {_PLATFORM_TAG}"
+        HTTP_USER_AGENT = (
+            f"Mozilla/5.0 ({_PLATFORM_INFO}) AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Antigravity/{_ua_version} Chrome/{_FALLBACK_CHROME} "
+            f"Electron/{_FALLBACK_ELECTRON} Safari/537.36"
+        )
 
 
 def parse_version_string(text: str) -> str | None:
@@ -73,6 +87,25 @@ def parse_version_string(text: str) -> str | None:
 
 # ============== URL 可用性 ==============
 URL_UNAVAILABLE_TTL_SECONDS = 300  # 5 分钟
+
+# ============== AM Client Identity Headers ==============
+# 对齐 AM upstream/client.rs: 伪装为官方 Antigravity 客户端
+# 缺少这些 header 会导致新模型（如 gemini-3.1-pro-preview）返回 404
+_SESSION_ID = uuid.uuid4().hex  # 每次进程启动生成一个固定 session ID
+
+
+def get_v1internal_extra_headers() -> dict[str, str]:
+    """构建 v1internal 请求需要的额外 header（对齐 AM upstream/client.rs）。"""
+    with _ua_lock:
+        version = _ua_version
+    return {
+        "User-Agent": get_http_user_agent(),
+        "x-client-name": "antigravity",
+        "x-client-version": version,
+        "x-vscode-sessionid": _SESSION_ID,
+        "x-goog-api-client": "gl-node/18.18.2 fire/0.8.6 grpc/1.10.x",
+    }
+
 
 # ============== Thinking Signature ==============
 # 统一从 core 层导入，避免多处定义
@@ -88,15 +121,12 @@ OUTPUT_OVERHEAD_IMAGE = 2048
 # 模型最大输出限制（防止超限）
 MODEL_MAX_OUTPUT_LIMIT = 65536
 # 包含这些关键字的模型会自动注入 thinkingConfig（如果缺失）
-THINKING_MODELS_AUTO_INJECT_KEYWORDS = ("thinking", "gemini-2.0-pro", "gemini-3-pro")
-
-# ============== Model Alias Mapping ==============
-# 对齐 AM common_utils.rs: 将预览/别名映射回上游物理模型名
-MODEL_ALIAS_MAP: dict[str, str] = {
-    "gemini-3-pro-preview": "gemini-3-pro-high",
-    "gemini-3-pro-image-preview": "gemini-3-pro-image",
-    "gemini-3-flash-preview": "gemini-3-flash",
-}
+THINKING_MODELS_AUTO_INJECT_KEYWORDS = (
+    "thinking",
+    "gemini-2.0-pro",
+    "gemini-3-pro",
+    "gemini-3.1-pro",
+)
 
 # ============== Google Search (Grounding) ==============
 # 对齐 AM common_utils.rs: 仅 gemini-2.5-flash 支持 googleSearch tool
@@ -203,7 +233,6 @@ __all__ = [
     "IMAGE_ASPECT_RATIO_SUFFIXES",
     "IMAGE_GEN_UPSTREAM_MODEL",
     "MIN_SIGNATURE_LENGTH",
-    "MODEL_ALIAS_MAP",
     "MODEL_MAX_OUTPUT_LIMIT",
     "NETWORKING_TOOL_KEYWORDS",
     "OUTPUT_OVERHEAD",
@@ -225,6 +254,7 @@ __all__ = [
     "VERSION_FETCH_URL",
     "WEB_SEARCH_MODEL",
     "get_http_user_agent",
+    "get_v1internal_extra_headers",
     "parse_version_string",
     "update_user_agent_version",
 ]

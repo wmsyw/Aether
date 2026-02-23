@@ -29,7 +29,6 @@ from src.services.provider.adapters.antigravity.constants import (
     ASPECT_RATIO_TABLE,
     IMAGE_ASPECT_RATIO_SUFFIXES,
     IMAGE_GEN_UPSTREAM_MODEL,
-    MODEL_ALIAS_MAP,
     MODEL_MAX_OUTPUT_LIMIT,
     NETWORKING_TOOL_KEYWORDS,
     OUTPUT_OVERHEAD,
@@ -45,7 +44,6 @@ from src.services.provider.adapters.antigravity.constants import (
     THINKING_BUDGET_DEFAULT_INJECT,
     THINKING_MODELS_AUTO_INJECT_KEYWORDS,
     WEB_SEARCH_MODEL,
-    get_http_user_agent,
 )
 from src.services.provider.adapters.antigravity.url_availability import url_availability
 from src.services.provider.request_context import get_selected_base_url
@@ -394,26 +392,6 @@ def _clean_json_schema(schema: dict[str, Any]) -> None:
     from src.core.api_format.schema_utils import clean_gemini_schema
 
     clean_gemini_schema(schema)
-
-
-# ---------------------------------------------------------------------------
-# Model alias mapping（对齐 AM common_utils.rs）
-# ---------------------------------------------------------------------------
-
-
-def _resolve_model_alias(model: str) -> str:
-    """将预览/别名模型名映射回上游物理模型名。
-
-    对齐 AM common_utils.rs resolve_request_config：
-    - gemini-3-pro-preview → gemini-3-pro-high
-    - gemini-3-pro-image-preview → gemini-3-pro-image
-    - gemini-3-flash-preview → gemini-3-flash
-    - 同时剥离 -online 后缀
-    """
-    resolved = model.rstrip()
-    # 剥离 -online 后缀（联网意图由 tools 检测，不依赖后缀传递到上游）
-    resolved = resolved.removesuffix("-online")
-    return MODEL_ALIAS_MAP.get(resolved, resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -895,9 +873,9 @@ def wrap_v1internal_request(
     # 1. 深度清理 [undefined]
     _deep_clean_undefined(inner_request)
 
-    # 2. 模型别名映射（对齐 AM common_utils.rs）
+    # 2. 剥离 -online 后缀（联网意图由 tools 检测，不依赖后缀传递到上游）
     has_online_suffix = _detect_online_suffix(model)
-    final_model = _resolve_model_alias(model)
+    final_model = model.rstrip().removesuffix("-online")
 
     # 3. 联网检测（对齐 AM：-online 后缀或客户端声明了联网工具）
     has_networking = has_online_suffix or _detect_networking_tools(inner_request)
@@ -1044,7 +1022,11 @@ class AntigravityV1InternalEnvelope:
     name = "antigravity:v1internal"
 
     def extra_headers(self) -> dict[str, str] | None:
-        return {"User-Agent": get_http_user_agent()}
+        from src.services.provider.adapters.antigravity.constants import (
+            get_v1internal_extra_headers,
+        )
+
+        return get_v1internal_extra_headers()
 
     def wrap_request(
         self,

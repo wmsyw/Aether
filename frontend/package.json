@@ -30,6 +30,7 @@
     "highlight.js": "^11.11.1",
     "lucide-vue-next": "^0.544.0",
     "marked": "^16.0.0",
+    "otpauth": "^9.5.0",
     "pinia": "^3.0.3",
     "radix-vue": "^1.9.17",
     "tailwind-merge": "^3.3.1",

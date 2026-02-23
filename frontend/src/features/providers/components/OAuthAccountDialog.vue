@@ -144,10 +144,26 @@
                   </div>
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium">Region</label>
+                    <div class="grid grid-cols-2 gap-1.5">
+                      <button
+                        v-for="r in (['eu-north-1', 'us-east-1'] as const)"
+                        :key="r"
+                        class="h-8 text-xs font-medium font-mono rounded-md border transition-colors"
+                        :class="device.region === r
+                          ? 'border-primary bg-primary/5 text-foreground'
+                          : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/20'"
+                        @click="device.region = r"
+                      >
+                        {{ r }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium text-muted-foreground">TOTP Secret (可选)</label>
                     <input
-                      v-model="device.region"
+                      v-model="device.totp_secret"
                       type="text"
-                      placeholder="us-east-1"
+                      placeholder="Base32 secret, 如 JBSWY3DPEHPK3PXP"
                       class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
                       spellcheck="false"
                     >
@@ -203,6 +219,44 @@
                   <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <div class="animate-spin rounded-full h-3 w-3 border-[1.5px] border-primary/30 border-t-primary" />
                     <span>剩余 {{ deviceCountdownFormatted }}</span>
+                  </div>
+
+                  <!-- TOTP 验证码 -->
+                  <div
+                    v-if="totp.code.value"
+                    class="w-full rounded-lg border border-border bg-background p-3"
+                  >
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2">
+                        <ShieldCheck class="w-3.5 h-3.5 text-primary" />
+                        <span class="text-[10px] text-muted-foreground">MFA 验证码</span>
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <span
+                          class="text-lg font-mono font-bold tracking-[0.25em]"
+                        >{{ totp.code.value }}</span>
+                        <button
+                          class="p-1 rounded hover:bg-muted transition-colors"
+                          title="复制验证码"
+                          @click="copyToClipboard(totp.code.value)"
+                        >
+                          <Copy class="w-3 h-3 text-muted-foreground" />
+                        </button>
+                      </div>
+                    </div>
+                    <div class="mt-2 flex items-center gap-2">
+                      <div class="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                        <div
+                          class="h-full rounded-full transition-all duration-1000 ease-linear"
+                          :class="totp.remaining.value <= 5 ? 'bg-red-500' : 'bg-primary'"
+                          :style="{ width: `${(totp.remaining.value / 30) * 100}%` }"
+                        />
+                      </div>
+                      <span
+                        class="text-[10px] font-mono tabular-nums shrink-0"
+                        :class="totp.remaining.value <= 5 ? 'text-red-500' : 'text-muted-foreground'"
+                      >{{ totp.remaining.value }}s</span>
+                    </div>
                   </div>
 
                   <!-- 操作按钮 -->
@@ -447,9 +501,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Dialog, Button, Textarea, Popover, PopoverTrigger, PopoverContent } from '@/components/ui'
-import { UserPlus, Copy, ExternalLink, Upload, Globe, AlertCircle } from 'lucide-vue-next'
+import { UserPlus, Copy, ExternalLink, Upload, Globe, AlertCircle, ShieldCheck } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
+import { useTotp } from '@/composables/useTotp'
 import { parseApiError } from '@/utils/errorParser'
 import {
   startProviderLevelOAuth,
@@ -476,6 +531,7 @@ const emit = defineEmits<{
 const { success, error: showError } = useToast()
 const { copyToClipboard } = useClipboard()
 const proxyNodesStore = useProxyNodesStore()
+const totp = useTotp()
 
 // 代理节点选择
 const proxyPopoverOpen = ref(false)
@@ -524,6 +580,7 @@ interface DeviceAuthState {
   auth_type: DeviceAuthType
   start_url: string
   region: string
+  totp_secret: string
   starting: boolean
   session_id: string
   user_code: string
@@ -542,7 +599,8 @@ function createInitialDeviceState(): DeviceAuthState {
   return {
     auth_type: 'builder_id',
     start_url: '',
-    region: 'us-east-1',
+    region: 'eu-north-1',
+    totp_secret: '',
     starting: false,
     session_id: '',
     user_code: '',
@@ -608,16 +666,19 @@ function stopDevicePolling() {
 
 function resetDevice() {
   stopDevicePolling()
-  const { auth_type, start_url, region } = device.value
+  totp.stop()
+  const { auth_type, start_url, region, totp_secret } = device.value
   device.value = createInitialDeviceState()
   device.value.auth_type = auth_type
   device.value.start_url = start_url
   device.value.region = region
+  device.value.totp_secret = totp_secret
 }
 
 function resetForm() {
   oauth.value = createInitialOAuthState()
   stopDevicePolling()
+  totp.stop()
   device.value = createInitialDeviceState()
   importText.value = ''
   importFileName.value = ''
@@ -883,6 +944,10 @@ async function startDeviceAuth() {
     device.value.status = 'pending'
     startCountdown()
     scheduleDevicePoll()
+    // 如果配置了 TOTP secret，启动验证码生成
+    if (device.value.totp_secret.trim()) {
+      totp.start(device.value.totp_secret.trim())
+    }
   } catch (err: unknown) {
     const errorMessage = parseApiError(err, '发起设备授权失败')
     showError(errorMessage, '错误')
@@ -909,6 +974,7 @@ async function pollDevice() {
     switch (result.status) {
       case 'authorized':
         stopDevicePolling()
+        totp.stop()
         device.value.status = 'authorized'
         success(result.email ? `授权成功: ${result.email}` : '授权成功，账号已添加')
         emit('saved')

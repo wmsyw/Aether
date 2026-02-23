@@ -371,9 +371,7 @@ class HandlerAdapterBase(ApiAdapter):
         elif is_antigravity:
             from src.services.provider.adapters.antigravity.constants import (
                 V1INTERNAL_PATH_TEMPLATE,
-            )
-            from src.services.provider.adapters.antigravity.constants import (
-                get_http_user_agent as _get_antigravity_ua,
+                get_v1internal_extra_headers,
             )
             from src.services.provider.adapters.antigravity.url_availability import (
                 url_availability,
@@ -392,7 +390,7 @@ class HandlerAdapterBase(ApiAdapter):
         merged_extra.update(cli_extra)
 
         if is_antigravity:
-            merged_extra["User-Agent"] = _get_antigravity_ua()
+            merged_extra.update(get_v1internal_extra_headers())
 
         if is_kiro:
             from src.services.provider.adapters.kiro.headers import (
