@@ -465,8 +465,8 @@
                           </button>
                         </template>
 
-                        <!-- 请求头专用：对比模式 -->
-                        <template v-if="activeTab === 'request-headers' && hasProviderHeaders">
+                        <!-- 请求头/响应头：对比模式 -->
+                        <template v-if="canCompare">
                           <button
                             title="对比"
                             class="p-1 rounded transition-colors"
@@ -580,7 +580,26 @@
                       </TabsContent>
 
                       <TabsContent value="response-headers">
+                        <RequestHeadersContent
+                          v-if="viewMode === 'compare'"
+                          :detail="detail"
+                          :view-mode="viewMode"
+                          :data-source="dataSource"
+                          :current-header-data="currentResponseHeaderData"
+                          :current-expand-depth="currentExpandDepth"
+                          :has-provider-headers="hasProviderResponseHeaders"
+                          :client-headers-with-diff="[]"
+                          :provider-headers-with-diff="[]"
+                          :header-stats="responseHeaderStats"
+                          :is-dark="isDark"
+                          :client-headers="detail.client_response_headers"
+                          :provider-headers="detail.response_headers"
+                          client-label="客户端响应头"
+                          provider-label="提供商响应头"
+                          empty-message="无响应头信息"
+                        />
                         <JsonContent
+                          v-else
                           :data="currentResponseHeaderData"
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
@@ -703,7 +722,7 @@ const AUTO_REFRESH_INTERVAL_MS = 1000
 
 // 监听标签页切换
 watch(activeTab, (newTab) => {
-  if (newTab !== 'request-headers' && viewMode.value === 'compare') {
+  if (!['request-headers', 'response-headers'].includes(newTab) && viewMode.value === 'compare') {
     viewMode.value = 'formatted'
   }
   // 切换到不支持对话视图的 Tab 时，重置为 JSON 视图
@@ -742,6 +761,36 @@ const hasProviderResponseHeaders = computed(() => {
          Object.keys(detail.value.client_response_headers).length > 0)
 })
 
+// 当前 Tab 是否支持对比模式
+const canCompare = computed(() => {
+  if (activeTab.value === 'request-headers') return hasProviderHeaders.value
+  if (activeTab.value === 'response-headers') return hasProviderResponseHeaders.value
+  return false
+})
+
+// 响应头 diff 统计（用于对比模式标题栏）
+const responseHeaderStats = computed(() => {
+  const counts = { added: 0, modified: 0, removed: 0, unchanged: 0 }
+  if (!detail.value?.client_response_headers || !detail.value?.response_headers) return counts
+
+  const clientHeaders = detail.value.client_response_headers as Record<string, unknown>
+  const providerHeaders = detail.value.response_headers as Record<string, unknown>
+  const clientKeys = new Set(Object.keys(clientHeaders))
+  const providerKeys = new Set(Object.keys(providerHeaders))
+  const allKeys = new Set([...clientKeys, ...providerKeys])
+
+  for (const key of allKeys) {
+    if (clientKeys.has(key) && providerKeys.has(key)) {
+      counts[clientHeaders[key] === providerHeaders[key] ? 'unchanged' : 'modified']++
+    } else if (clientKeys.has(key)) {
+      counts.removed++
+    } else {
+      counts.added++
+    }
+  }
+  return counts
+})
+
 // 是否显示客户端/提供商切换按钮
 const showDataSourceToggle = computed(() => {
   if (activeTab.value === 'request-headers') return hasProviderHeaders.value
@@ -751,16 +800,16 @@ const showDataSourceToggle = computed(() => {
   return false
 })
 
-// 当前高亮的数据源（请求头对比模式下两个都不高亮）
+// 当前高亮的数据源（对比模式下两个都不高亮）
 const activeDataSource = computed(() => {
-  if (activeTab.value === 'request-headers' && viewMode.value === 'compare') return null
+  if (['request-headers', 'response-headers'].includes(activeTab.value) && viewMode.value === 'compare') return null
   return dataSource.value
 })
 
-// 设置数据源（请求头需要同时退出对比模式）
+// 设置数据源（对比模式下切换数据源需退出对比）
 function setDataSource(source: 'client' | 'provider') {
   dataSource.value = source
-  if (activeTab.value === 'request-headers' && viewMode.value === 'compare') {
+  if (['request-headers', 'response-headers'].includes(activeTab.value) && viewMode.value === 'compare') {
     viewMode.value = 'formatted'
   }
 }

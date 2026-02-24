@@ -3,10 +3,10 @@
     <!-- 对比模式 - 并排 Diff -->
     <div v-show="viewMode === 'compare'">
       <div
-        v-if="!detail.request_headers && !detail.provider_request_headers"
+        v-if="!resolvedClientHeaders || !resolvedProviderHeaders"
         class="text-sm text-muted-foreground"
       >
-        无请求头信息
+        {{ emptyMessage }}
       </div>
       <Card
         v-else
@@ -15,11 +15,11 @@
         <!-- Diff 头部 -->
         <div class="flex border-b bg-muted/50">
           <div class="flex-1 px-3 py-2 text-xs text-muted-foreground border-r flex items-center justify-between">
-            <span class="font-medium">客户端请求头</span>
+            <span class="font-medium">{{ clientLabel }}</span>
             <span class="text-destructive">-{{ headerStats.removed + headerStats.modified }}</span>
           </div>
           <div class="flex-1 px-3 py-2 text-xs text-muted-foreground flex items-center justify-between">
-            <span class="font-medium">提供商请求头</span>
+            <span class="font-medium">{{ providerLabel }}</span>
             <span class="text-green-600 dark:text-green-400">+{{ headerStats.added + headerStats.modified }}</span>
           </div>
         </div>
@@ -161,7 +161,7 @@ import Card from '@/components/ui/card.vue'
 import JsonContent from './JsonContent.vue'
 import type { RequestDetail } from '@/api/dashboard'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   detail: RequestDetail
   viewMode: 'compare' | 'formatted' | 'raw'
   dataSource: 'client' | 'provider'
@@ -172,7 +172,25 @@ const props = defineProps<{
   providerHeadersWithDiff: Array<{ key: string; value: unknown; status: string }>
   headerStats: { added: number; modified: number; removed: number; unchanged: number }
   isDark: boolean
-}>()
+  // 泛化 props：允许传入任意 header 对和标签，用于复用为响应头对比
+  clientHeaders?: Record<string, unknown>
+  providerHeaders?: Record<string, unknown>
+  clientLabel?: string
+  providerLabel?: string
+  emptyMessage?: string
+}>(), {
+  clientLabel: '客户端请求头',
+  providerLabel: '提供商请求头',
+  emptyMessage: '无请求头信息',
+})
+
+// 解析实际使用的 header 数据
+const resolvedClientHeaders = computed(() =>
+  props.clientHeaders ?? props.detail.request_headers ?? {}
+)
+const resolvedProviderHeaders = computed(() =>
+  props.providerHeaders ?? props.detail.provider_request_headers ?? {}
+)
 
 const leftPanelRef = ref<HTMLElement | null>(null)
 const rightPanelRef = ref<HTMLElement | null>(null)
@@ -198,8 +216,8 @@ function onRightScroll() {
 
 // 合并并排序的条目（用于并排显示）
 const sortedEntries = computed(() => {
-  const clientHeaders = props.detail.request_headers || {}
-  const providerHeaders = props.detail.provider_request_headers || {}
+  const clientHeaders = resolvedClientHeaders.value
+  const providerHeaders = resolvedProviderHeaders.value
 
   const clientKeys = new Set(Object.keys(clientHeaders))
   const providerKeys = new Set(Object.keys(providerHeaders))
