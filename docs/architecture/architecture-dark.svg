@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" width="760" height="420" font-family="'Inter', system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow-sm" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity="0.5"/>
+    </filter>
+    <filter id="shadow-lg" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.7"/>
+    </filter>
+    <clipPath id="gateway-clip">
+      <path d="M 0 0 h 760 v 420 H 0 Z M 74 169 v 54 h 12 v -54 Z" clip-rule="evenodd"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="760" height="420" rx="24" fill="#121212"/>
+
+  <!-- === Labels placeholder, drawn at top layer === -->
+
+  <!-- Source pills -->
+  <rect x="138" y="24" width="100" height="36" rx="18" fill="#1a1a1c" stroke="#2a2a2c" filter="url(#shadow-sm)"/>
+  <circle cx="163" cy="42" r="3" fill="#cc7154"/>
+  <text x="195" y="46" font-size="11" font-weight="700" fill="#f3f4f6" text-anchor="middle">Claude</text>
+  <rect x="330" y="24" width="100" height="36" rx="18" fill="#1a1a1c" stroke="#2a2a2c" filter="url(#shadow-sm)"/>
+  <circle cx="355" cy="42" r="3" fill="#cc7154"/>
+  <text x="387" y="46" font-size="11" font-weight="700" fill="#f3f4f6" text-anchor="middle">OpenAI</text>
+  <rect x="522" y="24" width="100" height="36" rx="18" fill="#1a1a1c" stroke="#2a2a2c" filter="url(#shadow-sm)"/>
+  <circle cx="547" cy="42" r="3" fill="#cc7154"/>
+  <text x="579" y="46" font-size="11" font-weight="700" fill="#f3f4f6" text-anchor="middle">Gemini</text>
+
+  <!-- Output pills -->
+  <rect x="128" y="360" width="120" height="36" rx="18" fill="#1a1a1c" stroke="#2a2a2c" filter="url(#shadow-sm)"/>
+  <circle cx="153" cy="378" r="3" fill="#cc7154"/>
+  <text x="195" y="382" font-size="10" font-weight="700" fill="#f3f4f6" text-anchor="middle">Claude 响应</text>
+  <rect x="320" y="360" width="120" height="36" rx="18" fill="#1a1a1c" stroke="#2a2a2c" filter="url(#shadow-sm)"/>
+  <circle cx="345" cy="378" r="3" fill="#cc7154"/>
+  <text x="387" y="382" font-size="10" font-weight="700" fill="#f3f4f6" text-anchor="middle">OpenAI 响应</text>
+  <rect x="512" y="360" width="120" height="36" rx="18" fill="#1a1a1c" stroke="#2a2a2c" filter="url(#shadow-sm)"/>
+  <circle cx="537" cy="378" r="3" fill="#cc7154"/>
+  <text x="579" y="382" font-size="10" font-weight="700" fill="#f3f4f6" text-anchor="middle">Gemini 响应</text>
+
+  <!-- === Layer 2: AETHER GATEWAY box === -->
+  <rect x="80" y="78" width="600" height="240" rx="24" fill="#1a1a1c" filter="url(#shadow-lg)"/>
+  <rect x="80" y="78" width="600" height="240" rx="24" fill="none" stroke="rgba(204,113,84,0.4)" clip-path="url(#gateway-clip)"/>
+  <g transform="translate(80, 176)" font-size="7" font-weight="900" fill="#cc7154" text-anchor="middle">
+    <text x="0" y="0">A</text><text x="0" y="9">E</text><text x="0" y="18">T</text>
+    <text x="0" y="27">H</text><text x="0" y="36">E</text><text x="0" y="45">R</text>
+  </g>
+
+  <!-- Dashed box -->
+  <rect x="180" y="98" width="400" height="112" rx="16" fill="none" stroke="rgba(204,113,84,0.4)" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <rect x="200" y="108" width="360" height="26" rx="12" fill="none" stroke="#2a2a2c"/>
+  <text x="380" y="125" font-size="10" font-weight="600" fill="#f3f4f6" text-anchor="middle">统一模型规范 / 协议聚合</text>
+  <rect x="200" y="140" width="85" height="26" rx="13" fill="rgba(204,113,84,0.12)"/>
+  <text x="242" y="157" font-size="10" font-weight="600" fill="#f3f4f6" text-anchor="middle">多端鉴权</text>
+  <rect x="290" y="140" width="85" height="26" rx="13" fill="rgba(204,113,84,0.12)"/>
+  <text x="332" y="157" font-size="10" font-weight="600" fill="#f3f4f6" text-anchor="middle">配额管控</text>
+  <rect x="380" y="140" width="85" height="26" rx="13" fill="rgba(204,113,84,0.12)"/>
+  <text x="422" y="157" font-size="10" font-weight="600" fill="#f3f4f6" text-anchor="middle">全局并发</text>
+  <rect x="470" y="140" width="85" height="26" rx="13" fill="rgba(204,113,84,0.12)"/>
+  <text x="512" y="157" font-size="10" font-weight="600" fill="#f3f4f6" text-anchor="middle">缓存亲和</text>
+  <rect x="200" y="172" width="360" height="28" rx="14" fill="none" stroke="#2a2a2c"/>
+  <text x="380" y="190" font-size="10" font-weight="600" fill="#f3f4f6" text-anchor="middle">智能调度 / 故障转移</text>
+
+  <!-- Engine cards -->
+  <rect x="103" y="250" width="170" height="28" rx="14" fill="rgba(204,113,84,0.12)" stroke="#2a2a2c"/>
+  <circle cx="163" cy="264" r="3" fill="#cc7154"/>
+  <text x="192" y="268" font-size="10" font-weight="700" fill="#f3f4f6" text-anchor="middle">格式转换</text>
+  <rect x="295" y="250" width="170" height="28" rx="14" fill="rgba(204,113,84,0.12)" stroke="#2a2a2c"/>
+  <circle cx="355" cy="264" r="3" fill="#cc7154"/>
+  <text x="384" y="268" font-size="10" font-weight="700" fill="#f3f4f6" text-anchor="middle">反向代理</text>
+  <rect x="487" y="250" width="170" height="28" rx="14" fill="rgba(204,113,84,0.12)" stroke="#2a2a2c"/>
+  <circle cx="547" cy="264" r="3" fill="#cc7154"/>
+  <text x="576" y="268" font-size="10" font-weight="700" fill="#f3f4f6" text-anchor="middle">原生直通</text>
+
+  <!-- === Layer 3: Track lines === -->
+  <g stroke="rgba(255,255,255,0.08)" stroke-width="1.5" fill="none" stroke-linecap="round">
+    <path id="f-in-1" d="M 188 60 L 188 66 C 188 72, 380 72, 380 78 L 380 98"/>
+    <path id="f-in-2" d="M 380 60 L 380 98"/>
+    <path id="f-in-3" d="M 572 60 L 572 66 C 572 72, 380 72, 380 78 L 380 98"/>
+    <path id="f-sL" d="M 380 210 C 380 230, 188 230, 188 250"/>
+    <path id="f-sM" d="M 380 210 L 380 250"/>
+    <path id="f-sR" d="M 380 210 C 380 230, 572 230, 572 250"/>
+    <path id="f-oL" d="M 188 278 L 188 284 C 188 302, 380 302, 380 318"/>
+    <path id="f-oM" d="M 380 278 L 380 318"/>
+    <path id="f-oR" d="M 572 278 L 572 284 C 572 302, 380 302, 380 318"/>
+    <path id="f-oL2" d="M 380 318 C 380 338, 188 338, 188 360"/>
+    <path id="f-oM2" d="M 380 318 L 380 360"/>
+    <path id="f-oR2" d="M 380 318 C 380 338, 572 338, 572 360"/>
+  </g>
+
+  <!-- Animated dots -->
+  <g>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="2.2s" repeatCount="indefinite"><mpath href="#f-in-1"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="2.2s" repeatCount="indefinite"><mpath href="#f-in-3"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="1.4s" repeatCount="indefinite"><mpath href="#f-sL"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="1.4s" repeatCount="indefinite"><mpath href="#f-sR"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="1.4s" repeatCount="indefinite"><mpath href="#f-oL"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="1.4s" repeatCount="indefinite"><mpath href="#f-oR"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#f-oL2"/></animateMotion></circle>
+    <circle r="2.5" fill="#cc7154"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#f-oR2"/></animateMotion></circle>
+  </g>
+
+  <!-- === Layer 4: Junction dots === -->
+  <circle cx="380" cy="78" r="4" fill="#cc7154" stroke="#1e1e1e"/>
+  <circle cx="380" cy="210" r="4" fill="#cc7154" stroke="#1e1e1e"/>
+  <circle cx="380" cy="318" r="4" fill="#cc7154" stroke="#1e1e1e"/>
+
+  <!-- === Layer 5: SOURCES / OUTPUTS labels === -->
+  <g>
+    <circle cx="355" cy="12" r="2" fill="#6b7280"/>
+    <text x="365" y="15" font-size="9" font-weight="800" letter-spacing="0.2em" fill="#6b7280">SOURCES</text>
+  </g>
+  <g>
+    <circle cx="353" cy="346" r="2" fill="#6b7280"/>
+    <text x="363" y="349" font-size="9" font-weight="800" letter-spacing="0.2em" fill="#6b7280">OUTPUTS</text>
+  </g>
+</svg>

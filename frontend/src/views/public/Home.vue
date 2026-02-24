@@ -111,11 +111,11 @@
           </div>
 
           <!-- Navigation -->
-          <nav class="flex items-center gap-2 mx-16 lg:mx-28">
+          <nav class="flex items-center gap-2 mx-8 lg:mx-16">
             <button
-              v-for="(section, index) in sections"
+              v-for="(section, index) in sections.slice(0, -1)"
               :key="index"
-              class="group relative px-3 py-2 text-sm font-medium transition"
+              class="group relative px-3 py-2 text-sm font-medium transition whitespace-nowrap"
               :class="currentSection === index
                 ? 'text-[#cc785c] dark:text-[#d4a27f]'
                 : 'text-[#666663] dark:text-muted-foreground hover:text-[#191919] dark:hover:text-white'"
@@ -125,6 +125,25 @@
               <div
                 class="absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-all duration-300"
                 :class="currentSection === index ? 'bg-[#cc785c] dark:bg-[#d4a27f] scale-x-100' : 'bg-transparent scale-x-0'"
+              />
+            </button>
+            <RouterLink
+              to="/guide"
+              class="group relative px-3 py-2 text-sm font-medium transition whitespace-nowrap text-[#666663] dark:text-muted-foreground hover:text-[#191919] dark:hover:text-white"
+            >
+              文档
+            </RouterLink>
+            <button
+              class="group relative px-3 py-2 text-sm font-medium transition whitespace-nowrap"
+              :class="currentSection === SECTIONS.FEATURES
+                ? 'text-[#cc785c] dark:text-[#d4a27f]'
+                : 'text-[#666663] dark:text-muted-foreground hover:text-[#191919] dark:hover:text-white'"
+              @click="scrollToSection(SECTIONS.FEATURES)"
+            >
+              {{ sections[SECTIONS.FEATURES].name }}
+              <div
+                class="absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-all duration-300"
+                :class="currentSection === SECTIONS.FEATURES ? 'bg-[#cc785c] dark:bg-[#d4a27f] scale-x-100' : 'bg-transparent scale-x-0'"
               />
             </button>
           </nav>
@@ -409,13 +428,6 @@
             :style="getButtonsStyle(SECTIONS.FEATURES)"
           >
             <RouterLink
-              to="/guide"
-              class="inline-flex items-center justify-center gap-2 rounded-xl bg-transparent border-2 border-[#cc785c] px-6 py-3 text-base font-semibold text-[#cc785c] dark:text-[#d4a27f] dark:border-[#d4a27f] transition hover:bg-[#cc785c]/10 dark:hover:bg-[#d4a27f]/10 hover:scale-105 w-[160px]"
-            >
-              <BookOpen class="h-5 w-5" />
-              配置教程
-            </RouterLink>
-            <RouterLink
               v-if="authStore.isAuthenticated"
               :to="dashboardPath"
               class="inline-flex items-center justify-center gap-2 rounded-xl bg-transparent border-2 border-[#cc785c] px-6 py-3 text-base font-semibold text-[#cc785c] dark:text-[#d4a27f] dark:border-[#d4a27f] transition hover:bg-[#cc785c]/10 dark:hover:bg-[#d4a27f]/10 hover:scale-105 w-[160px]"
@@ -444,7 +456,6 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
-  BookOpen,
   ChevronDown,
   Code2,
   Moon,

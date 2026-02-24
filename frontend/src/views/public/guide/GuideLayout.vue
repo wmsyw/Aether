@@ -409,6 +409,10 @@ watch(
   () => {
     mobileMenuOpen.value = false
     activeHash.value = ''
+    const container = getScrollContainer()
+    if (container) {
+      container.scrollTo({ top: 0 })
+    }
     nextTick(() => {
       setupIntersectionObserver()
       const firstSection = document.querySelector('article section[id]')

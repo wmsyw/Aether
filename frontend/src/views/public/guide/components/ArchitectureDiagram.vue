@@ -34,7 +34,6 @@ const colors = computed(() => {
   const brand = '#cc7154'
   return {
     bg: isDark.value ? '#121212' : '#fcfcfc',
-    grid: isDark.value ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
     cardBg: isDark.value ? '#1a1a1c' : '#ffffff',
     cardBorder: isDark.value ? '#2a2a2c' : '#e8e8ec',
     track: isDark.value ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
@@ -98,8 +97,6 @@ const shadows = computed(() => {
       :style="{
         backgroundColor: colors.bg,
         borderColor: colors.cardBorder,
-        backgroundImage: `radial-gradient(${colors.grid} 1px, transparent 1px)`,
-        backgroundSize: '20px 20px',
         transform: `scale(${scale})`,
         transformOrigin: 'top left',
         marginLeft: `${offsetLeft}px`,

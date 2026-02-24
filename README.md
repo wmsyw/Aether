@@ -22,6 +22,14 @@
 
 Aether 是一个自托管的 AI API 网关，为团队和个人提供多租户管理、智能负载均衡、成本配额控制和健康监控能力。通过统一的 API 入口，可以无缝对接 Claude、OpenAI、Gemini 等主流 AI 服务及其 CLI 工具。
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/architecture/architecture-light.svg">
+    <img src="docs/architecture/architecture-light.svg" width="680" alt="Aether Architecture">
+  </picture>
+</p>
+
 页面预览: https://fawney19.github.io/Aether/
 
 ## 部署
@@ -75,7 +83,7 @@ cd frontend && npm install && npm run dev
 
 ## Aether Proxy
 
-Aether Proxy 是配套的正向代理节点，部署在海外 VPS 上，为墙内的 Aether 实例中转 API 流量。支持 TUI 向导一键配置、systemd 服务管理、TLS 加密、DNS 缓存及连接池调优。
+Aether Proxy 是配套的正向代理节点，部署在海外 VPS 上，为墙内的 Aether 实例中转 API 流量。或者部署在其他服务器为指定的提供商、账号、Key使用不同的节点访问。支持 TUI 向导一键配置、systemd 服务管理、TLS 加密、DNS 缓存及连接池调优。
 
 - Docker Compose 部署或下载预编译二进制直接运行
 - 通过 `aether-proxy setup` 完成交互式配置，自动注册为系统服务
