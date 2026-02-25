@@ -168,8 +168,6 @@ const props = withDefaults(defineProps<{
   currentHeaderData: Record<string, unknown> | null
   currentExpandDepth: number
   hasProviderHeaders: boolean
-  clientHeadersWithDiff: Array<{ key: string; value: unknown; status: string }>
-  providerHeadersWithDiff: Array<{ key: string; value: unknown; status: string }>
   headerStats: { added: number; modified: number; removed: number; unchanged: number }
   isDark: boolean
   // 泛化 props：允许传入任意 header 对和标签，用于复用为响应头对比
@@ -179,6 +177,8 @@ const props = withDefaults(defineProps<{
   providerLabel?: string
   emptyMessage?: string
 }>(), {
+  clientHeaders: undefined,
+  providerHeaders: undefined,
   clientLabel: '客户端请求头',
   providerLabel: '提供商请求头',
   emptyMessage: '无请求头信息',

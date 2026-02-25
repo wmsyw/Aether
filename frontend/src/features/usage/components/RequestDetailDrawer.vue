@@ -554,8 +554,6 @@
                           :current-header-data="currentHeaderData"
                           :current-expand-depth="currentExpandDepth"
                           :has-provider-headers="hasProviderHeaders"
-                          :client-headers-with-diff="clientHeadersWithDiff"
-                          :provider-headers-with-diff="providerHeadersWithDiff"
                           :header-stats="headerStats"
                           :is-dark="isDark"
                         />
@@ -588,8 +586,6 @@
                           :current-header-data="currentResponseHeaderData"
                           :current-expand-depth="currentExpandDepth"
                           :has-provider-headers="hasProviderResponseHeaders"
-                          :client-headers-with-diff="[]"
-                          :provider-headers-with-diff="[]"
                           :header-stats="responseHeaderStats"
                           :is-dark="isDark"
                           :client-headers="detail.client_response_headers"
@@ -1504,42 +1500,6 @@ const headerStats = computed(() => {
   }
 
   return counts
-})
-
-const clientHeadersWithDiff = computed(() => {
-  if (!detail.value?.request_headers) return []
-
-  const headers = detail.value.request_headers
-  const result = []
-
-  for (const [key, value] of Object.entries(headers)) {
-    const diffEntry = mergedHeaderEntries.value.find(e => e.key === key)
-    result.push({
-      key,
-      value,
-      status: diffEntry?.status || 'unchanged'
-    })
-  }
-
-  return result
-})
-
-const providerHeadersWithDiff = computed(() => {
-  if (!detail.value?.provider_request_headers) return []
-
-  const headers = detail.value.provider_request_headers
-  const result = []
-
-  for (const [key, value] of Object.entries(headers)) {
-    const diffEntry = mergedHeaderEntries.value.find(e => e.key === key)
-    result.push({
-      key,
-      value,
-      status: diffEntry?.status || 'unchanged'
-    })
-  }
-
-  return result
 })
 
 // 添加 ESC 键监听
