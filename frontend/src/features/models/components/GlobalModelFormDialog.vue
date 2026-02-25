@@ -338,7 +338,7 @@
           v-if="submitting"
           class="w-4 h-4 mr-2 animate-spin"
         />
-        {{ isEditMode ? '保存' : '创建' }}
+        {{ isEditMode ? '保存' : '添加' }}
       </Button>
       <Button
         v-if="selectedModel && !isEditMode"
@@ -859,6 +859,9 @@ async function handleSubmit() {
       }
       await createGlobalModel(createData)
       success('模型创建成功')
+      clearSelection()
+      emit('success')
+      return
     }
     emit('update:open', false)
     emit('success')

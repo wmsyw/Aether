@@ -1165,8 +1165,11 @@ function handleModelDialogUpdate(value: boolean) {
 
 // 处理模型表单提交成功
 async function handleModelFormSuccess() {
-  createModelDialogOpen.value = false
-  editingModel.value = null
+  // 编辑模式关闭对话框，创建模式保持打开以便连续添加
+  if (editingModel.value) {
+    createModelDialogOpen.value = false
+    editingModel.value = null
+  }
   await loadGlobalModels()
 }
 
