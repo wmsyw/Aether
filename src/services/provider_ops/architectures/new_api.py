@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from src.core.api_format.headers import BROWSER_FINGERPRINT_HEADERS
 from src.services.provider_ops.actions import (
     NewApiBalanceAction,
     ProviderAction,
@@ -75,6 +76,10 @@ class NewApiConnector(ProviderConnector):
 
     def _apply_auth(self, request: httpx.Request) -> httpx.Request:
         """为请求应用认证信息"""
+        # 添加浏览器指纹 Headers 以绕过 Cloudflare 等防护
+        for key, value in BROWSER_FINGERPRINT_HEADERS.items():
+            request.headers.setdefault(key, value)
+
         if self._api_key:
             request.headers["Authorization"] = f"Bearer {self._api_key}"
         if self._user_id:
@@ -206,7 +211,8 @@ class NewApiArchitecture(ProviderArchitecture):
 
         New API 特有：需要 New-Api-User Header 传递用户 ID
         """
-        headers: dict[str, str] = {}
+        # 以浏览器指纹 Headers 为基础，绕过 Cloudflare 等防护
+        headers: dict[str, str] = {**BROWSER_FINGERPRINT_HEADERS}
 
         # Bearer Token 认证
         api_key = credentials.get("api_key", "")

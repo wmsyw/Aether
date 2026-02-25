@@ -3,29 +3,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::hardware::HardwareInfo;
-
-/// Heartbeat-specific error that distinguishes "node not found" (needs
-/// re-registration) from transient / other failures.
-#[derive(Debug)]
-pub enum HeartbeatError {
-    /// HTTP 404 – the node_id is no longer known to Aether.
-    NodeNotFound(String),
-    /// Any other failure (network, 5xx, etc.).
-    Other(anyhow::Error),
-}
-
-impl std::fmt::Display for HeartbeatError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NodeNotFound(msg) => write!(f, "node not found: {}", msg),
-            Self::Other(e) => write!(f, "{}", e),
-        }
-    }
-}
 
 #[derive(Debug, Serialize)]
 struct RegisterRequest {
@@ -35,30 +16,16 @@ struct RegisterRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     region: Option<String>,
     heartbeat_interval: u64,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    tls_enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tls_cert_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hardware_info: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     estimated_max_concurrency: Option<u64>,
+    tunnel_mode: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterResponse {
     pub node_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct HeartbeatRequest {
-    node_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    active_connections: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    total_requests: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    avg_latency_ms: Option<f64>,
 }
 
 /// Remote configuration pushed by the Aether management backend.
@@ -68,29 +35,6 @@ pub struct RemoteConfig {
     pub allowed_ports: Option<Vec<u16>>,
     pub log_level: Option<String>,
     pub heartbeat_interval: Option<u64>,
-    pub timestamp_tolerance: Option<u64>,
-}
-
-/// Parsed heartbeat response from Aether.
-#[derive(Debug, Deserialize)]
-struct HeartbeatResponseBody {
-    #[serde(default)]
-    node: Option<HeartbeatNodeInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HeartbeatNodeInfo {
-    #[serde(default)]
-    remote_config: Option<RemoteConfig>,
-    #[serde(default)]
-    config_version: Option<u64>,
-}
-
-/// Heartbeat result returned to the caller.
-#[derive(Debug)]
-pub struct HeartbeatResult {
-    pub remote_config: Option<RemoteConfig>,
-    pub config_version: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,7 +53,7 @@ pub struct AetherClient {
 }
 
 impl AetherClient {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, aether_url: &str, management_token: &str) -> Self {
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(config.aether_request_timeout_secs))
             .connect_timeout(Duration::from_secs(config.aether_connect_timeout_secs))
@@ -136,8 +80,8 @@ impl AetherClient {
 
         Self {
             http,
-            base_url: config.aether_url.trim_end_matches('/').to_string(),
-            token: config.management_token.clone(),
+            base_url: aether_url.trim_end_matches('/').to_string(),
+            token: management_token.to_string(),
             retry_max_attempts: config.aether_retry_max_attempts.max(1),
             retry_base_delay,
             retry_max_delay,
@@ -150,29 +94,26 @@ impl AetherClient {
     pub async fn register(
         &self,
         config: &Config,
+        node_name: &str,
         public_ip: &str,
-        tls_enabled: bool,
-        tls_cert_fingerprint: Option<&str>,
         hw: Option<&HardwareInfo>,
     ) -> anyhow::Result<String> {
         let url = format!("{}/api/admin/proxy-nodes/register", self.base_url);
         let body = RegisterRequest {
-            name: config.node_name.clone(),
+            name: node_name.to_string(),
             ip: public_ip.to_string(),
-            port: config.listen_port,
+            port: 0,
             region: config.node_region.clone(),
             heartbeat_interval: config.heartbeat_interval,
-            tls_enabled,
-            tls_cert_fingerprint: tls_cert_fingerprint.map(|s| s.to_string()),
             hardware_info: hw.and_then(|h| serde_json::to_value(h).ok()),
             estimated_max_concurrency: hw.map(|h| h.estimated_max_concurrency),
+            tunnel_mode: true,
         };
 
         info!(
             url = %url,
             name = %body.name,
             ip = %body.ip,
-            port = body.port,
             "registering with Aether"
         );
 
@@ -197,80 +138,6 @@ impl AetherClient {
         let data: RegisterResponse = resp.json().await?;
         info!(node_id = %data.node_id, "registered successfully");
         Ok(data.node_id)
-    }
-
-    /// Send heartbeat to Aether.
-    ///
-    /// On success, returns any remote config included in the response.
-    /// Returns [`HeartbeatError::NodeNotFound`] on HTTP 404 so the caller
-    /// can trigger re-registration.
-    pub async fn heartbeat(
-        &self,
-        node_id: &str,
-        active_connections: Option<i64>,
-        total_requests: Option<i64>,
-        avg_latency_ms: Option<f64>,
-    ) -> Result<HeartbeatResult, HeartbeatError> {
-        let url = format!("{}/api/admin/proxy-nodes/heartbeat", self.base_url);
-        let body = HeartbeatRequest {
-            node_id: node_id.to_string(),
-            active_connections,
-            total_requests,
-            avg_latency_ms,
-        };
-
-        debug!(node_id = %node_id, "sending heartbeat");
-
-        let resp = self
-            .send_with_retry(
-                || {
-                    self.http
-                        .post(&url)
-                        .header("Authorization", format!("Bearer {}", self.token))
-                        .json(&body)
-                },
-                "heartbeat",
-            )
-            .await
-            .map_err(|e| HeartbeatError::Other(e.into()))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            warn!(status = %status, body = %text, "heartbeat failed");
-            if status == StatusCode::NOT_FOUND {
-                return Err(HeartbeatError::NodeNotFound(text));
-            }
-            return Err(HeartbeatError::Other(anyhow::anyhow!(
-                "heartbeat failed (HTTP {}): {}",
-                status,
-                text
-            )));
-        }
-
-        // Parse remote config from response (best-effort)
-        let result = match resp.json::<HeartbeatResponseBody>().await {
-            Ok(body) => {
-                let (remote_config, config_version) = match body.node {
-                    Some(node) => (node.remote_config, node.config_version.unwrap_or(0)),
-                    None => (None, 0),
-                };
-                HeartbeatResult {
-                    remote_config,
-                    config_version,
-                }
-            }
-            Err(e) => {
-                debug!(error = %e, "failed to parse heartbeat response body");
-                HeartbeatResult {
-                    remote_config: None,
-                    config_version: 0,
-                }
-            }
-        };
-
-        debug!(node_id = %node_id, config_version = result.config_version, "heartbeat ok");
-        Ok(result)
     }
 
     /// Unregister this node from Aether (graceful shutdown).

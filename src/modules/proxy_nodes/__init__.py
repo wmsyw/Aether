@@ -2,7 +2,7 @@
 代理节点模块
 
 提供海外 VPS 代理节点的注册、心跳、管理功能。
-aether-proxy 部署在海外 VPS 上自动注册节点，Aether 通过 HMAC 签名认证转发请求。
+aether-proxy 部署在海外 VPS 上，通过 WebSocket 隧道连接 Aether 转发 API 请求。
 """
 
 from __future__ import annotations
@@ -77,15 +77,7 @@ async def _health_check() -> ModuleHealth:
 
 
 def _validate_config(db: Session) -> tuple[bool, str]:
-    """
-    验证配置
-
-    代理节点模块需要 PROXY_HMAC_KEY 配置
-    """
-    from src.config.settings import config
-
-    if not config.proxy_hmac_key:
-        return False, "PROXY_HMAC_KEY 未配置（也未设置 ENCRYPTION_KEY 用于自动派生）"
+    """验证配置（tunnel 模式无需额外密钥配置）"""
     return True, ""
 
 
@@ -93,7 +85,7 @@ proxy_nodes_module = ModuleDefinition(
     metadata=ModuleMetadata(
         name="proxy_nodes",
         display_name="代理节点",
-        description="海外 VPS 代理节点管理，通过 HMAC 签名认证转发 API 请求",
+        description="海外 VPS 代理节点管理，通过 WebSocket 隧道转发 API 请求",
         category=ModuleCategory.INTEGRATION,
         env_key="PROXY_NODES_AVAILABLE",
         default_available=True,

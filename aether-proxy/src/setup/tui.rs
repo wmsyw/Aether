@@ -2,7 +2,8 @@
 //!
 //! Launched via `aether-proxy setup [path]`.  Presents a full-screen form
 //! backed by ratatui where the user can navigate fields, edit values, and
-//! save to a TOML config file.
+//! save to a TOML config file.  Supports multi-server configuration via
+//! a tabbed interface.
 
 use std::io;
 use std::path::PathBuf;
@@ -19,13 +20,13 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
 
-use crate::config::ConfigFile;
+use crate::config::{ConfigFile, ServerEntry};
 
 /// Outcome of the setup wizard, returned to the caller.
 pub enum SetupOutcome {
     /// Config saved; systemd service installed and started.
     ServiceInstalled,
-    /// Config saved; no service — caller should start the proxy directly.
+    /// Config saved; no service -- caller should start the proxy directly.
     ReadyToRun(PathBuf),
     /// User quit without saving.
     Cancelled,
@@ -34,13 +35,12 @@ pub enum SetupOutcome {
 /// Column width reserved for the field label (chars).
 const LABEL_WIDTH: usize = 22;
 
-// ── Field types ──────────────────────────────────────────────────────────────
+// -- Field types --------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
 enum FieldKind {
     Text,
     Secret,
-    Number,
     Bool,
     LogLevel,
 }
@@ -53,31 +53,15 @@ struct Field {
     required: bool,
     help: &'static str,
 }
+// -- Server tab ---------------------------------------------------------------
 
-// ── App state ────────────────────────────────────────────────────────────────
-
-#[derive(PartialEq)]
-enum Mode {
-    Normal,
-    Editing,
-}
-
-struct App {
+/// A single server tab's editable fields.
+struct ServerTab {
     fields: Vec<Field>,
-    selected: usize,
-    mode: Mode,
-    edit_buffer: String,
-    edit_cursor: usize, // char index
-    config_path: PathBuf,
-    modified: bool,
-    message: Option<(String, Instant, bool)>, // (text, when, is_error)
-    scroll_offset: usize,
-    saved_once: bool,
-    pending_quit: bool, // true after first q/Esc with unsaved changes
 }
 
-impl App {
-    fn new(config_path: PathBuf) -> Self {
+impl ServerTab {
+    fn new() -> Self {
         Self {
             fields: vec![
                 Field {
@@ -86,7 +70,7 @@ impl App {
                     value: String::new(),
                     kind: FieldKind::Text,
                     required: true,
-                    help: "Aether 服务器 URL (如 https://aether.example.com)",
+                    help: "Aether URL (e.g. https://aether.example.com)",
                 },
                 Field {
                     label: "Management Token",
@@ -94,23 +78,7 @@ impl App {
                     value: String::new(),
                     kind: FieldKind::Secret,
                     required: true,
-                    help: "Aether 管理 API Token (ae_xxx)",
-                },
-                Field {
-                    label: "HMAC Key",
-                    key: "hmac_key",
-                    value: String::new(),
-                    kind: FieldKind::Secret,
-                    required: true,
-                    help: "HMAC-SHA256 签名密钥，用于代理请求认证",
-                },
-                Field {
-                    label: "Listen Port",
-                    key: "listen_port",
-                    value: "18080".into(),
-                    kind: FieldKind::Number,
-                    required: true,
-                    help: "代理服务监听端口",
+                    help: "Aether Management Token (ae_xxx)",
                 },
                 Field {
                     label: "Node Name",
@@ -118,15 +86,60 @@ impl App {
                     value: "proxy-01".into(),
                     kind: FieldKind::Text,
                     required: true,
-                    help: "节点名称，用于在 Aether 后台识别",
+                    help: "Node name for identification in Aether dashboard",
                 },
+            ],
+        }
+    }
+
+    fn from_entry(entry: &ServerEntry) -> Self {
+        let mut tab = Self::new();
+        tab.fields[0].value = entry.aether_url.clone();
+        tab.fields[1].value = entry.management_token.clone();
+        if let Some(ref name) = entry.node_name {
+            tab.fields[2].value = name.clone();
+        }
+        tab
+    }
+}
+
+// -- App state ----------------------------------------------------------------
+
+#[derive(PartialEq)]
+enum Mode {
+    Normal,
+    Editing,
+}
+
+struct App {
+    server_tabs: Vec<ServerTab>,
+    active_tab: usize,
+    global_fields: Vec<Field>,
+    selected: usize,
+    mode: Mode,
+    edit_buffer: String,
+    edit_cursor: usize,
+    config_path: PathBuf,
+    modified: bool,
+    message: Option<(String, Instant, bool)>,
+    scroll_offset: usize,
+    saved_once: bool,
+    pending_quit: bool,
+    confirm_delete: bool,
+}
+impl App {
+    fn new(config_path: PathBuf) -> Self {
+        Self {
+            server_tabs: vec![ServerTab::new()],
+            active_tab: 0,
+            global_fields: vec![
                 Field {
                     label: "Log Level",
                     key: "log_level",
                     value: "info".into(),
                     kind: FieldKind::LogLevel,
                     required: true,
-                    help: "日志级别 -- Enter 切换: trace / debug / info / warn / error",
+                    help: "Log level -- Enter to cycle: trace / debug / info / warn / error",
                 },
                 Field {
                     label: "Log JSON",
@@ -134,7 +147,7 @@ impl App {
                     value: "false".into(),
                     kind: FieldKind::Bool,
                     required: true,
-                    help: "是否以 JSON 格式输出日志 -- Enter 切换",
+                    help: "Output logs as JSON -- Enter to toggle",
                 },
                 Field {
                     label: "Install Service",
@@ -147,7 +160,7 @@ impl App {
                     .into(),
                     kind: FieldKind::Bool,
                     required: true,
-                    help: "注册为 systemd 开机启动服务 (需要 root 权限) -- Enter 切换",
+                    help: "Install as systemd service (requires root) -- Enter to toggle",
                 },
             ],
             selected: 0,
@@ -160,10 +173,47 @@ impl App {
             scroll_offset: 0,
             saved_once: false,
             pending_quit: false,
+            confirm_delete: false,
         }
     }
 
-    // ── Config ↔ fields ──────────────────────────────────────────────────
+    // -- Field accessors (unified index across server + global) ---------------
+
+    fn server_field_count(&self) -> usize {
+        self.server_tabs[self.active_tab].fields.len()
+    }
+
+    fn total_field_count(&self) -> usize {
+        self.server_field_count() + self.global_fields.len()
+    }
+
+    fn selected_field(&self) -> &Field {
+        let sc = self.server_field_count();
+        if self.selected < sc {
+            &self.server_tabs[self.active_tab].fields[self.selected]
+        } else {
+            &self.global_fields[self.selected - sc]
+        }
+    }
+
+    fn selected_field_mut(&mut self) -> &mut Field {
+        let sc = self.server_field_count();
+        if self.selected < sc {
+            &mut self.server_tabs[self.active_tab].fields[self.selected]
+        } else {
+            &mut self.global_fields[self.selected - sc]
+        }
+    }
+
+    fn clamp_selection(&mut self) {
+        let max = self.total_field_count();
+        if self.selected >= max {
+            self.selected = max.saturating_sub(1);
+        }
+        self.scroll_offset = 0;
+        self.confirm_delete = false;
+    }
+    // -- Config <-> fields -----------------------------------------------------
 
     fn load_from_file(&mut self) {
         if let Ok(cfg) = ConfigFile::load(&self.config_path) {
@@ -172,13 +222,9 @@ impl App {
     }
 
     fn apply_config(&mut self, cfg: &ConfigFile) {
-        for field in &mut self.fields {
+        // Global fields
+        for field in &mut self.global_fields {
             let val: Option<String> = match field.key {
-                "aether_url" => cfg.aether_url.clone(),
-                "management_token" => cfg.management_token.clone(),
-                "hmac_key" => cfg.hmac_key.clone(),
-                "listen_port" => cfg.listen_port.map(|v| v.to_string()),
-                "node_name" => cfg.node_name.clone(),
                 "log_level" => cfg.log_level.clone(),
                 "log_json" => cfg.log_json.map(|v| v.to_string()),
                 _ => None,
@@ -187,54 +233,64 @@ impl App {
                 field.value = v;
             }
         }
+
+        // Server tabs
+        let servers = cfg.effective_servers();
+        if servers.is_empty() {
+            let mut tab = ServerTab::new();
+            // Single-server fallback: use top-level node_name
+            if let Some(ref name) = cfg.node_name {
+                tab.fields[2].value = name.clone();
+            }
+            self.server_tabs = vec![tab];
+        } else {
+            self.server_tabs = servers.iter().map(ServerTab::from_entry).collect();
+            // For single-server mode, node_name might be in top-level only
+            if self.server_tabs.len() == 1 && self.server_tabs[0].fields[2].value.is_empty() {
+                if let Some(ref name) = cfg.node_name {
+                    self.server_tabs[0].fields[2].value = name.clone();
+                }
+            }
+        }
+        self.active_tab = 0;
+        self.selected = 0;
+        self.scroll_offset = 0;
     }
 
     fn to_config(&self) -> ConfigFile {
-        let get = |key: &str| -> Option<String> {
-            self.fields
+        let get_global = |key: &str| -> Option<String> {
+            self.global_fields
                 .iter()
                 .find(|f| f.key == key)
                 .map(|f| f.value.clone())
                 .filter(|v| !v.is_empty())
         };
 
-        ConfigFile {
-            aether_url: get("aether_url"),
-            management_token: get("management_token"),
-            hmac_key: get("hmac_key"),
-            listen_port: get("listen_port").and_then(|v| v.parse().ok()),
-            public_ip: None,
-            node_name: get("node_name"),
-            node_region: None,
-            heartbeat_interval: None,
-            allowed_ports: None,
-            timestamp_tolerance: None,
-            aether_request_timeout_secs: None,
-            aether_connect_timeout_secs: None,
-            aether_pool_max_idle_per_host: None,
-            aether_pool_idle_timeout_secs: None,
-            aether_tcp_keepalive_secs: None,
-            aether_tcp_nodelay: None,
-            aether_http2: None,
-            aether_retry_max_attempts: None,
-            aether_retry_base_delay_ms: None,
-            aether_retry_max_delay_ms: None,
-            max_concurrent_connections: None,
-            connect_timeout_secs: None,
-            tls_handshake_timeout_secs: None,
-            dns_cache_ttl_secs: None,
-            dns_cache_capacity: None,
-            delegate_connect_timeout_secs: None,
-            delegate_pool_max_idle_per_host: None,
-            delegate_pool_idle_timeout_secs: None,
-            delegate_tcp_keepalive_secs: None,
-            delegate_tcp_nodelay: None,
-            log_level: get("log_level"),
-            log_json: get("log_json").and_then(|v| v.parse().ok()),
-            enable_tls: None,
-            tls_cert: None,
-            tls_key: None,
-        }
+        let get_tab = |tab: &ServerTab, key: &str| -> Option<String> {
+            tab.fields
+                .iter()
+                .find(|f| f.key == key)
+                .map(|f| f.value.clone())
+                .filter(|v| !v.is_empty())
+        };
+
+        let mut cfg = ConfigFile {
+            log_level: get_global("log_level"),
+            log_json: get_global("log_json").and_then(|v| v.parse().ok()),
+            ..ConfigFile::default()
+        };
+
+        // Always write [[servers]] format; old top-level fields are read-only compat
+        cfg.servers = self
+            .server_tabs
+            .iter()
+            .map(|tab| ServerEntry {
+                aether_url: get_tab(tab, "aether_url").unwrap_or_default(),
+                management_token: get_tab(tab, "management_token").unwrap_or_default(),
+                node_name: get_tab(tab, "node_name"),
+            })
+            .collect();
+        cfg
     }
 
     fn save(&mut self) -> anyhow::Result<()> {
@@ -249,27 +305,33 @@ impl App {
         ));
         Ok(())
     }
-
-    // ── Scrolling ────────────────────────────────────────────────────────
+    // -- Scrolling ---------------------------------------------------------------
 
     fn ensure_visible(&mut self, visible_rows: usize) {
         if visible_rows == 0 {
             return;
         }
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + visible_rows {
-            self.scroll_offset = self.selected - visible_rows + 1;
+        // Account for separator line between server and global fields
+        let display_row = if self.selected >= self.server_field_count() {
+            self.selected + 1
+        } else {
+            self.selected
+        };
+        if display_row < self.scroll_offset {
+            self.scroll_offset = display_row;
+        } else if display_row >= self.scroll_offset + visible_rows {
+            self.scroll_offset = display_row - visible_rows + 1;
         }
     }
 
-    // ── Key handling ─────────────────────────────────────────────────────
+    // -- Key handling -------------------------------------------------------------
 
     /// Returns `true` when the app should exit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         // Expire old messages (but keep quit-confirmation messages alive)
         if let Some((_, when, _)) = &self.message {
-            if !self.pending_quit && when.elapsed() > Duration::from_secs(4) {
+            if !self.pending_quit && !self.confirm_delete && when.elapsed() > Duration::from_secs(4)
+            {
                 self.message = None;
             }
         }
@@ -284,7 +346,7 @@ impl App {
     }
 
     fn handle_normal(&mut self, key: KeyEvent) -> bool {
-        // ── Quit handling (with unsaved-changes confirmation) ─────────
+        // -- Quit handling (with unsaved-changes confirmation) -----------------
         let is_quit_key = matches!(key.code, KeyCode::Char('q') | KeyCode::Esc);
 
         if is_quit_key {
@@ -292,6 +354,7 @@ impl App {
                 return true;
             }
             self.pending_quit = true;
+            self.confirm_delete = false;
             self.message = Some((
                 "unsaved changes! q again to discard, ^S to save".into(),
                 Instant::now(),
@@ -300,14 +363,21 @@ impl App {
             return false;
         }
 
-        // Any other key cancels the pending quit
+        // Any other key cancels pending quit / pending delete
         if self.pending_quit {
             self.pending_quit = false;
             self.message = None;
         }
+        if self.confirm_delete && !matches!(key.code, KeyCode::Delete | KeyCode::Char('x')) {
+            self.confirm_delete = false;
+            self.message = None;
+        }
 
         match key.code {
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('s')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    || key.modifiers.contains(KeyModifiers::SUPER) =>
+            {
                 if let Err(e) = self.save() {
                     self.message = Some((format!("error: {}", e), Instant::now(), true));
                 }
@@ -316,23 +386,20 @@ impl App {
                 self.selected = self.selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < self.fields.len() {
+                if self.selected + 1 < self.total_field_count() {
                     self.selected += 1;
                 }
             }
             KeyCode::Home => self.selected = 0,
-            KeyCode::End => self.selected = self.fields.len() - 1,
+            KeyCode::End => self.selected = self.total_field_count() - 1,
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let field = &self.fields[self.selected];
-                match field.kind {
+                let kind = self.selected_field().kind;
+                let key_str = self.selected_field().key;
+                let value = self.selected_field().value.clone();
+                match kind {
                     FieldKind::Bool => {
-                        let toggled = if field.value == "true" {
-                            "false"
-                        } else {
-                            "true"
-                        };
-                        // Block enabling service install without root/systemd
-                        if field.key == "install_service"
+                        let toggled = if value == "true" { "false" } else { "true" };
+                        if key_str == "install_service"
                             && toggled == "true"
                             && !super::service::is_available()
                         {
@@ -342,27 +409,79 @@ impl App {
                                 true,
                             ));
                         } else {
-                            self.fields[self.selected].value = toggled.into();
+                            self.selected_field_mut().value = toggled.into();
                             self.modified = true;
                         }
                     }
                     FieldKind::LogLevel => {
                         const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
-                        let idx = LEVELS.iter().position(|l| *l == field.value).unwrap_or(2);
-                        self.fields[self.selected].value = LEVELS[(idx + 1) % LEVELS.len()].into();
+                        let idx = LEVELS.iter().position(|l| *l == value).unwrap_or(2);
+                        self.selected_field_mut().value = LEVELS[(idx + 1) % LEVELS.len()].into();
                         self.modified = true;
                     }
                     _ => {
-                        self.edit_buffer = field.value.clone();
+                        self.edit_buffer = value;
                         self.edit_cursor = self.edit_buffer.chars().count();
                         self.mode = Mode::Editing;
                     }
                 }
             }
+            // -- Tab navigation --
             KeyCode::Tab => {
-                // Quick save shortcut
-                if let Err(e) = self.save() {
-                    self.message = Some((format!("error: {}", e), Instant::now(), true));
+                if self.server_tabs.len() > 1 {
+                    self.active_tab = (self.active_tab + 1) % self.server_tabs.len();
+                    self.clamp_selection();
+                }
+            }
+            KeyCode::BackTab => {
+                if self.server_tabs.len() > 1 {
+                    self.active_tab = if self.active_tab == 0 {
+                        self.server_tabs.len() - 1
+                    } else {
+                        self.active_tab - 1
+                    };
+                    self.clamp_selection();
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let idx = (c as usize) - ('1' as usize);
+                if idx < self.server_tabs.len() && idx != self.active_tab {
+                    self.active_tab = idx;
+                    self.clamp_selection();
+                }
+            }
+            // -- Add / remove server --
+            KeyCode::Char('+') | KeyCode::Char('a') => {
+                self.server_tabs.push(ServerTab::new());
+                self.active_tab = self.server_tabs.len() - 1;
+                self.selected = 0;
+                self.scroll_offset = 0;
+                self.modified = true;
+                self.message = Some((
+                    format!("added server {}", self.server_tabs.len()),
+                    Instant::now(),
+                    false,
+                ));
+            }
+            KeyCode::Delete | KeyCode::Char('x') => {
+                if self.server_tabs.len() <= 1 {
+                    self.message =
+                        Some(("cannot remove the last server".into(), Instant::now(), true));
+                } else if self.confirm_delete {
+                    let removed = self.active_tab + 1;
+                    self.server_tabs.remove(self.active_tab);
+                    self.active_tab = self.active_tab.min(self.server_tabs.len() - 1);
+                    self.clamp_selection();
+                    self.modified = true;
+                    self.message =
+                        Some((format!("server {} removed", removed), Instant::now(), false));
+                } else {
+                    self.confirm_delete = true;
+                    self.message = Some((
+                        "press Delete/x again to remove this server".into(),
+                        Instant::now(),
+                        true,
+                    ));
                 }
             }
             _ => {}
@@ -373,12 +492,11 @@ impl App {
     fn handle_edit(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
-                // Cancel -- discard changes to this field
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => {
                 if self.validate_edit() {
-                    self.fields[self.selected].value = self.edit_buffer.clone();
+                    self.selected_field_mut().value = self.edit_buffer.clone();
                     self.modified = true;
                     self.mode = Mode::Normal;
                 } else {
@@ -419,12 +537,7 @@ impl App {
     }
 
     fn validate_edit(&self) -> bool {
-        let kind = self.fields[self.selected].kind;
-        let buf = &self.edit_buffer;
-        match kind {
-            FieldKind::Number => buf.is_empty() || buf.parse::<u64>().is_ok(),
-            _ => true,
-        }
+        true
     }
 
     /// Byte offset of the char at `char_idx`.
@@ -436,13 +549,11 @@ impl App {
             .unwrap_or(self.edit_buffer.len())
     }
 }
-
-// ── Rendering ────────────────────────────────────────────────────────────────
+// -- Rendering ----------------------------------------------------------------
 
 fn ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
-    // Outer block
     let title = if app.modified {
         " Aether Proxy Setup [*] "
     } else {
@@ -458,53 +569,52 @@ fn ui(f: &mut Frame, app: &mut App) {
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
-    // Split: fields | footer
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).split(inner);
+    // Split: fields | tab bar | footer
+    let chunks = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(4),
+    ])
+    .split(inner);
 
-    let fields_area = chunks[0];
-    let footer_area = chunks[1];
-
-    render_fields(f, app, fields_area);
-    render_footer(f, app, footer_area);
+    render_fields(f, app, chunks[0]);
+    render_tab_bar(f, app, chunks[1]);
+    render_footer(f, app, chunks[2]);
 }
 
 fn render_fields(f: &mut Frame, app: &mut App, area: Rect) {
     let visible = area.height as usize;
     app.ensure_visible(visible);
 
+    let server_count = app.server_field_count();
     let mut lines: Vec<Line> = Vec::new();
+    // display_row tracks the actual row index (including separator)
+    let mut display_row: usize = 0;
 
-    for (i, field) in app.fields.iter().enumerate() {
-        if i < app.scroll_offset || i >= app.scroll_offset + visible {
-            continue;
+    // Server fields
+    for i in 0..server_count {
+        if display_row >= app.scroll_offset && display_row < app.scroll_offset + visible {
+            lines.push(build_field_line(app, i, display_row));
         }
+        display_row += 1;
+    }
 
-        let selected = i == app.selected;
-        let indicator = if selected { " > " } else { "   " };
+    // Separator line
+    if display_row >= app.scroll_offset && display_row < app.scroll_offset + visible {
+        lines.push(Line::from(Span::styled(
+            "   ----------------------------------------",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    display_row += 1;
 
-        let label_style = if selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-
-        let padded_label = format!("{:<width$}", field.label, width = LABEL_WIDTH);
-
-        // Value display
-        let (value_text, value_style) = if app.mode == Mode::Editing && selected {
-            (app.edit_buffer.clone(), Style::default().fg(Color::Yellow))
-        } else {
-            field_display(field)
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(indicator, label_style),
-            Span::styled(padded_label, label_style),
-            Span::raw("  "),
-            Span::styled(value_text, value_style),
-        ]));
+    // Global fields
+    for i in 0..app.global_fields.len() {
+        let field_idx = server_count + i;
+        if display_row >= app.scroll_offset && display_row < app.scroll_offset + visible {
+            lines.push(build_field_line(app, field_idx, display_row));
+        }
+        display_row += 1;
     }
 
     let paragraph = Paragraph::new(lines);
@@ -512,8 +622,12 @@ fn render_fields(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Cursor position while editing
     if app.mode == Mode::Editing {
-        let row_in_view = app.selected - app.scroll_offset;
-        // prefix: 3 (indicator) + LABEL_WIDTH + 2 (gap) = 27
+        let sel_display_row = if app.selected >= server_count {
+            app.selected + 1
+        } else {
+            app.selected
+        };
+        let row_in_view = sel_display_row.saturating_sub(app.scroll_offset);
         let prefix: u16 = 3 + LABEL_WIDTH as u16 + 2;
         let cx = area.x + prefix + app.edit_cursor as u16;
         let cy = area.y + row_in_view as u16;
@@ -521,6 +635,40 @@ fn render_fields(f: &mut Frame, app: &mut App, area: Rect) {
             f.set_cursor_position((cx, cy));
         }
     }
+}
+fn build_field_line(app: &App, field_idx: usize, _display_row: usize) -> Line<'static> {
+    let sc = app.server_field_count();
+    let field = if field_idx < sc {
+        &app.server_tabs[app.active_tab].fields[field_idx]
+    } else {
+        &app.global_fields[field_idx - sc]
+    };
+
+    let selected = field_idx == app.selected;
+    let indicator = if selected { " > " } else { "   " };
+
+    let label_style = if selected {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let padded_label = format!("{:<width$}", field.label, width = LABEL_WIDTH);
+
+    let (value_text, value_style) = if app.mode == Mode::Editing && selected {
+        (app.edit_buffer.clone(), Style::default().fg(Color::Yellow))
+    } else {
+        field_display(field)
+    };
+
+    Line::from(vec![
+        Span::styled(indicator.to_string(), label_style),
+        Span::styled(padded_label, label_style),
+        Span::raw("  "),
+        Span::styled(value_text, value_style),
+    ])
 }
 
 /// Returns (display_text, style) for a field in normal mode.
@@ -565,18 +713,54 @@ fn field_display(field: &Field) -> (String, Style) {
         _ => (field.value.clone(), Style::default().fg(Color::White)),
     }
 }
+fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::raw(" "));
+
+    for (i, tab) in app.server_tabs.iter().enumerate() {
+        let num = i + 1;
+        let name = tab
+            .fields
+            .iter()
+            .find(|f| f.key == "node_name")
+            .filter(|f| !f.value.is_empty())
+            .map(|f| f.value.clone())
+            .unwrap_or_else(|| format!("Server {}", num));
+
+        let label = format!(" {} {} ", num, name);
+
+        if i == app.active_tab {
+            spans.push(Span::styled(
+                label,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
+        }
+        spans.push(Span::raw(" "));
+    }
+
+    spans.push(Span::styled(" + Add ", Style::default().fg(Color::Green)));
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
-    let help = app.fields[app.selected].help;
+    let help = app.selected_field().help;
 
     let keybindings = if app.mode == Mode::Editing {
         "Enter confirm  Esc cancel"
+    } else if app.server_tabs.len() > 1 {
+        "j/k select  Enter edit  Tab switch  + add  x remove  ^S save  q quit"
     } else {
-        "Up/Down select  Enter edit  ^S save  q quit"
+        "j/k select  Enter edit  + add server  ^S save  q quit"
     };
 
     let mut status_spans: Vec<Span> = vec![Span::styled(
-        keybindings,
+        format!(" {}", keybindings),
         Style::default().fg(Color::DarkGray),
     )];
 
@@ -592,18 +776,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             format!(" {}", help),
             Style::default().fg(Color::DarkGray),
         )),
-        Line::from(
-            status_spans
-                .into_iter()
-                .map(|mut s| {
-                    // add left padding to first span
-                    if s.content.as_ref() == keybindings {
-                        s.content = format!(" {}", s.content).into();
-                    }
-                    s
-                })
-                .collect::<Vec<_>>(),
-        ),
+        Line::from(status_spans),
     ];
 
     let footer = Paragraph::new(footer_text).block(
@@ -614,11 +787,9 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(footer, area);
 }
-
-// ── Entry point ──────────────────────────────────────────────────────────────
+// -- Entry point --------------------------------------------------------------
 
 pub fn run(config_path: PathBuf) -> anyhow::Result<SetupOutcome> {
-    // Setup terminal
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -630,14 +801,13 @@ pub fn run(config_path: PathBuf) -> anyhow::Result<SetupOutcome> {
 
     let result = event_loop(&mut terminal, &mut app);
 
-    // Restore terminal
     terminal::disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result?;
 
-    // ── Post-TUI: decide outcome ─────────────────────────────────────
+    // -- Post-TUI: decide outcome ---------------------------------------------
 
     if !app.saved_once {
         return Ok(SetupOutcome::Cancelled);
@@ -648,7 +818,7 @@ pub fn run(config_path: PathBuf) -> anyhow::Result<SetupOutcome> {
     eprintln!();
 
     let wants_service = app
-        .fields
+        .global_fields
         .iter()
         .find(|f| f.key == "install_service")
         .map(|f| f.value == "true")
@@ -662,13 +832,10 @@ pub fn run(config_path: PathBuf) -> anyhow::Result<SetupOutcome> {
                 eprintln!("  Starting proxy directly instead.\n");
             }
         }
-    } else {
-        // Uninstall service if it was previously installed but toggled off
-        if super::service::is_installed() {
-            if let Err(e) = super::service::uninstall_service() {
-                eprintln!("  Service uninstall failed: {}", e);
-                eprintln!();
-            }
+    } else if super::service::is_installed() {
+        if let Err(e) = super::service::uninstall_service() {
+            eprintln!("  Service uninstall failed: {}", e);
+            eprintln!();
         }
     }
 
@@ -684,7 +851,6 @@ fn event_loop(
 
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
-                // Only handle Press events (ignore Release on Windows)
                 if key.kind == KeyEventKind::Press && app.handle_key(key) {
                     break;
                 }

@@ -32,7 +32,7 @@ pipeline = ApiRequestPipeline()
 class ProxyNodeRegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="节点名")
     ip: str = Field(..., description="公网 IP（IPv4/IPv6）")
-    port: int = Field(..., ge=1, le=65535, description="代理端口")
+    port: int = Field(0, ge=0, le=65535, description="代理端口（tunnel 模式下为 0）")
     region: str | None = Field(None, max_length=100, description="区域标签")
     heartbeat_interval: int = Field(30, ge=5, le=600, description="心跳间隔（秒）")
 
@@ -41,15 +41,12 @@ class ProxyNodeRegisterRequest(BaseModel):
     total_requests: int | None = Field(None, ge=0, description="累计请求数")
     avg_latency_ms: float | None = Field(None, ge=0, description="平均延迟（毫秒）")
 
-    # TLS
-    tls_enabled: bool = Field(False, description="是否启用 TLS 加密")
-    tls_cert_fingerprint: str | None = Field(
-        None, max_length=128, description="TLS 证书 SHA-256 指纹"
-    )
-
     # 硬件信息
     hardware_info: dict | None = Field(None, description="硬件信息 JSON")
     estimated_max_concurrency: int | None = Field(None, ge=0, description="估算最大并发连接数")
+
+    # Tunnel 模式
+    tunnel_mode: bool = Field(False, description="是否使用 tunnel 模式连接")
 
     @field_validator("ip")
     @classmethod
@@ -82,9 +79,6 @@ class ProxyNodeRemoteConfigRequest(BaseModel):
     allowed_ports: list[int] | None = Field(None, description="允许代理的目标端口")
     log_level: str | None = Field(None, description="日志级别 (trace/debug/info/warn/error)")
     heartbeat_interval: int | None = Field(None, ge=5, le=600, description="心跳间隔（秒）")
-    timestamp_tolerance: int | None = Field(
-        None, ge=10, le=3600, description="HMAC 时间戳容差（秒）"
-    )
 
     @field_validator("allowed_ports")
     @classmethod
@@ -216,12 +210,6 @@ async def test_proxy_node(node_id: str, request: Request, db: Session = Depends(
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
-@router.get("/hmac-key")
-async def get_proxy_hmac_key(request: Request, db: Session = Depends(get_db)) -> Any:
-    adapter = AdminGetProxyHmacKeyAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
-
-
 @router.post("/test-url")
 async def test_proxy_url(request: Request, db: Session = Depends(get_db)) -> Any:
     adapter = AdminTestProxyUrlAdapter()
@@ -273,14 +261,13 @@ class AdminRegisterProxyNodeAdapter(AdminApiAdapter):
             port=req.port,
             region=req.region,
             heartbeat_interval=req.heartbeat_interval,
-            tls_enabled=req.tls_enabled,
-            tls_cert_fingerprint=req.tls_cert_fingerprint,
             hardware_info=req.hardware_info,
             estimated_max_concurrency=req.estimated_max_concurrency,
             active_connections=req.active_connections,
             total_requests=req.total_requests,
             avg_latency_ms=req.avg_latency_ms,
             registered_by=context.user.id if context.user else None,
+            tunnel_mode=req.tunnel_mode,
         )
 
         context.add_audit_metadata(
@@ -376,11 +363,24 @@ class AdminDeleteProxyNodeAdapter(AdminApiAdapter):
         )
 
         was_system_proxy = result["cleared_system_proxy"]
-        msg = "deleted, system default proxy cleared" if was_system_proxy else "deleted"
+        cleared_providers = result.get("cleared_providers", 0)
+        cleared_endpoints = result.get("cleared_endpoints", 0)
+
+        parts = ["deleted"]
+        if was_system_proxy:
+            parts.append("system default proxy cleared")
+        if cleared_providers or cleared_endpoints:
+            parts.append(
+                f"cleared proxy from {cleared_providers} provider(s) "
+                f"and {cleared_endpoints} endpoint(s)"
+            )
+
         return {
-            "message": msg,
+            "message": ", ".join(parts),
             "node_id": self.node_id,
             "cleared_system_proxy": was_system_proxy,
+            "cleared_providers": cleared_providers,
+            "cleared_endpoints": cleared_endpoints,
         }
 
 
@@ -478,8 +478,6 @@ class AdminUpdateProxyNodeConfigAdapter(AdminApiAdapter):
             config_updates["log_level"] = req.log_level
         if req.heartbeat_interval is not None:
             config_updates["heartbeat_interval"] = req.heartbeat_interval
-        if req.timestamp_tolerance is not None:
-            config_updates["timestamp_tolerance"] = req.timestamp_tolerance
 
         node = ProxyNodeService.update_node_config(
             context.db, node_id=self.node_id, config_updates=config_updates
@@ -497,23 +495,6 @@ class AdminUpdateProxyNodeConfigAdapter(AdminApiAdapter):
             "remote_config": node.remote_config,
             "node": node_to_dict(node),
         }
-
-
-@dataclass
-class AdminGetProxyHmacKeyAdapter(AdminApiAdapter):
-    """获取 proxy_hmac_key 供管理员复制到 aether-proxy 部署"""
-
-    name: str = "admin_get_proxy_hmac_key"
-
-    async def handle(self, context: ApiRequestContext) -> Any:
-        from src.config.settings import config
-
-        key = config.proxy_hmac_key
-        if not key:
-            raise InvalidRequestException(
-                "PROXY_HMAC_KEY 未配置（也未设置 ENCRYPTION_KEY 用于自动派生）"
-            )
-        return {"proxy_hmac_key": key}
 
 
 class TestProxyUrlRequest(BaseModel):

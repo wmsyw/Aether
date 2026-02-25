@@ -270,12 +270,6 @@ class ProxyNode(Base):
     total_requests = Column(BigInteger, default=0, nullable=False)
     avg_latency_ms = Column(Float, nullable=True)
 
-    # TLS 加密
-    tls_enabled = Column(Boolean, default=False, nullable=False, comment="是否启用 TLS 加密")
-    tls_cert_fingerprint = Column(
-        String(128), nullable=True, comment="TLS 证书 SHA-256 指纹（hex）"
-    )
-
     # 硬件信息（注册时上报，JSON 可扩展）
     hardware_info = Column(
         JSON,
@@ -286,11 +280,20 @@ class ProxyNode(Base):
         Integer, nullable=True, comment="基于硬件估算的最大并发连接数"
     )
 
+    # 隧道模式（proxy 主动连接 Aether 的 WebSocket 隧道）
+    tunnel_mode = Column(
+        Boolean, default=False, nullable=False, comment="是否使用 WebSocket 隧道模式"
+    )
+    tunnel_connected = Column(Boolean, default=False, nullable=False, comment="隧道是否已连接")
+    tunnel_connected_at = Column(
+        DateTime(timezone=True), nullable=True, comment="隧道最近一次建立时间"
+    )
+
     # 管理端远程配置（通过心跳下发给 aether-proxy）
     remote_config = Column(
         JSON,
         nullable=True,
-        comment="管理端下发的远程配置 (allowed_ports, log_level, heartbeat_interval, timestamp_tolerance)",
+        comment="管理端下发的远程配置 (allowed_ports, log_level, heartbeat_interval)",
     )
     config_version = Column(
         Integer, default=0, nullable=False, comment="远程配置版本号，每次更新 +1"

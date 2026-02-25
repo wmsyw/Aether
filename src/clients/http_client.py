@@ -51,8 +51,8 @@ class HTTPClientPool:
     _proxy_clients: dict[str, tuple[httpx.AsyncClient, float]] = {}
     # 代理客户端缓存上限（避免内存泄漏）
     _max_proxy_clients: int = 50
-    # 代发客户端缓存：{tls: client, plain: client}
-    _delegate_clients: dict[str, httpx.AsyncClient] = {}
+    # Tunnel 客户端缓存：{node_id: client}
+    _tunnel_clients: dict[str, httpx.AsyncClient] = {}
 
     def __new__(cls) -> "HTTPClientPool":
         if cls._instance is None:
@@ -289,15 +289,15 @@ class HTTPClientPool:
 
         cls._proxy_clients.clear()
 
-        # 关闭代发客户端缓存
-        for cache_key, client in cls._delegate_clients.items():
+        # 关闭 tunnel 客户端缓存
+        for nid, client in cls._tunnel_clients.items():
             try:
                 await client.aclose()
-                logger.debug("代发客户端已关闭: {}", cache_key)
+                logger.debug("tunnel 客户端已关闭: {}", nid)
             except Exception as e:
-                logger.warning("关闭代发客户端失败: {}", e)
+                logger.warning("关闭 tunnel 客户端失败: {}", e)
 
-        cls._delegate_clients.clear()
+        cls._tunnel_clients.clear()
         logger.info("所有HTTP客户端已关闭")
 
     @classmethod
@@ -381,118 +381,75 @@ class HTTPClientPool:
         return httpx.AsyncClient(**client_config)  # type: ignore[arg-type]
 
     @classmethod
-    def create_delegate_stream_client(
-        cls,
-        delegate_config: dict[str, Any],
-        timeout: httpx.Timeout | None = None,
-    ) -> httpx.AsyncClient:
-        """
-        创建用于代发流式请求的 httpx 客户端
-
-        代发模式下不配置 proxy，直接 POST 到 proxy 的 /_aether/delegate 端点。
-        调用者需要负责关闭返回的客户端。
-        """
-        client_config: dict[str, Any] = {
-            "http2": False,
-            "follow_redirects": False,
-        }
-
-        if timeout:
-            client_config["timeout"] = timeout
-        else:
-            client_config["timeout"] = httpx.Timeout(
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-                pool=config.http_pool_timeout,
-            )
-
-        if delegate_config.get("tls_enabled"):
-            from src.utils.ssl_utils import get_proxy_ssl_context
-
-            client_config["verify"] = get_proxy_ssl_context()
-        else:
-            client_config["verify"] = get_ssl_context()
-
-        return httpx.AsyncClient(**client_config)
-
-    @classmethod
-    async def get_delegate_client(
-        cls,
-        delegate_config: dict[str, Any],
-    ) -> httpx.AsyncClient:
-        """
-        获取可复用的代发客户端（非流式请求用）
-
-        根据 TLS 状态缓存两个客户端（tls / plain），避免每次请求创建新客户端。
-        当 tls_enabled=True 时使用 get_proxy_ssl_context()（信任自签名证书）。
-        """
-        cache_key = "tls" if delegate_config.get("tls_enabled") else "plain"
-
-        lock = cls._get_proxy_clients_lock()
-        async with lock:
-            existing = cls._delegate_clients.get(cache_key)
-            if existing and not existing.is_closed:
-                return existing
-
-            if cache_key == "tls":
-                from src.utils.ssl_utils import get_proxy_ssl_context
-
-                verify: Any = get_proxy_ssl_context()
-            else:
-                verify = get_ssl_context()
-
-            client = httpx.AsyncClient(
-                http2=False,
-                verify=verify,
-                follow_redirects=False,
-                timeout=httpx.Timeout(
-                    connect=config.http_connect_timeout,
-                    read=config.http_read_timeout,
-                    write=config.http_write_timeout,
-                    pool=config.http_pool_timeout,
-                ),
-                limits=httpx.Limits(
-                    max_connections=config.http_max_connections,
-                    max_keepalive_connections=config.http_keepalive_connections,
-                    keepalive_expiry=config.http_keepalive_expiry,
-                ),
-            )
-            cls._delegate_clients[cache_key] = client
-            logger.debug("创建代发客户端(缓存): {}", cache_key)
-            return client
-
-    @classmethod
     async def get_upstream_client(
         cls,
         delegate_cfg: dict[str, Any] | None,
         proxy_config: dict[str, Any] | None = None,
     ) -> httpx.AsyncClient:
         """
-        获取可复用的上游请求客户端（自动选择代发或代理模式）
+        获取可复用的上游请求客户端（自动选择 tunnel/代理模式）
 
-        代发模式(delegate_cfg非空)：返回代发客户端
+        tunnel 模式(delegate_cfg.tunnel=True)：返回 TunnelTransport 客户端
         直连/代理模式：返回代理客户端（含系统默认代理回退）
         """
-        if delegate_cfg:
-            return await cls.get_delegate_client(delegate_cfg)
+        if delegate_cfg and delegate_cfg.get("tunnel"):
+            return await cls._get_tunnel_client(delegate_cfg["node_id"])
         return await cls.get_proxy_client(proxy_config=proxy_config)
 
     @classmethod
-    def create_upstream_stream_client(
+    async def create_upstream_stream_client(
         cls,
         delegate_cfg: dict[str, Any] | None,
         proxy_config: dict[str, Any] | None = None,
         timeout: httpx.Timeout | None = None,
     ) -> httpx.AsyncClient:
         """
-        创建上游流式请求客户端（自动选择代发或代理模式）
+        创建上游流式请求客户端（自动选择 tunnel/代理模式）
 
         调用者需负责关闭返回的客户端。
         """
-        if delegate_cfg:
-            return cls.create_delegate_stream_client(delegate_cfg, timeout=timeout)
+        if delegate_cfg and delegate_cfg.get("tunnel"):
+            return await cls._get_tunnel_client(delegate_cfg["node_id"], timeout=timeout)
         return cls.create_client_with_proxy(proxy_config=proxy_config, timeout=timeout)
+
+    @classmethod
+    async def _get_tunnel_client(
+        cls,
+        node_id: str,
+        timeout: httpx.Timeout | None = None,
+    ) -> httpx.AsyncClient:
+        """获取使用 TunnelTransport 的 httpx 客户端
+
+        当 timeout 为 None 时（非流式请求），返回按 node_id 缓存的 client，
+        调用方不应关闭此 client，其生命周期由 HTTPClientPool 管理。
+        当 timeout 非 None 时（流式请求），每次创建新 client，由调用方负责关闭。
+        """
+        from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+        t = timeout or httpx.Timeout(
+            connect=config.http_connect_timeout,
+            read=config.http_read_timeout,
+            write=config.http_write_timeout,
+            pool=config.http_pool_timeout,
+        )
+        timeout_secs = t.read if isinstance(t, httpx.Timeout) else 60.0
+
+        # 流式请求：每次创建新 client（调用方负责关闭）
+        if timeout is not None:
+            transport = TunnelTransport(node_id, timeout=timeout_secs or 60.0)
+            return httpx.AsyncClient(transport=transport, timeout=t)
+
+        # 非流式请求：复用缓存的 client（加锁与 proxy_clients 保持一致）
+        lock = cls._get_proxy_clients_lock()
+        async with lock:
+            existing = cls._tunnel_clients.get(node_id)
+            if existing and not existing.is_closed:
+                return existing
+
+            transport = TunnelTransport(node_id, timeout=timeout_secs or 60.0)
+            client = httpx.AsyncClient(transport=transport, timeout=t)
+            cls._tunnel_clients[node_id] = client
+            return client
 
     @classmethod
     def get_pool_stats(cls) -> dict[str, Any]:
@@ -502,7 +459,7 @@ class HTTPClientPool:
             "named_clients_count": len(cls._clients),
             "proxy_clients_count": len(cls._proxy_clients),
             "max_proxy_clients": cls._max_proxy_clients,
-            "delegate_clients_count": len(cls._delegate_clients),
+            "tunnel_clients_count": len(cls._tunnel_clients),
         }
 
 

@@ -3,11 +3,11 @@ use std::path::Path;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-/// Aether forward proxy with HMAC authentication.
+/// Aether tunnel proxy.
 ///
 /// Deployed on overseas VPS to relay API traffic for Aether instances
-/// behind the GFW. Registers with Aether, sends heartbeats, and validates
-/// incoming proxy requests via HMAC-SHA256 signatures in Basic Auth.
+/// behind the GFW. Connects to Aether via WebSocket tunnel, registers
+/// with Aether, and relays upstream requests.
 #[derive(Parser, Debug, Clone)]
 #[command(version, about)]
 pub struct Config {
@@ -18,14 +18,6 @@ pub struct Config {
     /// Management Token for Aether admin API (ae_xxx)
     #[arg(long, env = "AETHER_PROXY_MANAGEMENT_TOKEN")]
     pub management_token: String,
-
-    /// HMAC-SHA256 key for proxy authentication
-    #[arg(long, env = "AETHER_PROXY_HMAC_KEY")]
-    pub hmac_key: String,
-
-    /// Port to listen on for proxy connections
-    #[arg(long, env = "AETHER_PROXY_LISTEN_PORT", default_value_t = 18080)]
-    pub listen_port: u16,
 
     /// Public IP address of this node (auto-detected if omitted)
     #[arg(long, env = "AETHER_PROXY_PUBLIC_IP")]
@@ -51,10 +43,6 @@ pub struct Config {
         default_values_t = vec![80, 443, 8080, 8443]
     )]
     pub allowed_ports: Vec<u16>,
-
-    /// Timestamp tolerance window in seconds for HMAC validation
-    #[arg(long, env = "AETHER_PROXY_TIMESTAMP_TOLERANCE", default_value_t = 300)]
-    pub timestamp_tolerance: u64,
 
     /// Aether API request timeout in seconds
     #[arg(
@@ -128,14 +116,6 @@ pub struct Config {
     #[arg(long, env = "AETHER_PROXY_MAX_CONCURRENT_CONNECTIONS")]
     pub max_concurrent_connections: Option<u64>,
 
-    /// Upstream TCP connect timeout in seconds for CONNECT tunnels
-    #[arg(long, env = "AETHER_PROXY_CONNECT_TIMEOUT", default_value_t = 30)]
-    pub connect_timeout_secs: u64,
-
-    /// TLS handshake timeout in seconds for incoming TLS connections
-    #[arg(long, env = "AETHER_PROXY_TLS_HANDSHAKE_TIMEOUT", default_value_t = 10)]
-    pub tls_handshake_timeout_secs: u64,
-
     /// DNS cache TTL in seconds
     #[arg(long, env = "AETHER_PROXY_DNS_CACHE_TTL", default_value_t = 60)]
     pub dns_cache_ttl_secs: u64,
@@ -144,45 +124,45 @@ pub struct Config {
     #[arg(long, env = "AETHER_PROXY_DNS_CACHE_CAPACITY", default_value_t = 1024)]
     pub dns_cache_capacity: usize,
 
-    /// Delegate HTTP client connect timeout in seconds
+    /// Upstream HTTP client connect timeout in seconds
     #[arg(
         long,
-        env = "AETHER_PROXY_DELEGATE_CONNECT_TIMEOUT",
+        env = "AETHER_PROXY_UPSTREAM_CONNECT_TIMEOUT",
         default_value_t = 30
     )]
-    pub delegate_connect_timeout_secs: u64,
+    pub upstream_connect_timeout_secs: u64,
 
-    /// Delegate HTTP client max idle connections per host
+    /// Upstream HTTP client max idle connections per host
     #[arg(
         long,
-        env = "AETHER_PROXY_DELEGATE_POOL_MAX_IDLE_PER_HOST",
+        env = "AETHER_PROXY_UPSTREAM_POOL_MAX_IDLE_PER_HOST",
         default_value_t = 64
     )]
-    pub delegate_pool_max_idle_per_host: usize,
+    pub upstream_pool_max_idle_per_host: usize,
 
-    /// Delegate HTTP client idle timeout in seconds
+    /// Upstream HTTP client idle timeout in seconds
     #[arg(
         long,
-        env = "AETHER_PROXY_DELEGATE_POOL_IDLE_TIMEOUT",
+        env = "AETHER_PROXY_UPSTREAM_POOL_IDLE_TIMEOUT",
         default_value_t = 300
     )]
-    pub delegate_pool_idle_timeout_secs: u64,
+    pub upstream_pool_idle_timeout_secs: u64,
 
-    /// Delegate TCP keepalive in seconds (0 disables)
+    /// Upstream TCP keepalive in seconds (0 disables)
     #[arg(
         long,
-        env = "AETHER_PROXY_DELEGATE_TCP_KEEPALIVE",
+        env = "AETHER_PROXY_UPSTREAM_TCP_KEEPALIVE",
         default_value_t = 60
     )]
-    pub delegate_tcp_keepalive_secs: u64,
+    pub upstream_tcp_keepalive_secs: u64,
 
-    /// Delegate TCP_NODELAY
+    /// Upstream TCP_NODELAY
     #[arg(
         long,
-        env = "AETHER_PROXY_DELEGATE_TCP_NODELAY",
+        env = "AETHER_PROXY_UPSTREAM_TCP_NODELAY",
         default_value_t = true
     )]
-    pub delegate_tcp_nodelay: bool,
+    pub upstream_tcp_nodelay: bool,
 
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, env = "AETHER_PROXY_LOG_LEVEL", default_value = "info")]
@@ -192,25 +172,38 @@ pub struct Config {
     #[arg(long, env = "AETHER_PROXY_LOG_JSON", default_value_t = false)]
     pub log_json: bool,
 
-    /// Enable TLS encryption (dual-stack: accepts both HTTP and TLS on same port)
-    #[arg(long, env = "AETHER_PROXY_ENABLE_TLS", default_value_t = true)]
-    pub enable_tls: bool,
-
-    /// Path to TLS certificate PEM file
+    /// WebSocket reconnect base delay in milliseconds
     #[arg(
         long,
-        env = "AETHER_PROXY_TLS_CERT",
-        default_value = "aether-proxy-cert.pem"
+        env = "AETHER_PROXY_TUNNEL_RECONNECT_BASE_MS",
+        default_value_t = 1000
     )]
-    pub tls_cert: String,
+    pub tunnel_reconnect_base_ms: u64,
 
-    /// Path to TLS private key PEM file
+    /// WebSocket reconnect max delay in milliseconds
     #[arg(
         long,
-        env = "AETHER_PROXY_TLS_KEY",
-        default_value = "aether-proxy-key.pem"
+        env = "AETHER_PROXY_TUNNEL_RECONNECT_MAX_MS",
+        default_value_t = 30000
     )]
-    pub tls_key: String,
+    pub tunnel_reconnect_max_ms: u64,
+
+    /// WebSocket tunnel ping interval in seconds
+    #[arg(long, env = "AETHER_PROXY_TUNNEL_PING_INTERVAL", default_value_t = 15)]
+    pub tunnel_ping_interval_secs: u64,
+
+    /// Maximum concurrent streams over tunnel (auto-detected from hardware if omitted)
+    #[arg(long, env = "AETHER_PROXY_TUNNEL_MAX_STREAMS")]
+    pub tunnel_max_streams: Option<u32>,
+}
+
+/// Per-server connection config (used in multi-server TOML `[[servers]]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerEntry {
+    pub aether_url: String,
+    pub management_token: String,
+    /// Per-server node name override. Falls back to the global `node_name`.
+    pub node_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -218,17 +211,13 @@ pub struct Config {
 // ---------------------------------------------------------------------------
 
 /// Serializable config for TOML file persistence.
-/// All fields are optional — only populated values are written.
+/// All fields are optional -- only populated values are written.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aether_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub management_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hmac_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub listen_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,8 +228,6 @@ pub struct ConfigFile {
     pub heartbeat_interval: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_ports: Option<Vec<u16>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp_tolerance: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aether_request_timeout_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,33 +251,37 @@ pub struct ConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrent_connections: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connect_timeout_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_handshake_timeout_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_cache_ttl_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_cache_capacity: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegate_connect_timeout_secs: Option<u64>,
+    pub upstream_connect_timeout_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegate_pool_max_idle_per_host: Option<usize>,
+    pub upstream_pool_max_idle_per_host: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegate_pool_idle_timeout_secs: Option<u64>,
+    pub upstream_pool_idle_timeout_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegate_tcp_keepalive_secs: Option<u64>,
+    pub upstream_tcp_keepalive_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegate_tcp_nodelay: Option<bool>,
+    pub upstream_tcp_nodelay: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_level: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_json: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_tls: Option<bool>,
+    pub tunnel_reconnect_base_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_cert: Option<String>,
+    pub tunnel_reconnect_max_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_key: Option<String>,
+    pub tunnel_ping_interval_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_max_streams: Option<u32>,
+
+    /// Multi-server config: each entry connects to a separate Aether instance.
+    /// When present, top-level aether_url/management_token are ignored for
+    /// tunnel connections (but still injected as env for clap compatibility).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<ServerEntry>,
 }
 
 impl ConfigFile {
@@ -305,6 +296,24 @@ impl ConfigFile {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+
+    /// Resolve the effective server list.
+    ///
+    /// If `[[servers]]` is present, use it. Otherwise fall back to the
+    /// top-level `aether_url` + `management_token` as a single server.
+    pub fn effective_servers(&self) -> Vec<ServerEntry> {
+        if !self.servers.is_empty() {
+            return self.servers.clone();
+        }
+        match (&self.aether_url, &self.management_token) {
+            (Some(url), Some(token)) => vec![ServerEntry {
+                aether_url: url.clone(),
+                management_token: token.clone(),
+                node_name: None,
+            }],
+            _ => vec![],
+        }
     }
 
     /// Inject values as environment variables so clap picks them up.
@@ -332,15 +341,30 @@ impl ConfigFile {
                 }
             };
         }
-        set!("AETHER_PROXY_AETHER_URL", self.aether_url);
-        set!("AETHER_PROXY_MANAGEMENT_TOKEN", self.management_token);
-        set!("AETHER_PROXY_HMAC_KEY", self.hmac_key);
-        set!("AETHER_PROXY_LISTEN_PORT", self.listen_port);
+
+        // When top-level fields are absent, fall back to the first [[servers]]
+        // entry so that clap's required `aether_url` / `management_token` are
+        // satisfied even with the new config format.
+        let first_server = self.servers.first();
+        let aether_url = self
+            .aether_url
+            .clone()
+            .or_else(|| first_server.map(|s| s.aether_url.clone()));
+        let management_token = self
+            .management_token
+            .clone()
+            .or_else(|| first_server.map(|s| s.management_token.clone()));
+        let node_name = self
+            .node_name
+            .clone()
+            .or_else(|| first_server.and_then(|s| s.node_name.clone()));
+
+        set!("AETHER_PROXY_AETHER_URL", aether_url);
+        set!("AETHER_PROXY_MANAGEMENT_TOKEN", management_token);
         set!("AETHER_PROXY_PUBLIC_IP", self.public_ip);
-        set!("AETHER_PROXY_NODE_NAME", self.node_name);
+        set!("AETHER_PROXY_NODE_NAME", node_name);
         set!("AETHER_PROXY_NODE_REGION", self.node_region);
         set!("AETHER_PROXY_HEARTBEAT_INTERVAL", self.heartbeat_interval);
-        set!("AETHER_PROXY_TIMESTAMP_TOLERANCE", self.timestamp_tolerance);
         set!(
             "AETHER_PROXY_AETHER_REQUEST_TIMEOUT",
             self.aether_request_timeout_secs
@@ -379,38 +403,43 @@ impl ConfigFile {
             "AETHER_PROXY_MAX_CONCURRENT_CONNECTIONS",
             self.max_concurrent_connections
         );
-        set!("AETHER_PROXY_CONNECT_TIMEOUT", self.connect_timeout_secs);
-        set!(
-            "AETHER_PROXY_TLS_HANDSHAKE_TIMEOUT",
-            self.tls_handshake_timeout_secs
-        );
         set!("AETHER_PROXY_DNS_CACHE_TTL", self.dns_cache_ttl_secs);
         set!("AETHER_PROXY_DNS_CACHE_CAPACITY", self.dns_cache_capacity);
         set!(
-            "AETHER_PROXY_DELEGATE_CONNECT_TIMEOUT",
-            self.delegate_connect_timeout_secs
+            "AETHER_PROXY_UPSTREAM_CONNECT_TIMEOUT",
+            self.upstream_connect_timeout_secs
         );
         set!(
-            "AETHER_PROXY_DELEGATE_POOL_MAX_IDLE_PER_HOST",
-            self.delegate_pool_max_idle_per_host
+            "AETHER_PROXY_UPSTREAM_POOL_MAX_IDLE_PER_HOST",
+            self.upstream_pool_max_idle_per_host
         );
         set!(
-            "AETHER_PROXY_DELEGATE_POOL_IDLE_TIMEOUT",
-            self.delegate_pool_idle_timeout_secs
+            "AETHER_PROXY_UPSTREAM_POOL_IDLE_TIMEOUT",
+            self.upstream_pool_idle_timeout_secs
         );
         set!(
-            "AETHER_PROXY_DELEGATE_TCP_KEEPALIVE",
-            self.delegate_tcp_keepalive_secs
+            "AETHER_PROXY_UPSTREAM_TCP_KEEPALIVE",
+            self.upstream_tcp_keepalive_secs
         );
         set!(
-            "AETHER_PROXY_DELEGATE_TCP_NODELAY",
-            self.delegate_tcp_nodelay
+            "AETHER_PROXY_UPSTREAM_TCP_NODELAY",
+            self.upstream_tcp_nodelay
         );
         set!("AETHER_PROXY_LOG_LEVEL", self.log_level);
         set!("AETHER_PROXY_LOG_JSON", self.log_json);
-        set!("AETHER_PROXY_ENABLE_TLS", self.enable_tls);
-        set!("AETHER_PROXY_TLS_CERT", self.tls_cert);
-        set!("AETHER_PROXY_TLS_KEY", self.tls_key);
+        set!(
+            "AETHER_PROXY_TUNNEL_RECONNECT_BASE_MS",
+            self.tunnel_reconnect_base_ms
+        );
+        set!(
+            "AETHER_PROXY_TUNNEL_RECONNECT_MAX_MS",
+            self.tunnel_reconnect_max_ms
+        );
+        set!(
+            "AETHER_PROXY_TUNNEL_PING_INTERVAL",
+            self.tunnel_ping_interval_secs
+        );
+        set!("AETHER_PROXY_TUNNEL_MAX_STREAMS", self.tunnel_max_streams);
 
         // allowed_ports needs special handling (comma-separated)
         if let Some(ref ports) = self.allowed_ports {

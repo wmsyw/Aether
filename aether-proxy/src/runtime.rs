@@ -16,7 +16,6 @@ use crate::config::Config;
 pub struct DynamicConfig {
     pub node_name: String,
     pub allowed_ports: HashSet<u16>,
-    pub timestamp_tolerance: u64,
     pub log_level: String,
     pub heartbeat_interval: u64,
     /// Monotonically increasing version from the backend.
@@ -30,7 +29,6 @@ impl DynamicConfig {
         Self {
             node_name: config.node_name.clone(),
             allowed_ports: config.allowed_ports.iter().copied().collect(),
-            timestamp_tolerance: config.timestamp_tolerance,
             log_level: config.log_level.clone(),
             heartbeat_interval: config.heartbeat_interval,
             config_version: 0,
@@ -79,15 +77,8 @@ pub fn apply_remote_config(
     if let Some(ref ports) = remote.allowed_ports {
         let new_set: HashSet<u16> = ports.iter().copied().collect();
         if new_set != cfg.allowed_ports {
-            changed.push(format!("allowed_ports → {:?}", ports));
+            changed.push(format!("allowed_ports -> {:?}", ports));
             cfg.allowed_ports = new_set;
-        }
-    }
-
-    if let Some(tol) = remote.timestamp_tolerance {
-        if tol != cfg.timestamp_tolerance {
-            changed.push(format!("timestamp_tolerance → {}", tol));
-            cfg.timestamp_tolerance = tol;
         }
     }
 

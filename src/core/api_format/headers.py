@@ -15,10 +15,12 @@ from __future__ import annotations
 from collections.abc import Set as AbstractSet
 from typing import Any
 
+from src.core.api_format.enums import ApiFamily
 from src.core.api_format.metadata import (
     get_auth_config_for_endpoint,
     get_extra_headers_for_endpoint,
     get_protected_keys_for_endpoint,
+    resolve_endpoint_definition,
 )
 from src.core.api_format.signature import EndpointSignature, parse_signature_key
 from src.core.logger import logger
@@ -26,6 +28,37 @@ from src.core.logger import logger
 # =============================================================================
 # 头部常量定义
 # =============================================================================
+
+# 通用浏览器指纹 Headers，用于绕过 Cloudflare 等反爬防护
+# 基于 Electron 桌面客户端的真实请求头构建，作为所有 adapter 请求的底层默认值
+BROWSER_FINGERPRINT_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/140.0.7339.249 Electron/38.7.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    "Accept-Language": "zh-CN",
+    "sec-ch-ua": '"Not=A?Brand";v="24", "Chromium";v="140"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+}
+
+# Anthropic/Claude 专属 Headers（仅 Claude API family 使用）
+# 包含 Stainless SDK 指纹和 direct-browser-access 标记
+_ANTHROPIC_EXTRA_HEADERS: dict[str, str] = {
+    "anthropic-dangerous-direct-browser-access": "true",
+    "x-stainless-os": "Unknown",
+    "x-stainless-runtime": "browser:chrome",
+    "x-stainless-arch": "unknown",
+    "x-stainless-lang": "js",
+    "x-stainless-package-version": "0.41.0",
+    "x-stainless-runtime-version": "140.0.7339",
+    "x-stainless-retry-count": "0",
+}
 
 # 转发给上游时需要剔除的头部（系统管理 + 认证替换 + 客户端/代理元数据）
 UPSTREAM_DROP_HEADERS: frozenset[str] = frozenset(
@@ -503,14 +536,23 @@ def build_adapter_base_headers_for_endpoint(
 ) -> dict[str, str]:
     """
     新模式：根据 endpoint signature 构建基础请求头。
+
+    浏览器指纹 headers 作为底层默认值注入，Claude API family 额外注入 Anthropic 专属 header。
+    认证头和 extra_headers 会覆盖它们。
     """
     auth_header, auth_type = get_auth_config_for_endpoint(endpoint)
     auth_value = f"Bearer {api_key}" if auth_type == "bearer" else api_key
 
-    headers: dict[str, str] = {
-        auth_header: auth_value,
-        "Content-Type": "application/json",
-    }
+    # 以浏览器指纹为底层默认值，绕过 Cloudflare 等反爬防护
+    headers: dict[str, str] = {**BROWSER_FINGERPRINT_HEADERS}
+
+    # Claude API family 额外注入 Anthropic 专属 header
+    definition = resolve_endpoint_definition(endpoint)
+    if definition and definition.api_family == ApiFamily.CLAUDE:
+        headers.update(_ANTHROPIC_EXTRA_HEADERS)
+
+    headers[auth_header] = auth_value
+    headers["Content-Type"] = "application/json"
 
     if include_extra:
         extra = get_extra_headers_for_endpoint(endpoint)

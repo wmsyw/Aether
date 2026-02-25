@@ -99,16 +99,6 @@
               variant="ghost"
               size="icon"
               class="h-8 w-8"
-              title="复制 HMAC Key"
-              @click="copyHmacKey"
-            >
-              <Copy class="w-3.5 h-3.5" />
-            </Button>
-            <div class="h-4 w-px bg-border" />
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
               title="手动添加"
               @click="showAddDialog = true"
             >
@@ -172,11 +162,18 @@
                   >
                     手动
                   </Badge>
+                  <Badge
+                    v-if="node.tunnel_mode"
+                    variant="outline"
+                    class="text-[10px] px-1.5 py-0"
+                  >
+                    Tunnel
+                  </Badge>
                   <HardwareTooltip :node="node" />
                 </div>
               </TableCell>
               <TableCell class="py-4">
-                <code class="text-xs text-muted-foreground">{{ node.is_manual ? (node.proxy_url || `${node.ip}:${node.port}`) : `${node.ip}:${node.port}` }}</code>
+                <code class="text-xs text-muted-foreground">{{ nodeAddress(node) }}</code>
               </TableCell>
               <TableCell class="py-4">
                 <span class="text-sm text-muted-foreground">{{ formatRegion(node.region) }}</span>
@@ -282,9 +279,16 @@
                 >
                   手动
                 </Badge>
+                <Badge
+                  v-if="node.tunnel_mode"
+                  variant="outline"
+                  class="text-[10px] px-1.5 py-0"
+                >
+                  Tunnel
+                </Badge>
                 <HardwareTooltip :node="node" />
               </div>
-              <code class="text-xs text-muted-foreground">{{ node.is_manual ? (node.proxy_url || `${node.ip}:${node.port}`) : `${node.ip}:${node.port}` }}</code>
+              <code class="text-xs text-muted-foreground">{{ nodeAddress(node) }}</code>
             </div>
             <Badge
               :variant="statusVariant(node.status)"
@@ -521,15 +525,6 @@
               max="600"
             />
           </div>
-          <div class="space-y-1.5">
-            <Label>时间戳容差 (秒)</Label>
-            <Input
-              v-model="configForm.timestamp_tolerance"
-              type="number"
-              min="10"
-              max="3600"
-            />
-          </div>
         </div>
         <div
           v-if="configNode"
@@ -560,7 +555,6 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { useToast } from '@/composables/useToast'
-import { useClipboard } from '@/composables/useClipboard'
 import { useConfirm } from '@/composables/useConfirm'
 import { proxyNodesApi, type ProxyNode, type ProxyNodeRemoteConfig } from '@/api/proxy-nodes'
 
@@ -586,13 +580,12 @@ import {
   Dialog,
 } from '@/components/ui'
 
-import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, Copy } from 'lucide-vue-next'
+import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings } from 'lucide-vue-next'
 import { parseApiError } from '@/utils/errorParser'
 import { formatRegion } from '@/utils/region'
 import HardwareTooltip from './components/HardwareTooltip.vue'
 
 const { success, error: toastError } = useToast()
-const { copyToClipboard } = useClipboard()
 const { confirmDanger } = useConfirm()
 const store = useProxyNodesStore()
 
@@ -621,7 +614,6 @@ const configForm = ref({
   allowed_ports: '',
   log_level: 'info',
   heartbeat_interval: '30',
-  timestamp_tolerance: '300',
 })
 
 // 测试连通性
@@ -683,15 +675,6 @@ async function handleTestUrl() {
     toastError(parseApiError(err, '测试请求失败'))
   } finally {
     testingUrl.value = false
-  }
-}
-
-async function copyHmacKey() {
-  try {
-    const { proxy_hmac_key } = await proxyNodesApi.getHmacKey()
-    await copyToClipboard(proxy_hmac_key)
-  } catch (err: unknown) {
-    toastError(parseApiError(err, '获取 HMAC Key 失败'))
   }
 }
 
@@ -766,7 +749,6 @@ function handleConfig(node: ProxyNode) {
     allowed_ports: rc.allowed_ports?.join(', ') || '',
     log_level: rc.log_level || 'info',
     heartbeat_interval: String(rc.heartbeat_interval || node.heartbeat_interval || 30),
-    timestamp_tolerance: String(rc.timestamp_tolerance || 300),
   }
   showConfigDialog.value = true
 }
@@ -800,10 +782,6 @@ async function handleSaveConfig() {
     if (!isNaN(hb) && hb >= 5) {
       data.heartbeat_interval = hb
     }
-    const tt = parseInt(configForm.value.timestamp_tolerance)
-    if (!isNaN(tt) && tt >= 10) {
-      data.timestamp_tolerance = tt
-    }
     await proxyNodesApi.updateNodeConfig(configNode.value.id, data)
     success('远程配置已保存，将在下次心跳时生效')
     handleConfigDialogClose(false)
@@ -817,7 +795,7 @@ async function handleSaveConfig() {
 
 async function handleDelete(node: ProxyNode) {
   const confirmed = await confirmDanger(
-    `确定要删除代理节点 "${node.name}" (${node.ip}:${node.port}) 吗？`,
+    `确定要删除代理节点 "${node.name}" (${node.tunnel_mode ? node.ip : `${node.ip}:${node.port}`}) 吗？`,
     '删除节点'
   )
   if (!confirmed) return
@@ -889,5 +867,11 @@ function formatTime(iso: string | null) {
   if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
   return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function nodeAddress(node: ProxyNode) {
+  if (node.is_manual) return node.proxy_url || `${node.ip}:${node.port}`
+  if (node.tunnel_mode) return node.ip || 'WebSocket Tunnel'
+  return `${node.ip}:${node.port}`
 }
 </script>

@@ -3,8 +3,6 @@
 从环境变量或 .env 文件加载配置
 """
 
-import hashlib
-import hmac
 import os
 from pathlib import Path
 from typing import Any
@@ -47,13 +45,6 @@ class Config:
 
         # 加密密钥配置（独立于JWT密钥，用于敏感数据加密）
         self.encryption_key = os.getenv("ENCRYPTION_KEY", None)
-
-        # 代理节点 HMAC 密钥（用于 aether-proxy 认证）
-        proxy_hmac_key_env = os.getenv("PROXY_HMAC_KEY")
-        if proxy_hmac_key_env and proxy_hmac_key_env.strip():
-            self.proxy_hmac_key = proxy_hmac_key_env.strip()
-        else:
-            self.proxy_hmac_key = self._derive_proxy_hmac_key()
 
         # 环境配置 - 智能检测
         # Docker 部署默认为生产环境，本地开发默认为开发环境
@@ -326,20 +317,6 @@ class Config:
 
         # 验证连接池配置
         self._validate_pool_config()
-
-    def _derive_proxy_hmac_key(self) -> str:
-        """
-        从 ENCRYPTION_KEY 派生 PROXY_HMAC_KEY
-
-        目的：避免把 ENCRYPTION_KEY 直接下发到 VPS（aether-proxy）。
-        """
-        if not self.encryption_key:
-            return ""
-        return hmac.new(
-            self.encryption_key.encode("utf-8"),
-            b"aether-proxy-hmac-key-v1",
-            hashlib.sha256,
-        ).hexdigest()
 
     def _auto_pool_size(self) -> int:
         """

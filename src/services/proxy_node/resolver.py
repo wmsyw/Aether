@@ -7,18 +7,13 @@
 
 from __future__ import annotations
 
-import base64
-import gzip as _gzip
 import hashlib
-import hmac as _hmac
-import json as _json
 import time
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
 
-from src.config import config
 from src.core.exceptions import ProxyNodeUnavailableError
 from src.core.logger import logger
 
@@ -81,8 +76,8 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
                 "name": node.name,
                 "ip": node.ip,
                 "port": node.port,
-                "tls_enabled": bool(node.tls_enabled),
-                "tls_cert_fingerprint": node.tls_cert_fingerprint,
+                "tunnel_mode": bool(node.tunnel_mode),
+                "tunnel_connected": bool(node.tunnel_connected),
             }
 
         _proxy_node_cache[node_id] = (value, now + _PROXY_NODE_CACHE_TTL_SECONDS)
@@ -92,44 +87,15 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
-# HMAC 签名
-# ---------------------------------------------------------------------------
-
-
-def build_hmac_proxy_url(ip: str, port: int, *, tls_enabled: bool = False) -> str:
-    """
-    构建带 HMAC BasicAuth 的 httpx proxy URL
-
-    格式: http(s)://hmac:{timestamp}.{signature}@{ip}:{port}
-    signature = HMAC-SHA256(PROXY_HMAC_KEY, "{timestamp}") 的 hex
-
-    签名不再包含 node_id，避免 proxy 重新注册后 Aether 端缓存的旧 node_id
-    与 proxy 端新 node_id 不一致导致的认证失败窗口。
-
-    当 tls_enabled=True 时使用 https:// scheme。
-    """
-    if not config.proxy_hmac_key:
-        logger.error("PROXY_HMAC_KEY 未配置，无法使用 ProxyNode 代理")
-        raise ProxyNodeUnavailableError("PROXY_HMAC_KEY 未配置，无法使用 ProxyNode 代理")
-
-    timestamp = str(int(time.time()))
-    payload = timestamp.encode("utf-8")
-    signature = _hmac.new(
-        config.proxy_hmac_key.encode("utf-8"),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-
-    host = f"[{ip}]" if ":" in ip else ip
-    scheme = "https" if tls_enabled else "http"
-    return f"{scheme}://hmac:{timestamp}.{signature}@{host}:{int(port)}"
-
-
-# ---------------------------------------------------------------------------
 # 系统默认代理
 # ---------------------------------------------------------------------------
 _system_proxy_cache: tuple[dict[str, Any] | None, float] | None = None
 _SYSTEM_PROXY_CACHE_TTL = 60.0
+
+
+def invalidate_proxy_node_cache(node_id: str) -> None:
+    """主动清除指定节点的信息缓存（tunnel 断开时调用，避免使用过期的连接状态）"""
+    _proxy_node_cache.pop(node_id, None)
 
 
 def invalidate_system_proxy_cache() -> None:
@@ -224,6 +190,32 @@ def make_proxy_param(proxy_url: str | None) -> str | httpx.Proxy | None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_effective_node(
+    connector_config: dict[str, Any] | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """
+    从 connector_config 或系统默认代理中解析有效的 proxy_node_id 及其信息。
+
+    Returns:
+        (node_id, node_info) 或 (None, None)
+    """
+    if connector_config:
+        node_id = connector_config.get("proxy_node_id")
+        if isinstance(node_id, str) and node_id.strip():
+            nid = node_id.strip()
+            return nid, _get_proxy_node_info(nid)
+
+    # 回退：系统默认代理
+    system_proxy = get_system_proxy_config()
+    if system_proxy:
+        node_id_sys = system_proxy.get("node_id")
+        if isinstance(node_id_sys, str) and node_id_sys.strip():
+            nid = node_id_sys.strip()
+            return nid, _get_proxy_node_info(nid)
+
+    return None, None
+
+
 def resolve_ops_proxy(
     connector_config: dict[str, Any] | None,
 ) -> str | httpx.Proxy | None:
@@ -235,37 +227,50 @@ def resolve_ops_proxy(
     2. connector_config.proxy（旧格式 URL 字符串）
     3. 系统默认代理节点
 
+    tunnel 模式节点不返回代理 URL（由 resolve_ops_tunnel_node_id 处理）。
+
     Args:
         connector_config: connector 的 config 字典
 
     Returns:
         httpx 可接受的代理参数（str 或 httpx.Proxy），或 None
     """
-    if connector_config:
-        # 新格式：proxy_node_id -> 通过 build_proxy_url 解析
-        node_id = connector_config.get("proxy_node_id")
-        if isinstance(node_id, str) and node_id.strip():
-            try:
-                url = build_proxy_url({"node_id": node_id.strip(), "enabled": True})
-                return make_proxy_param(url)
-            except Exception as exc:
-                logger.warning("解析 proxy_node_id={} 失败，回退到直连: {}", node_id, exc)
-                return None
+    from .tunnel_transport import is_tunnel_node
 
-        # 旧格式：直接返回 proxy URL 字符串
+    node_id, node_info = _resolve_effective_node(connector_config)
+    if node_id and node_info:
+        if is_tunnel_node(node_info):
+            return None  # tunnel 模式不使用 proxy URL
+        try:
+            url = build_proxy_url({"node_id": node_id, "enabled": True})
+            return make_proxy_param(url)
+        except Exception as exc:
+            logger.warning("解析 proxy_node_id={} 失败，回退到直连: {}", node_id, exc)
+            return None
+
+    # 旧格式：直接返回 proxy URL 字符串
+    if connector_config:
         proxy = connector_config.get("proxy")
         if isinstance(proxy, str) and proxy.strip():
             return proxy
 
-    # 回退：系统默认代理
-    system_proxy = get_system_proxy_config()
-    if system_proxy:
-        try:
-            url = build_proxy_url(system_proxy)
-            return make_proxy_param(url)
-        except Exception as exc:
-            logger.warning("构建系统默认代理 URL 失败: {}", exc)
-            return None
+    return None
+
+
+def resolve_ops_tunnel_node_id(
+    connector_config: dict[str, Any] | None,
+) -> str | None:
+    """
+    解析 ops connector 的 tunnel 节点 ID
+
+    如果配置的代理节点是 tunnel 模式且已连接，返回 node_id。
+    否则返回 None（含系统默认代理回退）。
+    """
+    from .tunnel_transport import is_tunnel_node
+
+    node_id, node_info = _resolve_effective_node(connector_config)
+    if node_id and node_info and is_tunnel_node(node_info):
+        return node_id
 
     return None
 
@@ -401,12 +406,15 @@ def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
                 return inject_auth_into_proxy_url(manual_url, username, password)
             return manual_url
 
-        # aether-proxy 节点：使用 HMAC 认证
-        return build_hmac_proxy_url(
-            node_info["ip"],
-            node_info["port"],
-            tls_enabled=node_info.get("tls_enabled", False),
-        )
+        # tunnel 模式节点：不构建 proxy URL（通过 TunnelTransport 处理）
+        from .tunnel_transport import is_tunnel_node
+
+        if is_tunnel_node(node_info):
+            return None
+
+        # aether-proxy 节点均为 tunnel 模式，不应走到这里
+        logger.warning("非 tunnel 模式的 aether-proxy 节点不再支持: node_id={}", node_id)
+        return None
 
     proxy_url: str | None = proxy_config.get("url")
     if not proxy_url:
@@ -504,11 +512,10 @@ def compute_proxy_cache_key(proxy_config: dict[str, Any] | None) -> str:
     if not proxy_config.get("enabled", True):
         return "__no_proxy__"
 
-    # ProxyNode 模式：基于 node_id + 时间桶缓存，避免签名随时间变化导致 cache key 爆炸
+    # ProxyNode 模式：基于 node_id 缓存
     node_id = proxy_config.get("node_id")
     if isinstance(node_id, str) and node_id.strip():
-        time_bucket = int(time.time() / 240)  # 240s bucket, within 300s HMAC tolerance
-        return f"proxy_node:{node_id.strip()}:{time_bucket}"
+        return f"proxy_node:{node_id.strip()}"
 
     # 构建代理 URL 作为缓存键的基础
     proxy_url = build_proxy_url(proxy_config)
@@ -520,46 +527,20 @@ def compute_proxy_cache_key(proxy_config: dict[str, Any] | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 代发模式 (Delegate API)
+# Tunnel 代理配置解析
 # ---------------------------------------------------------------------------
-
-
-def _build_hmac_auth_header() -> str:
-    """
-    构建代发请求的 Authorization 头
-
-    格式: Basic base64(hmac:{timestamp}.{signature})
-    签名算法与 build_hmac_proxy_url 相同（仅使用 timestamp，不含 node_id）。
-    """
-    if not config.proxy_hmac_key:
-        raise ProxyNodeUnavailableError("PROXY_HMAC_KEY 未配置，无法使用代发模式")
-
-    timestamp = str(int(time.time()))
-    payload = timestamp.encode("utf-8")
-    signature = _hmac.new(
-        config.proxy_hmac_key.encode("utf-8"),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-
-    cred = f"hmac:{timestamp}.{signature}"
-    encoded = base64.b64encode(cred.encode()).decode()
-    return f"Basic {encoded}"
 
 
 def resolve_delegate_config(proxy_config: dict[str, Any] | None) -> dict[str, Any] | None:
     """
-    解析代发配置（仅 aether-proxy 节点支持，手动节点/旧格式 URL 不支持）
+    解析 tunnel 代理配置（仅 aether-proxy tunnel 节点支持）
 
     无特定代理时自动回退到系统默认代理。
-    auth_header 延迟生成：通过 ``fresh_auth_header()`` 闭包在每次请求 / 重试时
-    获取新鲜的 HMAC 签名，避免长生命周期内时间戳过期。
+    tunnel 模式节点返回 {"tunnel": True, "node_id": str}，
+    调用方应使用 TunnelTransport。
 
     Returns:
-        {"delegate_url": str, "node_id": str, "tls_enabled": bool,
-         "auth_header": str,                 # 首次生成的签名（兼容旧调用）
-         "fresh_auth_header": Callable}      # 延迟生成签名的闭包
-        或 None
+        {"tunnel": True, "node_id": str} 或 None
     """
     effective_config = proxy_config
 
@@ -571,148 +552,28 @@ def resolve_delegate_config(proxy_config: dict[str, Any] | None) -> dict[str, An
 
     node_id = effective_config.get("node_id")
     if not isinstance(node_id, str) or not node_id.strip():
-        return None  # 旧格式 URL 模式不支持代发
+        return None
 
     node_id = node_id.strip()
     node_info = _get_proxy_node_info(node_id)
     if not node_info or node_info.get("is_manual"):
-        return None  # 手动节点不支持代发
+        return None
 
-    tls_enabled = node_info.get("tls_enabled", False)
-    host = f"[{node_info['ip']}]" if ":" in node_info["ip"] else node_info["ip"]
-    scheme = "https" if tls_enabled else "http"
-    delegate_url = f"{scheme}://{host}:{int(node_info['port'])}/_aether/delegate"
+    from .tunnel_transport import is_tunnel_node
 
-    # 每次调用生成新鲜签名（避免长连接内时间戳过期）
-    def _fresh() -> str:
-        return _build_hmac_auth_header()
+    if is_tunnel_node(node_info):
+        return {"tunnel": True, "node_id": node_id}
 
-    return {
-        "delegate_url": delegate_url,
-        "auth_header": _fresh(),  # 立即生成一份，兼容旧调用方
-        "fresh_auth_header": _fresh,
-        "node_id": node_id,
-        "tls_enabled": tls_enabled,
-    }
+    return None
 
 
 # ---------------------------------------------------------------------------
-# 代发请求参数构建（消除 handler 层重复代码）
-# ---------------------------------------------------------------------------
-
-_JSON_CT = "application/json"
-
-
-def _build_delegate_kwargs_core(
-    delegate_cfg: dict[str, Any],
-    *,
-    url: str,
-    headers: dict[str, str],
-    payload: Any,
-    timeout: float,
-    refresh_auth: bool = False,
-) -> dict[str, Any]:
-    """
-    构建代发请求的核心参数（post/stream 共用）
-
-    元数据通过 HTTP headers 传递（X-Delegate-Method/Url/Headers），
-    上游请求体 gzip 压缩后直接作为 HTTP body 发送，大幅减少跨国传输耗时。
-
-    Args:
-        delegate_cfg: resolve_delegate_config 返回的配置
-        url:          上游实际 URL
-        headers:      上游请求头
-        payload:      上游 JSON body（可以为 None）
-        timeout:      上游超时秒数
-        refresh_auth: 为 True 时重新生成 HMAC 签名（用于 retry）
-    """
-    auth = (
-        delegate_cfg["fresh_auth_header"]()
-        if refresh_auth
-        else delegate_cfg.get("auth_header") or delegate_cfg["fresh_auth_header"]()
-    )
-
-    # 上游 headers base64 编码
-    headers_b64 = base64.b64encode(_json.dumps(headers, ensure_ascii=False).encode("utf-8")).decode(
-        "ascii"
-    )
-
-    # 构建代发请求 headers（元数据）
-    delegate_headers: dict[str, str] = {
-        "Authorization": auth,
-        "X-Delegate-Method": "POST",
-        "X-Delegate-Url": url,
-        "X-Delegate-Headers": headers_b64,
-        "X-Delegate-Timeout": str(int(timeout)),
-    }
-
-    kwargs: dict[str, Any] = {
-        "url": delegate_cfg["delegate_url"],
-        "headers": delegate_headers,
-        "timeout": httpx.Timeout(timeout + 10),
-    }
-
-    # body gzip 压缩后直接作为 HTTP content
-    if payload is not None:
-        body_bytes = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        compressed = _gzip.compress(body_bytes)
-        kwargs["content"] = compressed
-        kwargs["headers"]["Content-Encoding"] = "gzip"
-        kwargs["headers"]["Content-Type"] = _JSON_CT
-
-    return kwargs
-
-
-def build_delegate_post_kwargs(
-    delegate_cfg: dict[str, Any],
-    *,
-    url: str,
-    headers: dict[str, str],
-    payload: Any,
-    timeout: float,
-    refresh_auth: bool = False,
-) -> dict[str, Any]:
-    """构建代发 POST 请求的 httpx kwargs（非流式，传给 client.post）"""
-    return _build_delegate_kwargs_core(
-        delegate_cfg,
-        url=url,
-        headers=headers,
-        payload=payload,
-        timeout=timeout,
-        refresh_auth=refresh_auth,
-    )
-
-
-def build_delegate_stream_kwargs(
-    delegate_cfg: dict[str, Any],
-    *,
-    url: str,
-    headers: dict[str, str],
-    payload: Any,
-    timeout: float,
-    refresh_auth: bool = False,
-) -> dict[str, Any]:
-    """构建代发 stream 请求的 httpx kwargs（传给 client.stream）"""
-    kwargs = _build_delegate_kwargs_core(
-        delegate_cfg,
-        url=url,
-        headers=headers,
-        payload=payload,
-        timeout=timeout,
-        refresh_auth=refresh_auth,
-    )
-    # stream() 需要显式 method 参数
-    kwargs["method"] = "POST"
-    return kwargs
-
-
-# ---------------------------------------------------------------------------
-# 统一上游请求参数构建（消除 handler 层 delegate/直连 分支重复）
+# 统一上游请求参数构建
 # ---------------------------------------------------------------------------
 
 
 def build_post_kwargs(
-    delegate_cfg: dict[str, Any] | None,
+    _delegate_cfg: dict[str, Any] | None = None,
     *,
     url: str,
     headers: dict[str, str],
@@ -721,19 +582,13 @@ def build_post_kwargs(
     refresh_auth: bool = False,
 ) -> dict[str, Any]:
     """
-    构建上游 POST 请求的 httpx kwargs（自动选择代发或直连模式）
+    构建上游 POST 请求的 httpx kwargs
 
     返回的 dict 可直接传给 ``http_client.post(**kwargs)``。
+
+    ``_delegate_cfg`` 和 ``refresh_auth`` 已废弃（tunnel 模式下认证由 transport 层处理），
+    保留仅为兼容现有调用方签名。
     """
-    if delegate_cfg:
-        return build_delegate_post_kwargs(
-            delegate_cfg,
-            url=url,
-            headers=headers,
-            payload=payload,
-            timeout=timeout,
-            refresh_auth=refresh_auth,
-        )
     return {
         "url": url,
         "json": payload,
@@ -743,7 +598,7 @@ def build_post_kwargs(
 
 
 def build_stream_kwargs(
-    delegate_cfg: dict[str, Any] | None,
+    _delegate_cfg: dict[str, Any] | None = None,
     *,
     url: str,
     headers: dict[str, str],
@@ -751,21 +606,13 @@ def build_stream_kwargs(
     timeout: float | None = None,
 ) -> dict[str, Any]:
     """
-    构建上游 stream 请求的 httpx kwargs（自动选择代发或直连模式）
+    构建上游 stream 请求的 httpx kwargs
 
     返回的 dict 可直接传给 ``http_client.stream(**kwargs)``。
+    当 ``timeout`` 为 None 时由外层 asyncio.wait_for 控制超时。
 
-    当 ``timeout`` 为 None（直连模式下由外层 asyncio.wait_for 控制超时），
-    直连分支不设置 timeout；代发分支始终携带 timeout（proxy 协议需要）。
+    ``_delegate_cfg`` 已废弃，保留仅为兼容现有调用方签名。
     """
-    if delegate_cfg:
-        return build_delegate_stream_kwargs(
-            delegate_cfg,
-            url=url,
-            headers=headers,
-            payload=payload,
-            timeout=timeout or 60,
-        )
     kwargs: dict[str, Any] = {
         "method": "POST",
         "url": url,

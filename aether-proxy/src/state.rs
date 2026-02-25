@@ -1,42 +1,45 @@
 //! Shared application state passed to all subsystems.
-//!
-//! Consolidates the multiple `Arc<...>` parameters that were previously
-//! threaded individually through proxy server, heartbeat, and handlers.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio::sync::Semaphore;
-use tokio_rustls::TlsAcceptor;
-
 use crate::config::Config;
-use crate::hardware::HardwareInfo;
-use crate::proxy::delegate_client::DelegateClient;
-use crate::proxy::target_filter::DnsCache;
 use crate::registration::client::AetherClient;
 use crate::runtime::SharedDynamicConfig;
+use crate::target_filter::DnsCache;
 
-/// Central application state shared across all tasks.
+/// Central application state shared across all servers/tunnels.
 pub struct AppState {
     pub config: Arc<Config>,
-    pub node_id: Arc<RwLock<String>>,
-    pub dynamic: SharedDynamicConfig,
-    pub aether_client: Arc<AetherClient>,
-    pub hardware_info: Arc<HardwareInfo>,
-    pub public_ip: String,
-    pub tls_fingerprint: Option<String>,
-    pub tls_acceptor: Option<TlsAcceptor>,
-    /// Shared delegate client for proxy-initiated upstream requests.
-    pub delegate_client: DelegateClient,
-    /// Active connection count for metrics reporting.
-    pub active_connections: Arc<AtomicU64>,
-    /// Connection concurrency limiter.
-    pub connection_semaphore: Arc<Semaphore>,
-    /// DNS cache for upstream target resolution.
+    /// DNS cache for upstream target resolution (shared).
     pub dns_cache: Arc<DnsCache>,
-    /// Request/latency metrics for heartbeat.
+    /// Reqwest client for tunnel upstream requests (shared).
+    pub reqwest_client: reqwest::Client,
+}
+
+/// Per-server state: one instance per Aether server connection.
+pub struct ServerContext {
+    /// Human-readable label for logging (e.g. "server-0").
+    pub server_label: String,
+    /// Aether server URL for this connection.
+    pub aether_url: String,
+    /// Management token for this server.
+    pub management_token: String,
+    /// Resolved node name (per-server override or global fallback).
+    pub node_name: String,
+    /// Node ID assigned by this Aether server.
+    pub node_id: Arc<RwLock<String>>,
+    /// API client for this server.
+    pub aether_client: Arc<AetherClient>,
+    /// Dynamic config from this server's heartbeat ACKs.
+    pub dynamic: SharedDynamicConfig,
+    /// Per-server active connection count.
+    pub active_connections: Arc<AtomicU64>,
+    /// Per-server request/latency metrics.
     pub metrics: Arc<ProxyMetrics>,
+    /// Reconnect attempt counter (reset on successful connection).
+    pub reconnect_attempts: AtomicU32,
 }
 
 /// Aggregate metrics for reporting to Aether.

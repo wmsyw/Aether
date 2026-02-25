@@ -1033,10 +1033,11 @@ class ProviderOpsService:
             list(headers.keys()),
         )
 
-        # 获取代理配置（支持 proxy_node_id 和旧的 proxy URL）
-        from src.services.proxy_node.resolver import resolve_ops_proxy
+        # 获取代理配置（支持 proxy_node_id、tunnel 模式和旧的 proxy URL）
+        from src.services.proxy_node.resolver import resolve_ops_proxy, resolve_ops_tunnel_node_id
 
         proxy = resolve_ops_proxy(config)
+        tunnel_node_id = resolve_ops_tunnel_node_id(config)
 
         try:
             # 构建 httpx client 参数
@@ -1044,7 +1045,12 @@ class ProviderOpsService:
                 "timeout": 30.0,
                 "verify": get_ssl_context(),
             }
-            if proxy:
+            if tunnel_node_id:
+                from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+                client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=30.0)
+                logger.debug("使用 tunnel 代理: node_id={}", tunnel_node_id)
+            elif proxy:
                 client_kwargs["proxy"] = proxy
                 logger.debug("使用代理: {}", proxy)
 

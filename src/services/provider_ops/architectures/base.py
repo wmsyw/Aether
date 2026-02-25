@@ -51,9 +51,10 @@ class ProviderConnector(ABC):
         self._last_error: str | None = None
 
         # 代理配置（支持 proxy_node_id 和旧的 proxy URL）
-        from src.services.proxy_node.resolver import resolve_ops_proxy
+        from src.services.proxy_node.resolver import resolve_ops_proxy, resolve_ops_tunnel_node_id
 
         self._proxy: str | httpx.Proxy | None = resolve_ops_proxy(self.config)
+        self._tunnel_node_id: str | None = resolve_ops_tunnel_node_id(self.config)
 
         # HTTP 客户端配置
         self._timeout = self.config.get("timeout", 30)
@@ -117,13 +118,18 @@ class ProviderConnector(ABC):
         """
         获取已认证的 HTTP 客户端
 
-        使用 context manager 确保资源正确释放
+        使用 context manager 确保资源正确释放。
+        tunnel 模式下使用 TunnelTransport 替代 proxy transport。
 
         Yields:
             已配置认证信息的 AsyncClient
         """
         transport = None
-        if self._proxy:
+        if self._tunnel_node_id:
+            from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+            transport = TunnelTransport(self._tunnel_node_id, timeout=self._timeout)
+        elif self._proxy:
             transport = httpx.AsyncHTTPTransport(proxy=self._proxy)
 
         async with httpx.AsyncClient(

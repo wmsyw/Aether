@@ -16,6 +16,7 @@ from src.api.handlers.base.chat_adapter_base import ChatAdapterBase, register_ad
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
 from src.core.api_format import ApiFamily, get_auth_handler
 from src.core.api_format.enums import AuthMethod
+from src.core.api_format.headers import BROWSER_FINGERPRINT_HEADERS
 from src.core.logger import logger
 from src.models.gemini import GeminiRequest
 from src.services.provider.transport import redact_url_for_log
@@ -197,7 +198,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         else:
             models_url = f"{base_url_clean}/v1beta/models?key={api_key}"
 
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {**BROWSER_FINGERPRINT_HEADERS}
         if extra_headers:
             headers.update(extra_headers)
 

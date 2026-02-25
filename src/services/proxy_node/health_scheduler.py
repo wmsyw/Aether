@@ -1,9 +1,10 @@
 """
 ProxyNode 心跳检测调度器
 
-定期检查 proxy_nodes 的 last_heartbeat_at，更新节点状态：
-- elapsed > interval * 3  -> unhealthy
-- elapsed > interval * 10 -> offline
+定期检查 proxy_nodes 的 tunnel 连接状态，更新节点状态：
+- tunnel_connected=True  -> ONLINE
+- tunnel 刚断开 (<60s)   -> UNHEALTHY（缓冲期，避免正在进行的请求被立即切走）
+- tunnel 断开超过 60s    -> OFFLINE
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ class ProxyNodeHealthScheduler:
         try:
             now = datetime.now(timezone.utc)
             # 仅检查非手动节点（手动节点无心跳，始终保持 ONLINE）
+            # 非手动节点均为 tunnel 模式，由 tunnel 连接状态决定
             nodes = (
                 db.query(ProxyNode)
                 .filter(
@@ -69,19 +71,16 @@ class ProxyNodeHealthScheduler:
 
             changed = 0
             for node in nodes:
-                interval = int(node.heartbeat_interval or 30)
-                last = node.last_heartbeat_at
-
-                if last is None:
-                    new_status = ProxyNodeStatus.OFFLINE
+                if node.tunnel_connected:
+                    new_status = ProxyNodeStatus.ONLINE
+                elif node.tunnel_connected_at:
+                    # tunnel 刚断开：给 60s 缓冲期标记为 UNHEALTHY
+                    elapsed = (now - node.tunnel_connected_at).total_seconds()
+                    new_status = (
+                        ProxyNodeStatus.UNHEALTHY if elapsed < 60 else ProxyNodeStatus.OFFLINE
+                    )
                 else:
-                    elapsed = (now - last).total_seconds()
-                    if elapsed > interval * 10:
-                        new_status = ProxyNodeStatus.OFFLINE
-                    elif elapsed > interval * 3:
-                        new_status = ProxyNodeStatus.UNHEALTHY
-                    else:
-                        new_status = ProxyNodeStatus.ONLINE
+                    new_status = ProxyNodeStatus.OFFLINE
 
                 if node.status != new_status:
                     node.status = new_status

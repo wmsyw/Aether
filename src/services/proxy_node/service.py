@@ -17,10 +17,9 @@ import httpx
 from sqlalchemy.orm import Session
 
 from src.core.exceptions import InvalidRequestException, NotFoundException
-from src.models.database import ProxyNode, ProxyNodeStatus, SystemConfig
+from src.models.database import Provider, ProviderEndpoint, ProxyNode, ProxyNodeStatus, SystemConfig
 
 from .resolver import (
-    build_hmac_proxy_url,
     inject_auth_into_proxy_url,
     invalidate_system_proxy_cache,
     make_proxy_param,
@@ -50,14 +49,15 @@ def node_to_dict(node: ProxyNode) -> dict[str, Any]:
         "region": node.region,
         "status": node.status.value if node.status else None,
         "is_manual": bool(node.is_manual),
+        "tunnel_mode": bool(node.tunnel_mode),
+        "tunnel_connected": bool(node.tunnel_connected),
+        "tunnel_connected_at": node.tunnel_connected_at,
         "registered_by": node.registered_by,
         "last_heartbeat_at": node.last_heartbeat_at,
         "heartbeat_interval": node.heartbeat_interval,
         "active_connections": node.active_connections,
         "total_requests": node.total_requests,
         "avg_latency_ms": node.avg_latency_ms,
-        "tls_enabled": bool(node.tls_enabled),
-        "tls_cert_fingerprint": node.tls_cert_fingerprint,
         "hardware_info": node.hardware_info,
         "estimated_max_concurrency": node.estimated_max_concurrency,
         "remote_config": node.remote_config,
@@ -166,8 +166,8 @@ def _build_test_proxy_url(node: ProxyNode) -> str:
             )
         return proxy_url
     else:
-        # aether-proxy: 使用 HMAC 认证构建代理 URL
-        return build_hmac_proxy_url(node.ip, node.port, tls_enabled=bool(node.tls_enabled))
+        # aether-proxy 节点均为 tunnel 模式，不支持通过代理 URL 测试
+        raise InvalidRequestException("aether-proxy tunnel 节点不支持代理 URL 连通性测试")
 
 
 # ---------------------------------------------------------------------------
@@ -187,27 +187,36 @@ class ProxyNodeService:
         port: int,
         region: str | None = None,
         heartbeat_interval: int = 30,
-        tls_enabled: bool = False,
-        tls_cert_fingerprint: str | None = None,
         hardware_info: dict[str, Any] | None = None,
         estimated_max_concurrency: int | None = None,
         active_connections: int | None = None,
         total_requests: int | None = None,
         avg_latency_ms: float | None = None,
         registered_by: str | None = None,
+        tunnel_mode: bool = False,
     ) -> ProxyNode:
-        """注册或更新 aether-proxy 节点（按 ip+port upsert）"""
+        """注册或更新 aether-proxy 节点
+
+        tunnel 模式按 name upsert（port 固定为 0，同 IP 可能有多个实例）；
+        旧模式按 ip+port upsert（向后兼容）。
+        """
         now = datetime.now(timezone.utc)
 
-        node = db.query(ProxyNode).filter(ProxyNode.ip == ip, ProxyNode.port == port).first()
+        if tunnel_mode:
+            node = (
+                db.query(ProxyNode)
+                .filter(ProxyNode.name == name, ProxyNode.is_manual == False)  # noqa: E712
+                .first()
+            )
+        else:
+            node = db.query(ProxyNode).filter(ProxyNode.ip == ip, ProxyNode.port == port).first()
         if node:
             node.name = name
             node.region = region
             node.status = ProxyNodeStatus.ONLINE
             node.last_heartbeat_at = now
             node.heartbeat_interval = heartbeat_interval
-            node.tls_enabled = tls_enabled
-            node.tls_cert_fingerprint = tls_cert_fingerprint
+            node.tunnel_mode = tunnel_mode
             if hardware_info is not None:
                 node.hardware_info = hardware_info
             if estimated_max_concurrency is not None:
@@ -232,10 +241,9 @@ class ProxyNodeService:
                 active_connections=active_connections or 0,
                 total_requests=total_requests or 0,
                 avg_latency_ms=avg_latency_ms,
-                tls_enabled=tls_enabled,
-                tls_cert_fingerprint=tls_cert_fingerprint,
                 hardware_info=hardware_info,
                 estimated_max_concurrency=estimated_max_concurrency,
+                tunnel_mode=tunnel_mode,
                 created_at=now,
                 updated_at=now,
             )
@@ -424,6 +432,21 @@ class ProxyNodeService:
             sys_cfg.value = None
             was_system_proxy = True
 
+        # 清理引用该节点的 Provider / ProviderEndpoint 的 proxy 字段（批量 SQL 更新）
+        cleared_providers = (
+            db.query(Provider)
+            .filter(Provider.proxy.isnot(None), Provider.proxy["node_id"].as_string() == node_id)
+            .update({"proxy": None}, synchronize_session="fetch")
+        )
+        cleared_endpoints = (
+            db.query(ProviderEndpoint)
+            .filter(
+                ProviderEndpoint.proxy.isnot(None),
+                ProviderEndpoint.proxy["node_id"].as_string() == node_id,
+            )
+            .update({"proxy": None}, synchronize_session="fetch")
+        )
+
         node_info = {"proxy_node_ip": node.ip, "proxy_node_port": node.port}
         db.delete(node)
         db.commit()
@@ -435,6 +458,8 @@ class ProxyNodeService:
             "node_id": node_id,
             "node_info": node_info,
             "cleared_system_proxy": was_system_proxy,
+            "cleared_providers": cleared_providers,
+            "cleared_endpoints": cleared_endpoints,
         }
 
     @staticmethod

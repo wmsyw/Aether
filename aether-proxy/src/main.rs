@@ -1,13 +1,13 @@
 mod app;
-mod auth;
 mod config;
 mod hardware;
 mod net;
-mod proxy;
 mod registration;
 mod runtime;
 mod setup;
 mod state;
+mod target_filter;
+mod tunnel;
 
 use std::path::PathBuf;
 
@@ -135,5 +135,28 @@ async fn run_proxy(config: Config) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    app::run(config).await
+    // Resolve server list: prefer [[servers]] from TOML, fall back to CLI/env single server.
+    let config_path =
+        std::env::var("AETHER_PROXY_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
+    let servers = if std::path::Path::new(&config_path).exists() {
+        config::ConfigFile::load(std::path::Path::new(&config_path))
+            .ok()
+            .map(|f| f.effective_servers())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                vec![config::ServerEntry {
+                    aether_url: config.aether_url.clone(),
+                    management_token: config.management_token.clone(),
+                    node_name: None,
+                }]
+            })
+    } else {
+        vec![config::ServerEntry {
+            aether_url: config.aether_url.clone(),
+            management_token: config.management_token.clone(),
+            node_name: None,
+        }]
+    };
+
+    app::run(config, servers).await
 }

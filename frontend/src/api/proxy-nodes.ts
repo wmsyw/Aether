@@ -5,7 +5,6 @@ export interface ProxyNodeRemoteConfig {
   allowed_ports?: number[]
   log_level?: string
   heartbeat_interval?: number
-  timestamp_tolerance?: number
 }
 
 export interface ProxyNode {
@@ -16,6 +15,9 @@ export interface ProxyNode {
   region: string | null
   status: 'online' | 'unhealthy' | 'offline'
   is_manual: boolean
+  tunnel_mode: boolean
+  tunnel_connected: boolean
+  tunnel_connected_at: string | null
   // 手动节点专用字段
   proxy_url?: string
   proxy_username?: string
@@ -99,11 +101,6 @@ export const proxyNodesApi = {
 
   async testProxyUrl(data: { proxy_url: string; username?: string; password?: string }): Promise<ProxyNodeTestResult> {
     const response = await apiClient.post<ProxyNodeTestResult>('/api/admin/proxy-nodes/test-url', data)
-    return response.data
-  },
-
-  async getHmacKey(): Promise<{ proxy_hmac_key: string }> {
-    const response = await apiClient.get<{ proxy_hmac_key: string }>('/api/admin/proxy-nodes/hmac-key')
     return response.data
   },
 }
