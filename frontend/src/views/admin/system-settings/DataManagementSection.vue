@@ -1,0 +1,132 @@
+<template>
+  <CardSection
+    title="数据管理"
+    description="清空系统数据，操作不可逆，请谨慎使用"
+  >
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div
+        v-for="item in purgeItems"
+        :key="item.key"
+        class="flex flex-col gap-2 p-4 rounded-lg border border-border"
+      >
+        <div class="flex items-center gap-2">
+          <component
+            :is="item.icon"
+            class="w-4 h-4 text-muted-foreground"
+          />
+          <span class="text-sm font-medium">{{ item.title }}</span>
+        </div>
+        <p class="text-xs text-muted-foreground flex-1">
+          {{ item.description }}
+        </p>
+        <Button
+          variant="destructive"
+          size="sm"
+          class="w-full mt-1"
+          :disabled="loadingKey === item.key"
+          @click="handlePurge(item)"
+        >
+          <Trash2 class="w-3.5 h-3.5 mr-1.5" />
+          {{ loadingKey === item.key ? '清空中...' : item.buttonText }}
+        </Button>
+      </div>
+    </div>
+  </CardSection>
+</template>
+
+<script setup lang="ts">
+import { ref, markRaw, type Component } from 'vue'
+import { Trash2, Settings, Users, BarChart3, Shield, FileText, PieChart } from 'lucide-vue-next'
+import Button from '@/components/ui/button.vue'
+import { CardSection } from '@/components/layout'
+import { adminApi } from '@/api/admin'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
+import { parseApiError } from '@/utils/errorParser'
+
+interface PurgeItem {
+  key: string
+  title: string
+  description: string
+  buttonText: string
+  icon: Component
+  confirmMessage: string
+  action: () => Promise<{ message: string }>
+}
+
+const { success, error } = useToast()
+const { confirmDanger } = useConfirm()
+const loadingKey = ref<string | null>(null)
+
+const purgeItems: PurgeItem[] = [
+  {
+    key: 'config',
+    title: '清空配置',
+    description: '删除所有提供商、端点、API Key 和模型配置',
+    buttonText: '清空配置',
+    icon: markRaw(Settings),
+    confirmMessage: '确定要清空所有提供商配置吗？这将删除所有提供商、端点、API Key 和模型配置，操作不可逆。',
+    action: () => adminApi.purgeConfig(),
+  },
+  {
+    key: 'users',
+    title: '清空用户',
+    description: '删除所有非管理员用户及其 API Keys',
+    buttonText: '清空用户',
+    icon: markRaw(Users),
+    confirmMessage: '确定要清空所有非管理员用户吗？管理员账户将被保留，操作不可逆。',
+    action: () => adminApi.purgeUsers(),
+  },
+  {
+    key: 'usage',
+    title: '清空使用记录',
+    description: '删除全部使用记录和请求候选记录',
+    buttonText: '清空记录',
+    icon: markRaw(BarChart3),
+    confirmMessage: '确定要清空全部使用记录吗？所有请求统计数据将被永久删除，操作不可逆。',
+    action: () => adminApi.purgeUsage(),
+  },
+  {
+    key: 'audit-logs',
+    title: '清空审计日志',
+    description: '删除全部审计日志记录',
+    buttonText: '清空日志',
+    icon: markRaw(Shield),
+    confirmMessage: '确定要清空全部审计日志吗？所有安全事件记录将被永久删除，操作不可逆。',
+    action: () => adminApi.purgeAuditLogs(),
+  },
+  {
+    key: 'request-bodies',
+    title: '清空请求体',
+    description: '清空所有请求/响应体数据，保留统计信息',
+    buttonText: '清空请求体',
+    icon: markRaw(FileText),
+    confirmMessage: '确定要清空全部请求体吗？请求/响应内容将被清除，但 token 和成本等统计信息会保留，操作不可逆。',
+    action: () => adminApi.purgeRequestBodies(),
+  },
+  {
+    key: 'stats',
+    title: '清空聚合数据',
+    description: '清空仪表盘统计和聚合数据，保留原始使用记录',
+    buttonText: '清空聚合数据',
+    icon: markRaw(PieChart),
+    confirmMessage: '确定要清空全部聚合统计数据吗？仪表盘数据将被清除，用户和 Key 的累计统计也会归零，操作不可逆。',
+    action: () => adminApi.purgeStats(),
+  },
+]
+
+async function handlePurge(item: PurgeItem) {
+  const confirmed = await confirmDanger(item.confirmMessage, item.title)
+  if (!confirmed) return
+
+  loadingKey.value = item.key
+  try {
+    const result = await item.action()
+    success(result.message)
+  } catch (e) {
+    error(parseApiError(e))
+  } finally {
+    loadingKey.value = null
+  }
+}
+</script>

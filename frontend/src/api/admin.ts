@@ -448,6 +448,11 @@ export interface ApiKeyLockResponse {
   message: string
 }
 
+async function purge<T>(target: string): Promise<T> {
+  const response = await apiClient.post<T>(`/api/admin/system/purge/${target}`)
+  return response.data
+}
+
 // 管理员API密钥管理相关API
 export const adminApi = {
   // 获取所有独立余额Keys列表
@@ -849,6 +854,14 @@ export const adminApi = {
     })
     return response.data
   },
+
+  // 数据清空
+  purgeConfig: () => purge<{ message: string; deleted: Record<string, number> }>('config'),
+  purgeUsers: () => purge<{ message: string; deleted: Record<string, number> }>('users'),
+  purgeUsage: () => purge<{ message: string; deleted: Record<string, number> }>('usage'),
+  purgeAuditLogs: () => purge<{ message: string; deleted: Record<string, number> }>('audit-logs'),
+  purgeRequestBodies: () => purge<{ message: string; cleaned: Record<string, number> }>('request-bodies'),
+  purgeStats: () => purge<{ message: string }>('stats'),
 
   async getTimeSeries(params?: {
     start_date?: string

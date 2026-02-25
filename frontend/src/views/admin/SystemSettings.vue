@@ -39,6 +39,9 @@
             @file-select="handleUsersFileSelect"
           />
 
+          <!-- 数据管理 -->
+          <DataManagementSection id="section-data-mgmt" />
+
           <!-- 网络代理 -->
           <ProxyConfigSection
             id="section-proxy"
@@ -201,6 +204,7 @@ import { useScheduledTasks } from './system-settings/composables/useScheduledTas
 import SiteInfoSection from './system-settings/SiteInfoSection.vue'
 import ConfigManagementSection from './system-settings/ConfigManagementSection.vue'
 import UserDataSection from './system-settings/UserDataSection.vue'
+import DataManagementSection from './system-settings/DataManagementSection.vue'
 import ProxyConfigSection from './system-settings/ProxyConfigSection.vue'
 import BasicConfigSection from './system-settings/BasicConfigSection.vue'
 import RequestLogSection from './system-settings/RequestLogSection.vue'
@@ -219,6 +223,7 @@ const tocItems = [
   { id: 'section-site-info', label: '站点信息' },
   { id: 'section-config-mgmt', label: '配置管理' },
   { id: 'section-user-data', label: '用户数据管理' },
+  { id: 'section-data-mgmt', label: '数据管理' },
   { id: 'section-proxy', label: '网络代理' },
   { id: 'section-basic', label: '基础配置' },
   { id: 'section-request-log', label: '请求记录' },
