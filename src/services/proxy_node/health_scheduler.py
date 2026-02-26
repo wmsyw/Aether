@@ -2,7 +2,7 @@
 ProxyNode 心跳检测调度器
 
 定期检查 proxy_nodes 的 tunnel 连接状态，更新节点状态：
-- tunnel_connected=True  -> ONLINE
+- tunnel 实际连接中      -> ONLINE（包括从 OFFLINE 恢复的情况）
 - tunnel 刚断开 (<60s)   -> UNHEALTHY（缓冲期，避免正在进行的请求被立即切走）
 - tunnel 断开超过 60s    -> OFFLINE
 """
@@ -59,12 +59,12 @@ class ProxyNodeHealthScheduler:
         db = create_session()
         try:
             now = datetime.now(timezone.utc)
-            # 仅检查非手动节点（手动节点无心跳，始终保持 ONLINE）
-            # 非手动节点均为 tunnel 模式，由 tunnel 连接状态决定
+            # 检查所有非手动节点（手动节点无心跳，始终保持 ONLINE）
+            # 包括 OFFLINE 节点：tunnel 重连后如果 _update_tunnel_status 失败，
+            # 健康检查需要能根据 TunnelManager 内存状态将其恢复为 ONLINE
             nodes = (
                 db.query(ProxyNode)
                 .filter(
-                    ProxyNode.status != ProxyNodeStatus.OFFLINE,
                     ProxyNode.is_manual == False,  # noqa: E712
                 )
                 .all()

@@ -1767,6 +1767,17 @@ function shouldAutoRefreshKiroQuota(): boolean {
   return false
 }
 
+// 将配额刷新结果就地应用到现有 key 上，避免重新拉列表导致分页重置
+function applyQuotaResults(results: { key_id: string; status: string; metadata?: Record<string, unknown> }[]) {
+  for (const r of results) {
+    if (r.status !== 'success' || !r.metadata) continue
+    const target = providerKeys.value.find(k => k.id === r.key_id)
+    if (target) {
+      target.upstream_metadata = { ...target.upstream_metadata, ...r.metadata } as typeof target.upstream_metadata
+    }
+  }
+}
+
 // 通用的自动刷新配额函数（支持 Codex、Antigravity 和 Kiro）
 async function autoRefreshQuotaInBackground() {
   if (!props.providerId) return
@@ -1799,8 +1810,8 @@ async function autoRefreshQuotaInBackground() {
   try {
     const result = await refreshProviderQuota(props.providerId)
     if (result.success > 0) {
-      // 重新加载 keys 以更新配额显示
-      await loadEndpoints()
+      // 就地更新 key 的 upstream_metadata，避免重新拉列表导致分页重置
+      applyQuotaResults(result.results)
     } else if (!hadCachedQuota && providerType === 'antigravity') {
       showError('没有获取到配额信息（请检查账号是否已授权、project_id 是否存在）', '提示')
     }
@@ -1824,7 +1835,7 @@ async function openAntigravityQuotaDialog(key: EndpointAPIKey) {
     try {
       const result = await refreshProviderQuota(props.providerId)
       if (result.success > 0) {
-        await loadEndpoints()
+        applyQuotaResults(result.results)
         // 更新弹窗引用的 key 数据
         const updated = allKeys.value.find(({ key: k }) => k.id === key.id)
         if (updated) {

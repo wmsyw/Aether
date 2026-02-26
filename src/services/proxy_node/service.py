@@ -312,7 +312,7 @@ class ProxyNodeService:
         total_requests: int | None = None,
         avg_latency_ms: float | None = None,
     ) -> ProxyNode:
-        """处理节点心跳（仅 tunnel 模式节点，心跳更新指标但不改变状态）"""
+        """处理节点心跳（仅 tunnel 模式节点，更新指标并修正状态不一致）"""
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
         if not node:
             raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
@@ -323,7 +323,12 @@ class ProxyNodeService:
             )
 
         now = datetime.now(timezone.utc)
-        # 状态由 tunnel WebSocket 连接建立/断开时决定，心跳仅更新指标
+        # 心跳通过 tunnel 连接传输，能收到心跳说明 tunnel 一定连通。
+        # 如果状态不是 ONLINE（例如 _update_tunnel_status 执行失败），修正状态。
+        if node.status != ProxyNodeStatus.ONLINE:
+            node.status = ProxyNodeStatus.ONLINE
+            node.tunnel_connected = True
+            node.updated_at = now
         node.last_heartbeat_at = now
         if heartbeat_interval is not None:
             node.heartbeat_interval = heartbeat_interval
