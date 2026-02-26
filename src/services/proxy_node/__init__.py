@@ -14,6 +14,7 @@ from .resolver import (
     make_proxy_param,
     resolve_delegate_config,
     resolve_ops_proxy,
+    resolve_ops_proxy_config,
     resolve_ops_tunnel_node_id,
     resolve_proxy_info,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "invalidate_system_proxy_cache",
     "resolve_delegate_config",
     "resolve_ops_proxy",
+    "resolve_ops_proxy_config",
     "resolve_ops_tunnel_node_id",
     "resolve_proxy_info",
 ]

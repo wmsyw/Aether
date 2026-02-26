@@ -232,10 +232,10 @@ class YesCodeArchitecture(ProviderArchitecture):
 
         cookie_header = _build_cookie_header(cookie_input)
 
-        # 获取代理配置（支持 proxy_node_id 和旧的 proxy URL）
-        from src.services.proxy_node.resolver import resolve_ops_proxy
+        # 获取代理配置（支持 proxy_node_id、tunnel 和旧的 proxy URL）
+        from src.services.proxy_node.resolver import resolve_ops_proxy_config
 
-        proxy = resolve_ops_proxy(config)
+        proxy, tunnel_node_id = resolve_ops_proxy_config(config)
 
         try:
             # 构建 client 参数
@@ -244,7 +244,11 @@ class YesCodeArchitecture(ProviderArchitecture):
                 "timeout": 10.0,
                 "verify": get_ssl_context(),
             }
-            if proxy:
+            if tunnel_node_id:
+                from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+                client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=10.0)
+            elif proxy:
                 client_kwargs["proxy"] = proxy
 
             # 创建临时 client 获取合并数据

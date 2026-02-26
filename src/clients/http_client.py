@@ -204,6 +204,13 @@ class HTTPClientPool:
         if not proxy_config:
             proxy_config = get_system_proxy_config()
 
+        # tunnel 模式检查：tunnel 节点走专用的 TunnelTransport 客户端
+        from src.services.proxy_node.resolver import resolve_delegate_config
+
+        delegate_cfg = resolve_delegate_config(proxy_config)
+        if delegate_cfg and delegate_cfg.get("tunnel"):
+            return await cls._get_tunnel_client(delegate_cfg["node_id"])
+
         cache_key = compute_proxy_cache_key(proxy_config)
 
         # 无代理时返回默认客户端

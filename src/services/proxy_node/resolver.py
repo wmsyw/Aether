@@ -216,63 +216,67 @@ def _resolve_effective_node(
     return None, None
 
 
-def resolve_ops_proxy(
+def resolve_ops_proxy_config(
     connector_config: dict[str, Any] | None,
-) -> str | httpx.Proxy | None:
+) -> tuple[str | httpx.Proxy | None, str | None]:
     """
-    从 ops connector.config 中解析代理参数（含系统默认回退）
+    一次解析 ops connector 的代理参数和 tunnel 节点 ID
+
+    合并 resolve_ops_proxy + resolve_ops_tunnel_node_id，避免重复调用
+    _resolve_effective_node。两个返回值互斥：tunnel 模式时 proxy 为 None，
+    非 tunnel 模式时 tunnel_node_id 为 None。
 
     优先级：
     1. connector_config.proxy_node_id（新格式）
     2. connector_config.proxy（旧格式 URL 字符串）
     3. 系统默认代理节点
 
-    tunnel 模式节点不返回代理 URL（由 resolve_ops_tunnel_node_id 处理）。
-
-    Args:
-        connector_config: connector 的 config 字典
-
     Returns:
-        httpx 可接受的代理参数（str 或 httpx.Proxy），或 None
+        (proxy, tunnel_node_id)
     """
     from .tunnel_transport import is_tunnel_node
 
     node_id, node_info = _resolve_effective_node(connector_config)
     if node_id and node_info:
         if is_tunnel_node(node_info):
-            return None  # tunnel 模式不使用 proxy URL
+            return None, node_id
         try:
             url = build_proxy_url({"node_id": node_id, "enabled": True})
-            return make_proxy_param(url)
+            return make_proxy_param(url), None
         except Exception as exc:
             logger.warning("解析 proxy_node_id={} 失败，回退到直连: {}", node_id, exc)
-            return None
+            return None, None
 
     # 旧格式：直接返回 proxy URL 字符串
     if connector_config:
         proxy = connector_config.get("proxy")
         if isinstance(proxy, str) and proxy.strip():
-            return proxy
+            return proxy, None
 
-    return None
+    return None, None
+
+
+def resolve_ops_proxy(
+    connector_config: dict[str, Any] | None,
+) -> str | httpx.Proxy | None:
+    """从 ops connector.config 中解析代理参数（含系统默认回退）
+
+    tunnel 模式节点不返回代理 URL。
+    如需同时获取 tunnel_node_id，请使用 resolve_ops_proxy_config 避免重复解析。
+    """
+    proxy, _ = resolve_ops_proxy_config(connector_config)
+    return proxy
 
 
 def resolve_ops_tunnel_node_id(
     connector_config: dict[str, Any] | None,
 ) -> str | None:
+    """解析 ops connector 的 tunnel 节点 ID
+
+    如需同时获取 proxy，请使用 resolve_ops_proxy_config 避免重复解析。
     """
-    解析 ops connector 的 tunnel 节点 ID
-
-    如果配置的代理节点是 tunnel 模式且已连接，返回 node_id。
-    否则返回 None（含系统默认代理回退）。
-    """
-    from .tunnel_transport import is_tunnel_node
-
-    node_id, node_info = _resolve_effective_node(connector_config)
-    if node_id and node_info and is_tunnel_node(node_info):
-        return node_id
-
-    return None
+    _, tunnel_node_id = resolve_ops_proxy_config(connector_config)
+    return tunnel_node_id
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +357,16 @@ def build_proxy_client_kwargs(
         verify = get_ssl_context()
 
     kwargs: dict[str, Any] = {"timeout": timeout, "verify": verify, **extra}
+
+    # tunnel 模式优先：当代理节点为 tunnel 模式时，使用 TunnelTransport
+    delegate_cfg = resolve_delegate_config(proxy_config)
+    if delegate_cfg and delegate_cfg.get("tunnel"):
+        from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+        timeout_secs = timeout if isinstance(timeout, (int, float)) else 60.0
+        kwargs["transport"] = TunnelTransport(delegate_cfg["node_id"], timeout=timeout_secs)
+        return kwargs
+
     proxy_param = resolve_proxy_param(proxy_config)
     if proxy_param:
         kwargs["proxy"] = proxy_param

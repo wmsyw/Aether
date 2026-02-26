@@ -99,12 +99,17 @@ class _Sub2ApiTokenMixin:
     base_url: str
     _timeout: int | float
     _proxy: str | httpx.Proxy | None
+    _tunnel_node_id: str | None
 
     @asynccontextmanager
     async def _get_raw_client(self) -> AsyncIterator[httpx.AsyncClient]:
         """获取不带 auth hook 的裸 HTTP 客户端（用于登录/刷新 token）"""
         transport = None
-        if self._proxy:
+        if self._tunnel_node_id:
+            from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+            transport = TunnelTransport(self._tunnel_node_id, timeout=self._timeout)
+        elif self._proxy:
             transport = httpx.AsyncHTTPTransport(proxy=self._proxy)
         async with httpx.AsyncClient(
             base_url=self.base_url,
@@ -474,15 +479,19 @@ class Sub2ApiArchitecture(ProviderArchitecture):
         """
         base_url = base_url.rstrip("/")
 
-        from src.services.proxy_node.resolver import resolve_ops_proxy
+        from src.services.proxy_node.resolver import resolve_ops_proxy_config
 
-        proxy = resolve_ops_proxy(config)
+        proxy, tunnel_node_id = resolve_ops_proxy_config(config)
         client_kwargs: dict[str, Any] = {
             "base_url": base_url,
             "timeout": 30.0,
             "verify": get_ssl_context(),
         }
-        if proxy:
+        if tunnel_node_id:
+            from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+            client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=30.0)
+        elif proxy:
             client_kwargs["proxy"] = proxy
 
         email = credentials.get("email", "").strip()

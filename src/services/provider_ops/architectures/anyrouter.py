@@ -188,7 +188,10 @@ def _parse_session_user_id(cookie_input: str) -> tuple[str | None, str | None]:
 
 
 async def _get_acw_cookie(
-    base_url: str, timeout: float = 10, proxy: str | httpx.Proxy | None = None
+    base_url: str,
+    timeout: float = 10,
+    proxy: str | httpx.Proxy | None = None,
+    tunnel_node_id: str | None = None,
 ) -> str | None:
     """
     获取 acw_sc__v2 Cookie
@@ -199,6 +202,7 @@ async def _get_acw_cookie(
         base_url: 目标站点 URL
         timeout: 请求超时时间
         proxy: 代理地址
+        tunnel_node_id: tunnel 模式节点 ID（优先于 proxy）
 
     Returns:
         Cookie 字符串 (acw_sc__v2=xxx)，如果不需要或获取失败则返回 None
@@ -209,7 +213,11 @@ async def _get_acw_cookie(
             "timeout": timeout,
             "verify": get_ssl_context(),
         }
-        if proxy:
+        if tunnel_node_id:
+            from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+            client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=timeout)
+        elif proxy:
             client_kwargs["proxy"] = proxy
             logger.debug(f"获取 acw_sc__v2 Cookie 使用代理: {proxy}")
 
@@ -273,7 +281,9 @@ class AnyrouterConnector(ProviderConnector):
         self._user_id, _ = _parse_session_user_id(session_cookie)
 
         # 尝试获取反爬 Cookie（使用配置中的代理）
-        self._acw_cookie = await _get_acw_cookie(self.base_url, proxy=self._proxy)
+        self._acw_cookie = await _get_acw_cookie(
+            self.base_url, proxy=self._proxy, tunnel_node_id=self._tunnel_node_id
+        )
 
         self._set_connected()
         return True
@@ -406,11 +416,11 @@ class AnyrouterArchitecture(ProviderArchitecture):
         Returns:
             包含 acw_cookie 的配置
         """
-        # 从 config 获取代理配置（支持 proxy_node_id 和旧的 proxy URL）
-        from src.services.proxy_node.resolver import resolve_ops_proxy
+        # 从 config 获取代理配置（支持 proxy_node_id、tunnel 和旧的 proxy URL）
+        from src.services.proxy_node.resolver import resolve_ops_proxy_config
 
-        proxy = resolve_ops_proxy(config)
-        acw_cookie = await _get_acw_cookie(base_url, proxy=proxy)
+        proxy, tunnel_node_id = resolve_ops_proxy_config(config)
+        acw_cookie = await _get_acw_cookie(base_url, proxy=proxy, tunnel_node_id=tunnel_node_id)
         if acw_cookie:
             return {"acw_cookie": acw_cookie}
         return {}

@@ -193,10 +193,14 @@ class NekoCodeArchitecture(ProviderArchitecture):
                 "timeout": 10,
                 "verify": get_ssl_context(),
             }
-            from src.services.proxy_node.resolver import resolve_ops_proxy
+            from src.services.proxy_node.resolver import resolve_ops_proxy_config
 
-            proxy = resolve_ops_proxy(config)
-            if proxy:
+            proxy, tunnel_node_id = resolve_ops_proxy_config(config)
+            if tunnel_node_id:
+                from src.services.proxy_node.tunnel_transport import TunnelTransport
+
+                client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=10.0)
+            elif proxy:
                 client_kwargs["proxy"] = proxy
 
             async with httpx.AsyncClient(**client_kwargs) as client:

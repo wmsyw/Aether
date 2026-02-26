@@ -1034,10 +1034,9 @@ class ProviderOpsService:
         )
 
         # 获取代理配置（支持 proxy_node_id、tunnel 模式和旧的 proxy URL）
-        from src.services.proxy_node.resolver import resolve_ops_proxy, resolve_ops_tunnel_node_id
+        from src.services.proxy_node.resolver import resolve_ops_proxy_config
 
-        proxy = resolve_ops_proxy(config)
-        tunnel_node_id = resolve_ops_tunnel_node_id(config)
+        proxy, tunnel_node_id = resolve_ops_proxy_config(config)
 
         try:
             # 构建 httpx client 参数

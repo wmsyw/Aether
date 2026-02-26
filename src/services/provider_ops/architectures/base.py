@@ -50,11 +50,12 @@ class ProviderConnector(ABC):
         self._expires_at: datetime | None = None
         self._last_error: str | None = None
 
-        # 代理配置（支持 proxy_node_id 和旧的 proxy URL）
-        from src.services.proxy_node.resolver import resolve_ops_proxy, resolve_ops_tunnel_node_id
+        # 代理配置（支持 proxy_node_id、tunnel 和旧的 proxy URL）
+        from src.services.proxy_node.resolver import resolve_ops_proxy_config
 
-        self._proxy: str | httpx.Proxy | None = resolve_ops_proxy(self.config)
-        self._tunnel_node_id: str | None = resolve_ops_tunnel_node_id(self.config)
+        self._proxy: str | httpx.Proxy | None
+        self._tunnel_node_id: str | None
+        self._proxy, self._tunnel_node_id = resolve_ops_proxy_config(self.config)
 
         # HTTP 客户端配置
         self._timeout = self.config.get("timeout", 30)
