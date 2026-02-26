@@ -264,14 +264,13 @@ class ProxyNodeService:
             )
         else:
             node = db.query(ProxyNode).filter(ProxyNode.ip == ip, ProxyNode.port == port).first()
-        # tunnel 模式注册时设为 UNHEALTHY，等 WebSocket tunnel 真正连接后
-        # 由 _update_tunnel_status 设为 ONLINE；非 tunnel 模式保持原逻辑
-        initial_status = ProxyNodeStatus.UNHEALTHY if tunnel_mode else ProxyNodeStatus.ONLINE
-
         if node:
             node.name = name
             node.region = region
-            node.status = initial_status
+            # tunnel 模式：状态完全由 tunnel 连接管理（_update_tunnel_status / health_scheduler），
+            # 注册/心跳不干预；非 tunnel 模式照旧
+            if not tunnel_mode:
+                node.status = ProxyNodeStatus.ONLINE
             node.last_heartbeat_at = now
             node.heartbeat_interval = heartbeat_interval
             node.tunnel_mode = tunnel_mode
@@ -292,7 +291,8 @@ class ProxyNodeService:
                 ip=ip,
                 port=port,
                 region=region,
-                status=initial_status,
+                # tunnel 模式新节点：等 tunnel 连接后才上线
+                status=ProxyNodeStatus.UNHEALTHY if tunnel_mode else ProxyNodeStatus.ONLINE,
                 registered_by=registered_by,
                 last_heartbeat_at=now,
                 heartbeat_interval=heartbeat_interval,
