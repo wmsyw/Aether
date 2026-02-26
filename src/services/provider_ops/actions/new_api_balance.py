@@ -54,7 +54,7 @@ class NewApiBalanceAction(BalanceAction):
         """
         执行签到（静默，不抛出异常）
 
-        New API 签到需要 Cookie 认证。没有 Cookie 时跳过签到。
+        New API 签到通常需要认证（Cookie 或 API Key + New-Api-User）。
         失败时仅记录日志，不影响余额查询。
 
         Returns:
@@ -68,8 +68,7 @@ class NewApiBalanceAction(BalanceAction):
         # 检查是否配置了 Cookie（通过 service 层注入的 _has_cookie 标志）
         has_cookie = self.config.get("_has_cookie", False)
         if not has_cookie:
-            logger.debug(f"[{site}] 未配置 Cookie，跳过签到")
-            return None
+            logger.debug(f"[{site}] 未配置 Cookie，尝试使用 API Key 认证签到")
 
         try:
             response = await client.post(checkin_endpoint)
@@ -79,15 +78,23 @@ class NewApiBalanceAction(BalanceAction):
                 logger.debug(f"[{site}] 签到功能未开放")
                 return None
 
-            # 401/403 表示 Cookie 已失效
+            # 401/403 通常表示未授权；Cookie 模式下大多意味着 Cookie 已失效
             if response.status_code in (401, 403):
-                logger.warning(f"[{site}] Cookie 已失效（签到返回 {response.status_code}）")
-                return {"cookie_expired": True, "message": "Cookie 已失效"}
+                # 只有在明确配置了 Cookie 的情况下，才标记为 Cookie 失效。
+                # API Key 模式下的 401/403 更可能表示该站点不支持该认证方式签到。
+                if has_cookie:
+                    logger.warning(f"[{site}] Cookie 已失效（签到返回 {response.status_code}）")
+                    return {"cookie_expired": True, "message": "Cookie 已失效"}
+                logger.debug(
+                    f"[{site}] 签到认证失败（{response.status_code}），跳过签到结果上报"
+                )
+                return None
 
             try:
                 data = response.json()
                 message = data.get("message", "")
                 success = data.get("success", False)
+                message_lower = str(message).lower()
 
                 if success:
                     logger.debug(f"[{site}] 签到成功: {message}")
@@ -95,12 +102,12 @@ class NewApiBalanceAction(BalanceAction):
                 else:
                     # 检查是否是"已签到"的情况
                     already_indicators = ["already", "已签到", "已经签到", "今日已签", "重复签到"]
-                    is_already = any(ind in message.lower() for ind in already_indicators)
+                    is_already = any(ind.lower() in message_lower for ind in already_indicators)
                     if is_already:
                         logger.debug(f"[{site}] 今日已签到: {message}")
                         return {"success": None, "message": message or "今日已签到"}
 
-                    # 检查是否是认证失败（未登录、无权限等）- Cookie 已失效
+                    # 检查是否是认证失败（未登录、无权限、验证码等）
                     auth_fail_indicators = [
                         "未登录",
                         "请登录",
@@ -112,10 +119,16 @@ class NewApiBalanceAction(BalanceAction):
                         "captcha",
                         "验证码",  # 需要人机验证
                     ]
-                    is_auth_fail = any(ind in message.lower() for ind in auth_fail_indicators)
+                    is_auth_fail = any(ind.lower() in message_lower for ind in auth_fail_indicators)
                     if is_auth_fail:
-                        logger.warning(f"[{site}] Cookie 已失效（签到认证失败）: {message}")
-                        return {"cookie_expired": True, "message": message or "Cookie 已失效"}
+                        # Cookie 模式下，这类提示通常意味着 Cookie 已失效或需要重新登录。
+                        if has_cookie:
+                            logger.warning(f"[{site}] Cookie 已失效（签到认证失败）: {message}")
+                            return {"cookie_expired": True, "message": message or "Cookie 已失效"}
+
+                        # API Key 模式下，站点可能不支持该认证方式签到；保持静默不影响余额查询。
+                        logger.debug(f"[{site}] 签到认证失败（API Key 模式），跳过签到: {message}")
+                        return None
 
                     # 其他失败情况
                     logger.debug(f"[{site}] 签到失败: {message}")
