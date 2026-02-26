@@ -20,6 +20,51 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
+def _reset_tunnel_connected_on_startup() -> None:
+    """服务端启动时将所有 tunnel_connected=True 的节点重置为 False/UNHEALTHY。
+
+    服务端重启后 TunnelManager 内存状态丢失，但 DB 中可能残留
+    tunnel_connected=True 的记录。如果不重置，health_scheduler 会错误地
+    将这些节点标记为 ONLINE，而实际上 tunnel 并未连接。
+    """
+    from datetime import datetime, timezone
+
+    from src.core.logger import logger
+    from src.database import create_session
+    from src.models.database import ProxyNode, ProxyNodeStatus
+
+    db = create_session()
+    try:
+        now = datetime.now(timezone.utc)
+        stale_nodes = (
+            db.query(ProxyNode)
+            .filter(
+                ProxyNode.tunnel_connected == True,  # noqa: E712
+                ProxyNode.is_manual == False,  # noqa: E712
+            )
+            .all()
+        )
+        if stale_nodes:
+            for node in stale_nodes:
+                node.tunnel_connected = False
+                node.tunnel_connected_at = now
+                node.status = ProxyNodeStatus.UNHEALTHY
+                node.updated_at = now
+            db.commit()
+            logger.info(
+                "重置 {} 个节点的残留 tunnel 连接状态 (tunnel_connected -> False)",
+                len(stale_nodes),
+            )
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("重置 tunnel 连接状态失败: {}", e)
+    finally:
+        db.close()
+
+
 def _get_router() -> Any:
     """延迟导入路由"""
     from src.api.admin.proxy_nodes import router
@@ -35,6 +80,11 @@ async def _on_startup() -> None:
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     logger = logging.getLogger("aether.modules.proxy_nodes")
+
+    # 服务端启动时，TunnelManager 内存为空，所有 tunnel 连接都需要重新建立。
+    # 重置 DB 中残留的 tunnel_connected=True 状态，避免 health_scheduler
+    # 误将未连接的节点标记为 ONLINE。
+    _reset_tunnel_connected_on_startup()
 
     from src.clients import get_redis_client
 

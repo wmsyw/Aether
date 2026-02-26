@@ -53,6 +53,9 @@ class ProxyNodeHealthScheduler:
         await self._check_heartbeats()
 
     async def _check_heartbeats(self) -> None:
+        from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+
+        manager = get_tunnel_manager()
         db = create_session()
         try:
             now = datetime.now(timezone.utc)
@@ -71,7 +74,20 @@ class ProxyNodeHealthScheduler:
 
             changed = 0
             for node in nodes:
-                if node.tunnel_connected:
+                # 以 TunnelManager 内存中的实际连接状态为准，
+                # 而非仅依赖 DB 的 tunnel_connected 字段。
+                # 服务端重启后 DB 可能残留 tunnel_connected=True，
+                # 但 TunnelManager 内存中已无连接。
+                actually_connected = manager.has_tunnel(node.id)
+
+                # 同步修正 DB 中不一致的 tunnel_connected 字段
+                if node.tunnel_connected != actually_connected:
+                    node.tunnel_connected = actually_connected
+                    if not actually_connected:
+                        node.tunnel_connected_at = now
+                    changed += 1
+
+                if actually_connected:
                     new_status = ProxyNodeStatus.ONLINE
                 elif node.tunnel_connected_at:
                     # tunnel 刚断开：给 60s 缓冲期标记为 UNHEALTHY
