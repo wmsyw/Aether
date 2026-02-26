@@ -273,7 +273,10 @@ class ProxyNodeService:
             raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
 
         now = datetime.now(timezone.utc)
-        node.status = ProxyNodeStatus.ONLINE
+        # tunnel 模式节点：心跳仅更新指标，不改变状态；
+        # 状态由 tunnel WebSocket 连接建立/断开时决定
+        if not node.tunnel_mode:
+            node.status = ProxyNodeStatus.ONLINE
         node.last_heartbeat_at = now
         if heartbeat_interval is not None:
             node.heartbeat_interval = heartbeat_interval

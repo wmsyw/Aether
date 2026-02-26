@@ -63,6 +63,11 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
             _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_TTL_SECONDS)
             return None
 
+        # tunnel 模式节点必须 tunnel 已连接才可用
+        if node.tunnel_mode and not node.tunnel_connected:
+            _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_TTL_SECONDS)
+            return None
+
         if node.is_manual:
             value: dict[str, Any] = {
                 "is_manual": True,
