@@ -55,7 +55,7 @@ pub async fn connect_and_run(
     let (ws_sink, ws_read) = futures_util::StreamExt::split(ws_stream);
 
     // Spawn writer task
-    let (frame_tx, writer_handle) = writer::spawn_writer(ws_sink);
+    let (frame_tx, mut writer_handle) = writer::spawn_writer(ws_sink);
 
     // Spawn heartbeat task
     let hb_handle = heartbeat::spawn(
@@ -65,7 +65,11 @@ pub async fn connect_and_run(
         shutdown.clone(),
     );
 
-    // Run dispatcher (blocks until disconnect or shutdown)
+    // Run dispatcher (blocks until disconnect or shutdown).
+    // Also watch for writer exit — if the write half dies (e.g. the peer
+    // closed the connection) but the read half stays open, dispatcher would
+    // block forever on `ws_stream.next()`.  Monitoring `writer_handle`
+    // ensures we detect this and trigger a reconnect promptly.
     let state_clone = Arc::clone(state);
     let server_clone = Arc::clone(server);
     let outcome = tokio::select! {
@@ -74,6 +78,10 @@ pub async fn connect_and_run(
                 Ok(()) => TunnelOutcome::Disconnected,
                 Err(e) => return Err(e),
             }
+        }
+        _ = &mut writer_handle => {
+            debug!("writer task exited, triggering reconnect");
+            TunnelOutcome::Disconnected
         }
         _ = shutdown.changed() => {
             debug!("shutdown during tunnel dispatch");
@@ -88,7 +96,10 @@ pub async fn connect_and_run(
     // Wait for the writer task to finish with a generous timeout — the
     // dispatcher already waits up to 30s for stream handlers, so 35s here
     // covers that plus a small margin.
-    let _ = tokio::time::timeout(Duration::from_secs(35), writer_handle).await;
+    // Skip if the writer already exited (the select branch that fired).
+    if !writer_handle.is_finished() {
+        let _ = tokio::time::timeout(Duration::from_secs(35), writer_handle).await;
+    }
 
     info!("tunnel disconnected");
     Ok(outcome)
