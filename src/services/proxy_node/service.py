@@ -247,33 +247,24 @@ class ProxyNodeService:
         total_requests: int | None = None,
         avg_latency_ms: float | None = None,
         registered_by: str | None = None,
-        tunnel_mode: bool = False,
     ) -> ProxyNode:
-        """注册或更新 aether-proxy 节点
+        """注册或更新 aether-proxy 节点（tunnel 模式）"""
 
-        tunnel 模式按 name upsert（port 固定为 0，同 IP 可能有多个实例）；
-        旧模式按 ip+port upsert（向后兼容）。
-        """
         now = datetime.now(timezone.utc)
 
-        if tunnel_mode:
-            node = (
-                db.query(ProxyNode)
-                .filter(ProxyNode.name == name, ProxyNode.is_manual == False)  # noqa: E712
-                .first()
-            )
-        else:
-            node = db.query(ProxyNode).filter(ProxyNode.ip == ip, ProxyNode.port == port).first()
+        node = (
+            db.query(ProxyNode)
+            .filter(ProxyNode.name == name, ProxyNode.is_manual == False)  # noqa: E712
+            .first()
+        )
         if node:
             node.name = name
             node.region = region
-            # tunnel 模式：状态完全由 tunnel 连接管理（_update_tunnel_status / health_scheduler），
-            # 注册/心跳不干预；非 tunnel 模式照旧
-            if not tunnel_mode:
-                node.status = ProxyNodeStatus.ONLINE
+            # 状态完全由 tunnel 连接管理（_update_tunnel_status / health_scheduler），
+            # 注册不干预
             node.last_heartbeat_at = now
             node.heartbeat_interval = heartbeat_interval
-            node.tunnel_mode = tunnel_mode
+            node.tunnel_mode = True
             if hardware_info is not None:
                 node.hardware_info = hardware_info
             if estimated_max_concurrency is not None:
@@ -291,8 +282,8 @@ class ProxyNodeService:
                 ip=ip,
                 port=port,
                 region=region,
-                # tunnel 模式新节点：等 tunnel 连接后才上线
-                status=ProxyNodeStatus.UNHEALTHY if tunnel_mode else ProxyNodeStatus.ONLINE,
+                # 新节点：等 tunnel 连接后才上线
+                status=ProxyNodeStatus.UNHEALTHY,
                 registered_by=registered_by,
                 last_heartbeat_at=now,
                 heartbeat_interval=heartbeat_interval,
@@ -301,7 +292,7 @@ class ProxyNodeService:
                 avg_latency_ms=avg_latency_ms,
                 hardware_info=hardware_info,
                 estimated_max_concurrency=estimated_max_concurrency,
-                tunnel_mode=tunnel_mode,
+                tunnel_mode=True,
                 created_at=now,
                 updated_at=now,
             )
@@ -321,16 +312,18 @@ class ProxyNodeService:
         total_requests: int | None = None,
         avg_latency_ms: float | None = None,
     ) -> ProxyNode:
-        """处理节点心跳"""
+        """处理节点心跳（仅 tunnel 模式节点，心跳更新指标但不改变状态）"""
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
         if not node:
             raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
 
-        now = datetime.now(timezone.utc)
-        # tunnel 模式节点：心跳仅更新指标，不改变状态；
-        # 状态由 tunnel WebSocket 连接建立/断开时决定
         if not node.tunnel_mode:
-            node.status = ProxyNodeStatus.ONLINE
+            raise InvalidRequestException(
+                "non-tunnel mode is no longer supported, please upgrade aether-proxy to use tunnel mode"
+            )
+
+        now = datetime.now(timezone.utc)
+        # 状态由 tunnel WebSocket 连接建立/断开时决定，心跳仅更新指标
         node.last_heartbeat_at = now
         if heartbeat_interval is not None:
             node.heartbeat_interval = heartbeat_interval

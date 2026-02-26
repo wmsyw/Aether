@@ -45,9 +45,6 @@ class ProxyNodeRegisterRequest(BaseModel):
     hardware_info: dict | None = Field(None, description="硬件信息 JSON")
     estimated_max_concurrency: int | None = Field(None, ge=0, description="估算最大并发连接数")
 
-    # Tunnel 模式
-    tunnel_mode: bool = Field(False, description="是否使用 tunnel 模式连接")
-
     @field_validator("ip")
     @classmethod
     def validate_ip(cls, v: str) -> str:
@@ -267,7 +264,6 @@ class AdminRegisterProxyNodeAdapter(AdminApiAdapter):
             total_requests=req.total_requests,
             avg_latency_ms=req.avg_latency_ms,
             registered_by=context.user.id if context.user else None,
-            tunnel_mode=req.tunnel_mode,
         )
 
         context.add_audit_metadata(
