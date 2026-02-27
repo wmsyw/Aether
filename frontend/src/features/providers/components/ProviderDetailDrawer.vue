@@ -39,11 +39,11 @@
                   </Badge>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
-                  <span :title="systemFormatConversionEnabled ? '请先关闭系统级开关' : (provider.enable_format_conversion ? '已启用格式转换（点击关闭）' : '启用格式转换')">
+                  <span :title="systemFormatConversionEnabled ? '系统级格式转换已启用' : (provider.enable_format_conversion ? '已启用格式转换（点击关闭）' : '启用格式转换')">
                     <Button
                       variant="ghost"
                       size="icon"
-                      :class="`${provider.enable_format_conversion ? 'text-primary' : ''} ${systemFormatConversionEnabled ? 'opacity-50' : ''}`"
+                      :class="(provider.enable_format_conversion || systemFormatConversionEnabled) ? 'text-primary' : ''"
                       :disabled="systemFormatConversionEnabled"
                       @click="toggleFormatConversion"
                     >

@@ -24,8 +24,11 @@ from src.core.provider_templates.types import ProviderType
 from src.database import get_db
 from src.models.admin_requests import CreateProviderRequest, UpdateProviderRequest
 from src.models.database import GlobalModel, Provider, ProviderAPIKey, ProviderEndpoint
+from src.models.endpoint_models import ProviderWithEndpointsSummary
 from src.services.cache.model_cache import ModelCacheService
 from src.services.cache.provider_cache import ProviderCacheService
+
+from .summary import _build_provider_summary
 
 router = APIRouter(tags=["Provider CRUD"])
 pipeline = ApiRequestPipeline()
@@ -242,7 +245,7 @@ async def create_provider(request: Request, db: Session = Depends(get_db)) -> An
 @router.patch("/{provider_id}")
 async def update_provider(
     provider_id: str, request: Request, db: Session = Depends(get_db)
-) -> None:
+) -> ProviderWithEndpointsSummary:
     """
     更新提供商配置
 
@@ -582,12 +585,7 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
                 provider_priority=provider.provider_priority,
             )
 
-            return {
-                "id": provider.id,
-                "name": provider.name,
-                "is_active": provider.is_active,
-                "message": "提供商更新成功",
-            }
+            return _build_provider_summary(db, provider)
         except InvalidRequestException:
             db.rollback()
             raise

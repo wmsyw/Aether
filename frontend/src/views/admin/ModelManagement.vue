@@ -31,6 +31,15 @@
                 variant="ghost"
                 size="icon"
                 class="h-8 w-8"
+                title="批量管理"
+                @click="openBatchManageDialog"
+              >
+                <ListChecks class="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8"
                 title="创建模型"
                 @click="openCreateModelDialog"
               >
@@ -488,6 +497,148 @@
       @update:open="handleEditProviderDialogUpdate"
       @saved="handleEditProviderSaved"
     />
+
+    <!-- 批量管理全局模型对话框 -->
+    <Dialog
+      :model-value="batchManageDialogOpen"
+      title="批量管理模型"
+      description="选择要删除的全局模型"
+      :icon="Trash2"
+      icon-class="bg-destructive/10"
+      size="2xl"
+      @update:model-value="batchManageDialogOpen = $event"
+    >
+      <template #default>
+        <div class="space-y-4">
+          <!-- 搜索栏 -->
+          <div class="flex items-center gap-2">
+            <div class="flex-1 relative">
+              <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                v-model="batchManageSearchQuery"
+                placeholder="搜索模型..."
+                class="pl-8 h-9"
+              />
+            </div>
+          </div>
+
+          <!-- 快捷选中 -->
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="text-xs text-muted-foreground mr-0.5">快捷选中:</span>
+            <button
+              v-for="shortcut in batchManageShortcuts"
+              :key="shortcut.label"
+              type="button"
+              class="text-xs px-2 py-1 rounded-md border border-border/60 hover:bg-muted transition-colors"
+              :title="shortcut.description"
+              @click="applyBatchManageShortcut(shortcut.filter)"
+            >
+              {{ shortcut.label }} ({{ shortcut.count }})
+            </button>
+          </div>
+
+          <!-- 模型列表 -->
+          <div class="border rounded-lg overflow-hidden">
+            <div class="max-h-96 overflow-y-auto">
+              <template v-if="filteredBatchManageModels.length > 0">
+                <div
+                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-10"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-medium">模型</span>
+                    <span class="text-xs text-muted-foreground">({{ filteredBatchManageModels.length }})</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="text-xs text-primary hover:underline shrink-0"
+                    @click="toggleAllBatchManageModels"
+                  >
+                    {{ isAllBatchManageModelsSelected ? '取消全选' : '全选' }}
+                  </button>
+                </div>
+                <div class="space-y-1 p-2">
+                  <div
+                    v-for="model in filteredBatchManageModels"
+                    :key="model.id"
+                    class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer"
+                    @click="toggleBatchManageModelSelection(model.id)"
+                  >
+                    <div
+                      class="w-4 h-4 border rounded flex items-center justify-center shrink-0"
+                      :class="selectedBatchManageModelIds.has(model.id) ? 'bg-primary border-primary' : ''"
+                    >
+                      <Check
+                        v-if="selectedBatchManageModelIds.has(model.id)"
+                        class="w-3 h-3 text-primary-foreground"
+                      />
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium truncate">
+                        {{ model.display_name }}
+                      </p>
+                      <p class="text-xs text-muted-foreground truncate">
+                        {{ model.name }}
+                      </p>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <Badge
+                        variant="secondary"
+                        class="text-xs"
+                      >
+                        {{ model.active_provider_count || 0 }}/{{ model.provider_count || 0 }}
+                      </Badge>
+                      <Badge
+                        :variant="model.is_active ? 'outline' : 'secondary'"
+                        :class="model.is_active ? 'text-green-600 border-green-500/60' : ''"
+                        class="text-xs"
+                      >
+                        {{ model.is_active ? '活跃' : '停用' }}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 空状态 -->
+              <div
+                v-if="filteredBatchManageModels.length === 0"
+                class="flex flex-col items-center justify-center py-12 text-muted-foreground"
+              >
+                <p class="text-sm">
+                  {{ batchManageSearchQuery ? '无匹配结果' : '暂无模型' }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex items-center justify-between w-full">
+          <p class="text-xs text-muted-foreground">
+            {{ selectedBatchManageModelIds.size > 0 ? `已选择 ${selectedBatchManageModelIds.size} 个模型` : '' }}
+          </p>
+          <div class="flex items-center gap-2">
+            <Button
+              variant="destructive"
+              :disabled="selectedBatchManageModelIds.size === 0 || submittingBatchManage"
+              @click="confirmBatchDeleteModels"
+            >
+              <Loader2
+                v-if="submittingBatchManage"
+                class="w-4 h-4 mr-1 animate-spin"
+              />
+              {{ submittingBatchManage ? '删除中...' : '删除选中' }}
+            </Button>
+            <Button
+              variant="outline"
+              @click="batchManageDialogOpen = false"
+            >
+              关闭
+            </Button>
+          </div>
+        </div>
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -505,6 +656,7 @@ import {
   Copy,
   Server,
   Check,
+  ListChecks,
 } from 'lucide-vue-next'
 import ModelDetailDrawer from '@/features/models/components/ModelDetailDrawer.vue'
 import GlobalModelFormDialog from '@/features/models/components/GlobalModelFormDialog.vue'
@@ -606,6 +758,12 @@ const initialBatchProviderIds = ref<Set<string>>(new Set())
 const editProviderDialogOpen = ref(false)
 const editingProvider = ref<ModelProviderDisplay | null>(null)
 
+// 批量管理全局模型
+const batchManageDialogOpen = ref(false)
+const batchManageSearchQuery = ref('')
+const selectedBatchManageModelIds = ref<Set<string>>(new Set())
+const submittingBatchManage = ref(false)
+
 // 将 provider 数据转换为 Model 类型供 ProviderModelFormDialog 使用
 const editingProviderModel = computed<Model | null>(() => {
   if (!editingProvider.value) return null
@@ -700,7 +858,8 @@ function getVideoPricingTooltip(model: GlobalModelResponse): string {
 const hasBlockingDialogOpen = computed(() =>
   createModelDialogOpen.value ||
   batchAddProvidersDialogOpen.value ||
-  editProviderDialogOpen.value
+  editProviderDialogOpen.value ||
+  batchManageDialogOpen.value
 )
 
 // 能力筛选
@@ -1072,6 +1231,117 @@ function closeBatchAddProvidersDialog() {
   selectedBatchProviderIds.value = new Set()
   initialBatchProviderIds.value = new Set()
   submittingBatchProviders.value = false
+}
+
+// 批量管理全局模型 - 过滤
+const filteredBatchManageModels = computed(() => {
+  const query = batchManageSearchQuery.value.toLowerCase().trim()
+  if (!query) return globalModels.value
+  return globalModels.value.filter(m => {
+    const searchableText = `${m.name} ${m.display_name || ''}`.toLowerCase()
+    return searchableText.includes(query)
+  })
+})
+
+// 批量管理 - 快捷筛选定义
+function hasNoPrice(m: GlobalModelResponse): boolean {
+  return !getFirstTierPrice(m, 'input') && !getFirstTierPrice(m, 'output')
+    && !m.default_price_per_request
+}
+
+const batchManageShortcuts = computed(() => {
+  const models = globalModels.value
+  const defs: { label: string; description: string; filter: (m: GlobalModelResponse) => boolean }[] = [
+    { label: '无提供商', description: '没有关联任何提供商的模型', filter: m => (m.provider_count || 0) === 0 },
+    { label: '无活跃提供商', description: '有提供商但没有活跃提供商的模型', filter: m => (m.active_provider_count || 0) === 0 && (m.provider_count || 0) > 0 },
+    { label: '已禁用', description: '被禁用的模型', filter: m => !m.is_active },
+    { label: '未调用', description: '没有调用记录的模型', filter: m => (m.usage_count || 0) === 0 },
+    { label: '无价格', description: '没有配置任何价格的模型', filter: m => hasNoPrice(m) },
+  ]
+  return defs.map(d => ({ ...d, count: models.filter(d.filter).length }))
+})
+
+// 批量管理 - 应用快捷选中
+function applyBatchManageShortcut(filter: (m: GlobalModelResponse) => boolean) {
+  const matchedIds = globalModels.value.filter(filter).map(m => m.id)
+  selectedBatchManageModelIds.value = new Set(matchedIds)
+}
+
+// 批量管理 - 是否全选
+const isAllBatchManageModelsSelected = computed(() => {
+  if (filteredBatchManageModels.value.length === 0) return false
+  return filteredBatchManageModels.value.every(m => selectedBatchManageModelIds.value.has(m.id))
+})
+
+// 批量管理 - 切换单个选择
+function toggleBatchManageModelSelection(modelId: string) {
+  if (selectedBatchManageModelIds.value.has(modelId)) {
+    selectedBatchManageModelIds.value.delete(modelId)
+  } else {
+    selectedBatchManageModelIds.value.add(modelId)
+  }
+  selectedBatchManageModelIds.value = new Set(selectedBatchManageModelIds.value)
+}
+
+// 批量管理 - 全选/取消全选
+function toggleAllBatchManageModels() {
+  const allIds = filteredBatchManageModels.value.map(m => m.id)
+  if (isAllBatchManageModelsSelected.value) {
+    for (const id of allIds) {
+      selectedBatchManageModelIds.value.delete(id)
+    }
+  } else {
+    for (const id of allIds) {
+      selectedBatchManageModelIds.value.add(id)
+    }
+  }
+  selectedBatchManageModelIds.value = new Set(selectedBatchManageModelIds.value)
+}
+
+// 打开批量管理对话框
+function openBatchManageDialog() {
+  batchManageSearchQuery.value = ''
+  selectedBatchManageModelIds.value = new Set()
+  batchManageDialogOpen.value = true
+}
+
+// 确认批量删除模型
+async function confirmBatchDeleteModels() {
+  const count = selectedBatchManageModelIds.value.size
+  if (count === 0) return
+
+  const confirmed = await confirmDanger(
+    `确定删除选中的 ${count} 个模型吗？\n\n此操作不可撤销。`,
+    '批量删除模型'
+  )
+  if (!confirmed) return
+
+  submittingBatchManage.value = true
+  try {
+    const ids = Array.from(selectedBatchManageModelIds.value)
+    const results = await Promise.allSettled(ids.map(id => deleteGlobalModel(id)))
+    const successCount = results.filter(r => r.status === 'fulfilled').length
+    const failCount = results.filter(r => r.status === 'rejected').length
+
+    if (successCount > 0) {
+      success(`成功删除 ${successCount} 个模型`)
+    }
+    if (failCount > 0) {
+      showError(`${failCount} 个模型删除失败`, '部分失败')
+    }
+
+    // 清除选中的已删除模型
+    if (selectedModel.value && selectedBatchManageModelIds.value.has(selectedModel.value.id)) {
+      selectedModel.value = null
+    }
+
+    selectedBatchManageModelIds.value = new Set()
+    await loadGlobalModels()
+  } catch (err: unknown) {
+    showError(parseApiError(err, '批量删除失败'), '错误')
+  } finally {
+    submittingBatchManage.value = false
+  }
 }
 
 // 抽屉控制函数
