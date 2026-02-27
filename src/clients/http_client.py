@@ -242,6 +242,44 @@ class HTTPClientPool:
             # 淘汰旧客户端（如果超过上限）
             await cls._evict_lru_proxy_client()
 
+            # 添加代理配置
+            proxy_url = build_proxy_url(proxy_config) if proxy_config else None
+
+            # curl_cffi Transport: real TLS fingerprint impersonation.
+            # When tls_profile requires fingerprint impersonation and curl_cffi
+            # is available, use CurlCffiTransport instead of the default httpx
+            # transport. This gives us a genuine browser/Node.js TLS handshake.
+            if tls_profile_key == "claude_code_nodejs":
+                from src.clients.curl_cffi_transport import (
+                    CURL_CFFI_AVAILABLE,
+                    CurlCffiTransport,
+                )
+
+                if CURL_CFFI_AVAILABLE:
+                    transport = CurlCffiTransport(proxy=proxy_url)
+                    client = httpx.AsyncClient(
+                        transport=transport,
+                        follow_redirects=True,
+                        timeout=httpx.Timeout(
+                            connect=config.http_connect_timeout,
+                            read=config.http_read_timeout,
+                            write=config.http_write_timeout,
+                            pool=config.http_pool_timeout,
+                        ),
+                    )
+                    cls._proxy_clients[cache_key] = (client, time.time())
+                    logger.info(
+                        "创建 curl_cffi TLS 指纹客户端: profile={}, proxy={}",
+                        tls_profile_key,
+                        proxy_url or "direct",
+                    )
+                    return client
+                else:
+                    logger.warning(
+                        "curl_cffi 不可用，回退到 best-effort TLS 配置 (profile={})",
+                        tls_profile_key,
+                    )
+
             # 创建新客户端（使用默认超时，请求时可覆盖）
             client_config: dict[str, Any] = {
                 "http2": False,
@@ -260,8 +298,6 @@ class HTTPClientPool:
                 ),
             }
 
-            # 添加代理配置
-            proxy_url = build_proxy_url(proxy_config) if proxy_config else None
             proxy_param = make_proxy_param(proxy_url)
             if proxy_param:
                 client_config["proxy"] = proxy_param
@@ -315,6 +351,17 @@ class HTTPClientPool:
                 logger.warning("关闭 tunnel 客户端失败: {}", e)
 
         cls._tunnel_clients.clear()
+
+        # 关闭 curl_cffi session 缓存
+        try:
+            from src.clients.curl_cffi_transport import CURL_CFFI_AVAILABLE, close_all_sessions
+
+            if CURL_CFFI_AVAILABLE:
+                await close_all_sessions()
+                logger.debug("curl_cffi sessions 已关闭")
+        except Exception as e:
+            logger.debug("关闭 curl_cffi sessions 失败: {}", e)
+
         logger.info("所有HTTP客户端已关闭")
 
     @classmethod

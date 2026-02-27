@@ -147,6 +147,18 @@ class ClaudeCodeAdvancedConfig(BaseModel):
     session_id_masking_enabled: bool = Field(
         False, description="是否启用会话 ID 伪装（固定 metadata.user_id 中 session 片段）"
     )
+    cache_ttl_override_enabled: bool = Field(
+        False, description="是否启用 Cache TTL 强制替换（统一所有请求的 cache_control 类型）"
+    )
+    cache_ttl_override_target: str = Field(
+        "ephemeral",
+        description="Cache TTL 目标类型: ephemeral (5min) 或 1h",
+        pattern="^(ephemeral|1h)$",
+    )
+    cli_only_enabled: bool = Field(
+        False,
+        description="是否仅允许 Claude Code CLI 客户端访问（非 CLI 流量返回 403）",
+    )
 
     @model_validator(mode="after")
     def normalize_session_control(self) -> "ClaudeCodeAdvancedConfig":

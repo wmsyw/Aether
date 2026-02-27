@@ -218,6 +218,59 @@ def _apply_session_id_masking(request_body: dict[str, Any], *, scope_key: str) -
     )
 
 
+# -- Cache TTL Override -------------------------------------------------------
+
+_VALID_CACHE_TTL_TARGETS = {"ephemeral", "1h"}
+
+
+def _override_cache_control_in_blocks(blocks: list[Any], target: str) -> int:
+    """Override cache_control in a list of content blocks. Returns count of overrides."""
+    count = 0
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        cc = block.get("cache_control")
+        if isinstance(cc, dict):
+            if cc.get("type") != target:
+                cc["type"] = target
+                count += 1
+    return count
+
+
+def _apply_cache_ttl_override(request_body: dict[str, Any], target: str) -> None:
+    """Force all cache_control entries to use a unified TTL type.
+
+    Prevents multi-user behavioral fingerprinting when sharing an OAuth account.
+    """
+    if target not in _VALID_CACHE_TTL_TARGETS:
+        return
+
+    overridden = 0
+
+    # system prompt (can be string or list of blocks)
+    system = request_body.get("system")
+    if isinstance(system, list):
+        overridden += _override_cache_control_in_blocks(system, target)
+
+    # messages
+    messages = request_body.get("messages")
+    if isinstance(messages, list):
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                overridden += _override_cache_control_in_blocks(content, target)
+
+    # tools
+    tools = request_body.get("tools")
+    if isinstance(tools, list):
+        overridden += _override_cache_control_in_blocks(tools, target)
+
+    if overridden:
+        logger.debug("Cache TTL override: {} block(s) -> {}", overridden, target)
+
+
 def _register_or_reject_session(
     *,
     scope_key: str,
@@ -446,6 +499,15 @@ class ClaudeCodeEnvelope:
         ctx = get_claude_code_request_context()
         if ctx is None:
             ctx = ClaudeCodeRequestContext()
+
+        # CLI-only restriction: reject non-CLI clients early.
+        if ctx.cli_only_enabled:
+            from src.services.provider.adapters.claude_code.client_restriction import (
+                enforce_cli_only,
+            )
+
+            enforce_cli_only(ctx.cli_only_enabled)
+
         # Extract session_uuid from metadata.user_id for pool sticky session.
         session_uuid: str | None = None
         user_id = _get_metadata_user_id(request_body)
@@ -455,6 +517,10 @@ class ClaudeCodeEnvelope:
         set_claude_code_request_context(ctx)
 
         _sanitize_thinking_blocks(request_body)
+
+        # Cache TTL override: unify cache_control types to prevent behavioral fingerprinting.
+        if ctx.cache_ttl_override_enabled:
+            _apply_cache_ttl_override(request_body, ctx.cache_ttl_override_target)
 
         _enforce_session_controls(
             request_body,

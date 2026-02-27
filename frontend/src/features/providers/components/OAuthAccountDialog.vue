@@ -144,19 +144,48 @@
                   </div>
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium">Region</label>
-                    <div class="grid grid-cols-2 gap-1.5">
-                      <button
-                        v-for="r in (['eu-north-1', 'us-east-1'] as const)"
-                        :key="r"
-                        class="h-8 text-xs font-medium font-mono rounded-md border transition-colors"
-                        :class="device.region === r
-                          ? 'border-primary bg-primary/5 text-foreground'
-                          : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/20'"
-                        @click="device.region = r"
+                    <ComboboxRoot
+                      :model-value="device.region"
+                      :open="regionComboboxOpen"
+                      @update:model-value="(v: string) => { if (v) device.region = v }"
+                      @update:open="(v: boolean) => { regionComboboxOpen = v; if (v) ensureAwsRegions() }"
+                    >
+                      <ComboboxAnchor class="relative w-full">
+                        <ComboboxInput
+                          :display-value="() => device.region"
+                          placeholder="输入或选择 Region"
+                          class="w-full h-8 px-2 pr-7 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                          spellcheck="false"
+                          @input="(e: Event) => regionSearch = (e.target as HTMLInputElement).value"
+                          @keydown.enter.prevent="onRegionEnter"
+                        />
+                        <ComboboxTrigger class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                          <ChevronsUpDown class="w-3.5 h-3.5" />
+                        </ComboboxTrigger>
+                      </ComboboxAnchor>
+                      <ComboboxContent
+                        position="popper"
+                        class="z-[99] mt-1 max-h-[200px] w-[--radix-combobox-trigger-width] overflow-y-auto rounded-md border border-border bg-popover shadow-md"
                       >
-                        {{ r }}
-                      </button>
-                    </div>
+                        <ComboboxViewport>
+                          <ComboboxEmpty class="px-2 py-1.5 text-xs text-muted-foreground">
+                            {{ awsRegionsLoaded ? '无匹配结果，回车使用自定义值' : '加载中...' }}
+                          </ComboboxEmpty>
+                          <ComboboxItem
+                            v-for="r in filteredRegions"
+                            :key="r"
+                            :value="r"
+                            class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-mono cursor-pointer rounded-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                          >
+                            <Check
+                              class="w-3 h-3 shrink-0"
+                              :class="device.region === r ? 'opacity-100' : 'opacity-0'"
+                            />
+                            {{ r }}
+                          </ComboboxItem>
+                        </ComboboxViewport>
+                      </ComboboxContent>
+                    </ComboboxRoot>
                   </div>
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium text-muted-foreground">TOTP Secret (可选, 2FA认证)</label>
@@ -501,7 +530,17 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Dialog, Button, Textarea, Popover, PopoverTrigger, PopoverContent } from '@/components/ui'
-import { UserPlus, Copy, ExternalLink, Upload, Globe, AlertCircle, ShieldCheck } from 'lucide-vue-next'
+import {
+  ComboboxAnchor,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxRoot,
+  ComboboxTrigger,
+  ComboboxViewport,
+} from 'radix-vue'
+import { UserPlus, Copy, ExternalLink, Upload, Globe, AlertCircle, ShieldCheck, ChevronsUpDown, Check } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import { useTotp } from '@/composables/useTotp'
@@ -513,6 +552,7 @@ import {
   batchImportOAuth,
   startDeviceAuthorize,
   pollDeviceAuthorize,
+  getAwsRegions,
 } from '@/api/endpoints'
 import ProxyNodeSelect from './ProxyNodeSelect.vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
@@ -536,6 +576,38 @@ const totp = useTotp()
 // 代理节点选择
 const proxyPopoverOpen = ref(false)
 const selectedProxyNodeId = ref('')
+
+// AWS Regions (动态获取 + 进程内缓存)
+const awsRegions = ref<string[]>([])
+const awsRegionsLoaded = ref(false)
+const regionSearch = ref('')
+const regionComboboxOpen = ref(false)
+
+const filteredRegions = computed(() => {
+  const q = regionSearch.value.trim().toLowerCase()
+  if (!q) return awsRegions.value
+  return awsRegions.value.filter(r => r.includes(q))
+})
+
+async function ensureAwsRegions() {
+  if (awsRegionsLoaded.value) return
+  try {
+    awsRegions.value = await getAwsRegions()
+  } catch {
+    awsRegions.value = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'eu-north-1']
+  }
+  awsRegionsLoaded.value = true
+}
+
+function onRegionEnter() {
+  // If no matching item is highlighted, accept the raw input as a custom region value.
+  const raw = regionSearch.value.trim()
+  if (raw && !filteredRegions.value.includes(raw)) {
+    device.value.region = raw
+    regionComboboxOpen.value = false
+    regionSearch.value = ''
+  }
+}
 
 /** 获取已选代理节点的显示名称 */
 function getSelectedNodeLabel(): string {

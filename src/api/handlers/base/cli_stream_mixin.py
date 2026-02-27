@@ -805,6 +805,34 @@ class CliStreamMixin:
             prefetched_chunks,
         )
 
+    @staticmethod
+    def _fire_stream_timeout_policy(ctx: StreamContext) -> None:
+        """Fire-and-forget: record stream timeout for pool health policy."""
+        if not ctx.provider_id or not ctx.key_id:
+            return
+        try:
+            from src.services.provider.adapters.claude_code.context import (
+                get_claude_code_request_context,
+            )
+
+            cc_ctx = get_claude_code_request_context()
+            pool_cfg = cc_ctx.pool_config if cc_ctx else None
+            if not pool_cfg:
+                return
+
+            from src.services.provider.pool.health_policy import apply_stream_timeout_policy
+
+            task = asyncio.create_task(
+                apply_stream_timeout_policy(
+                    provider_id=ctx.provider_id,
+                    key_id=ctx.key_id,
+                    config=pool_cfg,
+                )
+            )
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        except Exception as exc:
+            logger.debug("Stream timeout policy trigger failed: {}", exc)
+
     async def _create_response_stream(
         self,
         ctx: StreamContext,
@@ -900,6 +928,9 @@ class CliStreamMixin:
                                 f"elapsed={elapsed:.1f}s, "
                                 f"chunk_count={ctx.chunk_count}, data_count=0"
                             )
+
+                            self._fire_stream_timeout_policy(ctx)
+
                             error_event = {
                                 "type": "error",
                                 "error": {

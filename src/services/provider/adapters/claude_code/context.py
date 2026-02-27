@@ -24,6 +24,9 @@ class ClaudeCodeRequestContext:
     session_idle_timeout_minutes: int = 5
     enable_tls_fingerprint: bool = False
     session_id_masking_enabled: bool = False
+    cache_ttl_override_enabled: bool = False
+    cache_ttl_override_target: str = "ephemeral"
+    cli_only_enabled: bool = False
     # Account Pool fields
     provider_id: str | None = None
     pool_config: PoolConfig | None = None
@@ -88,6 +91,15 @@ def build_claude_code_request_context(
     session_id_masking_enabled = (
         bool(advanced_config.session_id_masking_enabled) if advanced_config else False
     )
+    cache_ttl_override_enabled = (
+        bool(advanced_config.cache_ttl_override_enabled) if advanced_config else False
+    )
+    cache_ttl_override_target = (
+        str(advanced_config.cache_ttl_override_target or "ephemeral")
+        if advanced_config
+        else "ephemeral"
+    )
+    cli_only_enabled = bool(advanced_config.cli_only_enabled) if advanced_config else False
 
     # Parse pool config (None = non-pool provider, keep as None for semantic consistency)
     pool_cfg = parse_pool_config(provider_config_dict)
@@ -100,6 +112,9 @@ def build_claude_code_request_context(
         session_idle_timeout_minutes=idle_timeout_minutes,
         enable_tls_fingerprint=enable_tls_fingerprint,
         session_id_masking_enabled=session_id_masking_enabled,
+        cache_ttl_override_enabled=cache_ttl_override_enabled,
+        cache_ttl_override_target=cache_ttl_override_target,
+        cli_only_enabled=cli_only_enabled,
         provider_id=str(provider_id or "").strip() or None,
         pool_config=pool_cfg,
     )

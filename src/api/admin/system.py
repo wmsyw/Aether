@@ -2658,3 +2658,67 @@ class AdminPurgeStatsAdapter(AdminApiAdapter):
         return {
             "message": "聚合统计数据已清空",
         }
+
+
+# ---------------------------------------------------------------------------
+# AWS Regions (从 AWS Regional Table API 获取，Redis 缓存 24h)
+# ---------------------------------------------------------------------------
+
+_AWS_REGIONS_CACHE_KEY = "aws_regions"
+_AWS_REGIONS_CACHE_TTL = 86400  # 24h
+_AWS_REGIONAL_TABLE_URL = "https://api.regional-table.region-services.aws.a2z.com"
+
+# 内存级 fallback（进程生命周期内有效，Redis 不可用时兜底）
+_aws_regions_mem_cache: list[str] | None = None
+
+
+async def _fetch_aws_regions() -> list[str]:
+    """从 AWS Regional Table API 提取去重排序的 region 列表"""
+    import httpx as _httpx
+
+    from src.clients.http_client import HTTPClientPool
+
+    client = await HTTPClientPool.get_default_client_async()
+    resp = await client.get(
+        _AWS_REGIONAL_TABLE_URL,
+        timeout=_httpx.Timeout(connect=10, read=15),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    regions: set[str] = set()
+    for item in data.get("prices", []):
+        region = item.get("attributes", {}).get("aws:region", "")
+        if region:
+            regions.add(region)
+    return sorted(regions)
+
+
+@router.get("/aws-regions")
+async def get_aws_regions() -> Any:
+    """获取 AWS 全部可用 Region 列表（缓存 24h）"""
+    global _aws_regions_mem_cache
+
+    # 1. 尝试 Redis 缓存
+    from src.core.cache_service import CacheService
+
+    cached = await CacheService.get(_AWS_REGIONS_CACHE_KEY)
+    if cached and isinstance(cached, list):
+        return {"regions": cached}
+
+    # 2. 尝试内存 fallback
+    if _aws_regions_mem_cache:
+        return {"regions": _aws_regions_mem_cache}
+
+    # 3. 远程获取
+    try:
+        regions = await _fetch_aws_regions()
+    except Exception as e:
+        logger.warning("获取 AWS Regions 失败: {}", e)
+        # 返回最基础的 fallback
+        return {"regions": ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-north-1"]}
+
+    # 写入缓存
+    _aws_regions_mem_cache = regions
+    await CacheService.set(_AWS_REGIONS_CACHE_KEY, regions, ttl_seconds=_AWS_REGIONS_CACHE_TTL)
+
+    return {"regions": regions}

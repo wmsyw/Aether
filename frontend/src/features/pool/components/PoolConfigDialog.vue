@@ -227,6 +227,52 @@
               @update:model-value="(v: boolean) => claudeForm.session_id_masking_enabled = v"
             />
           </div>
+
+          <div class="space-y-3 p-3 border rounded-lg bg-muted/50">
+            <div class="flex items-center justify-between">
+              <div class="space-y-0.5">
+                <span class="text-sm font-medium">Cache TTL 统一</span>
+                <p class="text-xs text-muted-foreground">
+                  强制统一所有请求的 cache_control 类型，避免多人共用时行为指纹不一致
+                </p>
+              </div>
+              <Switch
+                :model-value="claudeForm.cache_ttl_override_enabled"
+                @update:model-value="(v: boolean) => claudeForm.cache_ttl_override_enabled = v"
+              />
+            </div>
+            <div
+              v-if="claudeForm.cache_ttl_override_enabled"
+              class="space-y-1.5"
+            >
+              <Label class="text-xs">目标 TTL 类型</Label>
+              <select
+                :value="claudeForm.cache_ttl_override_target"
+                class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                @change="(e) => claudeForm.cache_ttl_override_target = (e.target as HTMLSelectElement).value"
+              >
+                <option value="ephemeral">
+                  ephemeral (5 分钟)
+                </option>
+                <option value="1h">
+                  1h (1 小时)
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
+            <div class="space-y-0.5">
+              <span class="text-sm font-medium">仅限 CLI 客户端</span>
+              <p class="text-xs text-muted-foreground">
+                仅允许 Claude Code CLI 客户端访问，拒绝非 CLI 流量
+              </p>
+            </div>
+            <Switch
+              :model-value="claudeForm.cli_only_enabled"
+              @update:model-value="(v: boolean) => claudeForm.cli_only_enabled = v"
+            />
+          </div>
         </div>
       </template>
     </form>
@@ -290,6 +336,9 @@ interface ClaudeFormState {
   session_idle_timeout_minutes: number
   enable_tls_fingerprint: boolean
   session_id_masking_enabled: boolean
+  cache_ttl_override_enabled: boolean
+  cache_ttl_override_target: string
+  cli_only_enabled: boolean
 }
 
 const claudeForm = ref<ClaudeFormState>({
@@ -298,6 +347,9 @@ const claudeForm = ref<ClaudeFormState>({
   session_idle_timeout_minutes: 5,
   enable_tls_fingerprint: true,
   session_id_masking_enabled: true,
+  cache_ttl_override_enabled: false,
+  cache_ttl_override_target: 'ephemeral',
+  cli_only_enabled: false,
 })
 
 function parseNum(v: string | number): number | undefined {
@@ -334,6 +386,9 @@ watch(() => props.modelValue, (v) => {
         session_idle_timeout_minutes: cc.session_idle_timeout_minutes ?? 5,
         enable_tls_fingerprint: cc.enable_tls_fingerprint ?? true,
         session_id_masking_enabled: cc.session_id_masking_enabled ?? true,
+        cache_ttl_override_enabled: cc.cache_ttl_override_enabled ?? false,
+        cache_ttl_override_target: cc.cache_ttl_override_target ?? 'ephemeral',
+        cli_only_enabled: cc.cli_only_enabled ?? false,
       }
     } else {
       // 默认值：全部开启
@@ -343,6 +398,9 @@ watch(() => props.modelValue, (v) => {
         session_idle_timeout_minutes: 5,
         enable_tls_fingerprint: true,
         session_id_masking_enabled: true,
+        cache_ttl_override_enabled: false,
+        cache_ttl_override_target: 'ephemeral',
+        cli_only_enabled: false,
       }
     }
   }
@@ -375,6 +433,11 @@ async function handleSave() {
           : null,
         enable_tls_fingerprint: claudeForm.value.enable_tls_fingerprint,
         session_id_masking_enabled: claudeForm.value.session_id_masking_enabled,
+        cache_ttl_override_enabled: claudeForm.value.cache_ttl_override_enabled,
+        cache_ttl_override_target: claudeForm.value.cache_ttl_override_enabled
+          ? claudeForm.value.cache_ttl_override_target
+          : 'ephemeral',
+        cli_only_enabled: claudeForm.value.cli_only_enabled,
       }
     }
 

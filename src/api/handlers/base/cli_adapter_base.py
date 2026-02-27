@@ -73,6 +73,15 @@ class CliAdapterBase(HandlerAdapterBase):
         original_headers = context.original_headers
         query_params = context.query_params
 
+        # Store original headers for downstream envelope checks (e.g. CLI-only restriction).
+        # Only relevant for Claude Code CLI format; skip for others to avoid unnecessary coupling.
+        if self.FORMAT_ID == "claude:cli":
+            from src.services.provider.adapters.claude_code.client_restriction import (
+                set_original_request_headers,
+            )
+
+            set_original_request_headers(original_headers)
+
         original_request_body = context.ensure_json_body()
 
         # 合并 path_params 到请求体（如 Gemini API 的 model 在 URL 路径中）

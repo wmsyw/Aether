@@ -51,6 +51,11 @@ class PoolConfig:
     # -- Temporary Unschedulable Rules ----------------------------------------
     unschedulable_rules: list[UnschedulableRule] = field(default_factory=list)
 
+    # -- Stream Timeout Auto-Pause --------------------------------------------
+    stream_timeout_threshold: int = 3  # N timeouts within window trigger cooldown
+    stream_timeout_window_seconds: int = 1800  # 30 min counting window
+    stream_timeout_cooldown_seconds: int = 300  # 5 min cooldown
+
     # -- Pluggable Strategies -------------------------------------------------
     strategies: tuple[str, ...] = ()
 
@@ -127,6 +132,9 @@ def parse_pool_config(provider_config: Any) -> PoolConfig | None:
         proactive_refresh_seconds=_int_or("proactive_refresh_seconds", 180),
         health_policy_enabled=_bool_or("health_policy_enabled", True),
         unschedulable_rules=rules,
+        stream_timeout_threshold=_int_or("stream_timeout_threshold", 3),
+        stream_timeout_window_seconds=_int_or("stream_timeout_window_seconds", 1800),
+        stream_timeout_cooldown_seconds=_int_or("stream_timeout_cooldown_seconds", 300),
         strategies=_parse_strategies(raw_advanced.get("strategies")),
     )
 

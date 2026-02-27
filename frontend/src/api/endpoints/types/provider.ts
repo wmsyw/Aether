@@ -450,6 +450,11 @@ export interface ClaudeCodeAdvancedConfig {
   enable_tls_fingerprint?: boolean
   // 会话 ID 伪装（固定 metadata.user_id 中 session 片段）
   session_id_masking_enabled?: boolean
+  // Cache TTL 统一（强制所有 cache_control 使用相同 TTL 类型）
+  cache_ttl_override_enabled?: boolean
+  cache_ttl_override_target?: string
+  // 仅允许 CLI 客户端
+  cli_only_enabled?: boolean
 }
 
 export interface PoolAdvancedConfig {

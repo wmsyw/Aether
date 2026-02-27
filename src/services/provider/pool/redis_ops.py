@@ -468,3 +468,45 @@ async def batch_get_cooldown_ttls(provider_id: str, key_ids: list[str]) -> dict[
         return out
     except Exception:
         return {k: None for k in key_ids}
+
+
+# ---------------------------------------------------------------------------
+# Stream timeout counter
+# ---------------------------------------------------------------------------
+
+_STREAM_TIMEOUT_KEY_FMT = f"{PREFIX}:{{}}:stream_timeout:{{}}"
+
+
+def _stream_timeout_key(provider_id: str, key_id: str) -> str:
+    return _STREAM_TIMEOUT_KEY_FMT.format(provider_id, key_id)
+
+
+async def incr_stream_timeout_count(
+    provider_id: str,
+    key_id: str,
+    window_seconds: int,
+) -> int:
+    """Increment stream timeout counter and return count within the window.
+
+    Uses a ZSET with timestamps as scores. Old entries beyond the window
+    are pruned on each call. Returns the count of timeouts in the window.
+    """
+    redis = await _get_redis()
+    if redis is None:
+        return 0
+    try:
+        now = time.time()
+        window_start = now - window_seconds
+        key = _stream_timeout_key(provider_id, key_id)
+        member = f"{uuid.uuid4().hex}"
+        pipe = redis.pipeline()
+        pipe.zremrangebyscore(key, "-inf", window_start)
+        pipe.zadd(key, {member: now})
+        pipe.zcard(key)
+        pipe.expire(key, window_seconds + 60)
+        results = await pipe.execute()
+        count = int(results[2]) if results[2] else 0
+        return count
+    except Exception:
+        logger.debug("Pool: stream timeout INCR failed for key {}", key_id[:8])
+        return 0

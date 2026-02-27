@@ -202,3 +202,56 @@ async def _apply(
                     rule.duration_minutes,
                 )
                 return
+
+
+async def apply_stream_timeout_policy(
+    *,
+    provider_id: str,
+    key_id: str,
+    config: PoolConfig,
+) -> None:
+    """Record a stream timeout event and apply cooldown if threshold is reached.
+
+    Called when an upstream stream response times out (no data within the
+    configured interval). Increments a per-key counter in Redis and sets
+    a cooldown if the count reaches the configured threshold.
+    """
+    if not config.health_policy_enabled:
+        return
+
+    try:
+        count = await redis_ops.incr_stream_timeout_count(
+            provider_id,
+            key_id,
+            config.stream_timeout_window_seconds,
+        )
+        if count >= config.stream_timeout_threshold:
+            ttl = config.stream_timeout_cooldown_seconds
+            await redis_ops.set_cooldown(
+                provider_id,
+                key_id,
+                f"stream_timeout_x{count}",
+                ttl=ttl,
+            )
+            logger.warning(
+                "Pool[{}]: key {} stream timeout count {} >= threshold {}, cooldown {}s",
+                provider_id[:8],
+                key_id[:8],
+                count,
+                config.stream_timeout_threshold,
+                ttl,
+            )
+        else:
+            logger.info(
+                "Pool[{}]: key {} stream timeout count {}/{}",
+                provider_id[:8],
+                key_id[:8],
+                count,
+                config.stream_timeout_threshold,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Pool stream timeout policy failed for key {}: {}",
+            key_id[:8],
+            str(exc),
+        )
