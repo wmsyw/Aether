@@ -29,6 +29,8 @@ sysinfo = "0.32"
 libc = "0.2"
 flate2 = "1"
 tar = "0.4"
+socket2 = { version = "0.5", features = ["all"] }
+webpki-roots = "0.26"
 
 [profile.release]
 lto = true

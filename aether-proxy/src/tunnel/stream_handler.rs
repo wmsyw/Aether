@@ -21,6 +21,11 @@ use super::writer::FrameSender;
 /// Maximum response body chunk size per frame (32 KB).
 const MAX_CHUNK_SIZE: usize = 32 * 1024;
 
+/// Timeout for sending a single frame to the writer channel.
+/// If the writer is congested (TCP backpressure), we abandon the stream
+/// rather than blocking indefinitely and exhausting the stream pool.
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Handle a single stream: receive body, execute upstream, send response.
 pub async fn handle_stream(
     state: Arc<AppState>,
@@ -37,6 +42,22 @@ pub async fn handle_stream(
 
     server.active_connections.fetch_sub(1, Ordering::Relaxed);
     server.metrics.record_request(start.elapsed());
+}
+
+/// Send a frame to the writer with a timeout. Returns false if send failed.
+async fn send_frame(tx: &FrameSender, frame: Frame) -> bool {
+    match tokio::time::timeout(FRAME_SEND_TIMEOUT, tx.send(frame)).await {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) => {
+            // Channel closed (writer exited)
+            false
+        }
+        Err(_) => {
+            // Timeout — writer is congested
+            warn!("frame send timeout (writer congested), abandoning stream");
+            false
+        }
+    }
 }
 
 async fn handle_stream_inner(
@@ -190,14 +211,14 @@ async fn handle_stream_inner(
         headers: resp_headers,
     };
     let meta_json = serde_json::to_vec(&resp_meta).unwrap_or_default();
-    let _ = frame_tx
-        .send(Frame::new(
-            stream_id,
-            MsgType::ResponseHeaders,
-            0,
-            meta_json,
-        ))
-        .await;
+    if !send_frame(
+        frame_tx,
+        Frame::new(stream_id, MsgType::ResponseHeaders, 0, meta_json),
+    )
+    .await
+    {
+        return;
+    }
 
     // Stream response body
     let mut stream = response.bytes_stream();
@@ -205,19 +226,28 @@ async fn handle_stream_inner(
         match chunk_result {
             Ok(chunk) => {
                 if chunk.len() <= MAX_CHUNK_SIZE {
-                    // 大多数 chunk 无需分割，直接零拷贝发送
-                    let _ = frame_tx
-                        .send(Frame::new(stream_id, MsgType::ResponseBody, 0, chunk))
-                        .await;
+                    if !send_frame(
+                        frame_tx,
+                        Frame::new(stream_id, MsgType::ResponseBody, 0, chunk),
+                    )
+                    .await
+                    {
+                        return;
+                    }
                 } else {
-                    // 超大 chunk 按 MAX_CHUNK_SIZE 分割（使用 Bytes::slice 避免拷贝）
+                    // Split oversized chunks
                     let mut offset = 0;
                     while offset < chunk.len() {
                         let end = (offset + MAX_CHUNK_SIZE).min(chunk.len());
                         let slice = chunk.slice(offset..end);
-                        let _ = frame_tx
-                            .send(Frame::new(stream_id, MsgType::ResponseBody, 0, slice))
-                            .await;
+                        if !send_frame(
+                            frame_tx,
+                            Frame::new(stream_id, MsgType::ResponseBody, 0, slice),
+                        )
+                        .await
+                        {
+                            return;
+                        }
                         offset = end;
                     }
                 }
@@ -231,27 +261,32 @@ async fn handle_stream_inner(
     }
 
     // Send STREAM_END
-    let _ = frame_tx
-        .send(Frame::new(
+    let _ = send_frame(
+        frame_tx,
+        Frame::new(
             stream_id,
             MsgType::StreamEnd,
             flags::END_STREAM,
             Bytes::new(),
-        ))
-        .await;
+        ),
+    )
+    .await;
 
     debug!(stream_id, status, "stream completed");
 }
 
 async fn send_error(tx: &FrameSender, stream_id: u32, msg: &str) {
-    let _ = tx
-        .send(Frame::new(
+    // Error frames use best-effort delivery — don't block if writer is congested
+    let _ = send_frame(
+        tx,
+        Frame::new(
             stream_id,
             MsgType::StreamError,
             0,
             Bytes::from(msg.to_string()),
-        ))
-        .await;
+        ),
+    )
+    .await;
 }
 
 fn decompress_gzip(data: &[u8]) -> Result<Bytes, std::io::Error> {

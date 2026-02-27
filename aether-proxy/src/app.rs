@@ -1,6 +1,6 @@
 //! Application lifecycle: initialization, task orchestration, and shutdown.
 
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -65,11 +65,19 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
     ));
 
     // Build reqwest client for tunnel upstream requests (shared).
-    let reqwest_client = reqwest::Client::builder()
+    let mut reqwest_builder = reqwest::Client::builder()
         .pool_max_idle_per_host(config.upstream_pool_max_idle_per_host)
         .pool_idle_timeout(Duration::from_secs(config.upstream_pool_idle_timeout_secs))
         .connect_timeout(Duration::from_secs(config.upstream_connect_timeout_secs))
-        .tcp_nodelay(config.upstream_tcp_nodelay)
+        .tcp_nodelay(config.upstream_tcp_nodelay);
+
+    if config.upstream_tcp_keepalive_secs > 0 {
+        reqwest_builder = reqwest_builder.tcp_keepalive(Some(Duration::from_secs(
+            config.upstream_tcp_keepalive_secs,
+        )));
+    }
+
+    let reqwest_client = reqwest_builder
         .build()
         .expect("failed to build reqwest client");
 
@@ -106,7 +114,6 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
                     dynamic: Arc::new(RwLock::new(DynamicConfig::from_config(&config))),
                     active_connections: Arc::new(AtomicU64::new(0)),
                     metrics: Arc::new(ProxyMetrics::new()),
-                    reconnect_attempts: AtomicU32::new(0),
                 }));
             }
             Err(e) => {
@@ -125,10 +132,12 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
     }
 
     // Build shared application state
+    let tunnel_tls_config = Arc::new(crate::tunnel::client::build_tls_config());
     let state = Arc::new(AppState {
         config: Arc::new(config),
         dns_cache,
         reqwest_client,
+        tunnel_tls_config,
     });
 
     // Shutdown signal channel
@@ -139,15 +148,18 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
         "running in tunnel mode"
     );
 
-    // Spawn one tunnel task per server
+    // Spawn tunnel connections per server (pool_size connections each)
+    let pool_size = state.config.tunnel_connections.max(1) as usize;
     let mut tunnel_handles = Vec::new();
     for server in &server_contexts {
-        let s = Arc::clone(&state);
-        let srv = Arc::clone(server);
-        let rx = shutdown_rx.clone();
-        tunnel_handles.push(tokio::spawn(async move {
-            tunnel::run(&s, &srv, rx).await;
-        }));
+        for conn_idx in 0..pool_size {
+            let s = Arc::clone(&state);
+            let srv = Arc::clone(server);
+            let rx = shutdown_rx.clone();
+            tunnel_handles.push(tokio::spawn(async move {
+                tunnel::run(&s, &srv, conn_idx, rx).await;
+            }));
+        }
     }
 
     // Wait for shutdown signal

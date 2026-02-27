@@ -1,6 +1,6 @@
 //! Shared application state passed to all subsystems.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -16,6 +16,8 @@ pub struct AppState {
     pub dns_cache: Arc<DnsCache>,
     /// Reqwest client for tunnel upstream requests (shared).
     pub reqwest_client: reqwest::Client,
+    /// Shared TLS config for tunnel WebSocket connections (avoids re-parsing root CAs on each reconnect).
+    pub tunnel_tls_config: Arc<rustls::ClientConfig>,
 }
 
 /// Per-server state: one instance per Aether server connection.
@@ -38,8 +40,6 @@ pub struct ServerContext {
     pub active_connections: Arc<AtomicU64>,
     /// Per-server request/latency metrics.
     pub metrics: Arc<ProxyMetrics>,
-    /// Reconnect attempt counter (reset on successful connection).
-    pub reconnect_attempts: AtomicU32,
 }
 
 /// Aggregate metrics for reporting to Aether.

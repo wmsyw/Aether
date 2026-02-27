@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::state::{AppState, ServerContext};
 
@@ -37,11 +37,26 @@ where
     // Track spawned stream handlers so we can wait for them on shutdown
     let mut handler_handles: Vec<JoinHandle<()>> = Vec::new();
     let max_streams = state.config.tunnel_max_streams.unwrap_or(128) as usize;
+    let stale_timeout = Duration::from_secs(state.config.tunnel_stale_timeout_secs);
+
+    // Track last time we received any data to detect stale connections
+    let mut last_data_at = tokio::time::Instant::now();
 
     let read_err = loop {
-        let msg_result = match ws_stream.next().await {
-            Some(r) => r,
-            None => break None, // stream ended
+        let msg_result = tokio::select! {
+            msg = ws_stream.next() => {
+                match msg {
+                    Some(r) => r,
+                    None => break None,
+                }
+            }
+            _ = tokio::time::sleep_until(last_data_at + stale_timeout) => {
+                warn!(
+                    stale_secs = stale_timeout.as_secs(),
+                    "tunnel connection stale, no data received"
+                );
+                break None;
+            }
         };
 
         let msg = match msg_result {
@@ -52,12 +67,15 @@ where
             }
         };
 
+        // Any successfully received message proves the connection is alive
+        last_data_at = tokio::time::Instant::now();
+
         let data = match msg {
             Message::Binary(data) => Bytes::from(data),
             Message::Ping(_) => continue,
             Message::Pong(_) => continue,
             Message::Close(_) => {
-                debug!("received WebSocket close");
+                info!("received WebSocket close");
                 break None;
             }
             _ => continue,
@@ -78,14 +96,13 @@ where
                     Ok(m) => m,
                     Err(e) => {
                         warn!(stream_id = frame.stream_id, error = %e, "invalid request metadata");
-                        let _ = frame_tx
-                            .send(Frame::new(
-                                frame.stream_id,
-                                MsgType::StreamError,
-                                0,
-                                Bytes::from(format!("invalid request metadata: {e}")),
-                            ))
-                            .await;
+                        // Use try_send to avoid blocking the read loop
+                        let _ = frame_tx.try_send(Frame::new(
+                            frame.stream_id,
+                            MsgType::StreamError,
+                            0,
+                            Bytes::from(format!("invalid request metadata: {e}")),
+                        ));
                         continue;
                     }
                 };
@@ -95,14 +112,12 @@ where
                         stream_id = frame.stream_id,
                         "max concurrent streams reached"
                     );
-                    let _ = frame_tx
-                        .send(Frame::new(
-                            frame.stream_id,
-                            MsgType::StreamError,
-                            0,
-                            Bytes::from("max concurrent streams reached"),
-                        ))
-                        .await;
+                    let _ = frame_tx.try_send(Frame::new(
+                        frame.stream_id,
+                        MsgType::StreamError,
+                        0,
+                        Bytes::from("max concurrent streams reached"),
+                    ));
                     continue;
                 }
 
@@ -147,9 +162,8 @@ where
             }
 
             MsgType::Ping => {
-                let _ = frame_tx
-                    .send(Frame::control(MsgType::Pong, frame.payload))
-                    .await;
+                // Use try_send to avoid blocking the read loop when writer is congested
+                let _ = frame_tx.try_send(Frame::control(MsgType::Pong, frame.payload));
             }
 
             MsgType::HeartbeatAck => {
@@ -157,7 +171,7 @@ where
             }
 
             MsgType::GoAway => {
-                debug!("received GOAWAY");
+                info!("received GOAWAY");
                 break None;
             }
 

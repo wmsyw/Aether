@@ -28,6 +28,15 @@ impl HeartbeatHandle {
     }
 }
 
+/// Create a no-op heartbeat handle that silently discards ACKs.
+/// Used for non-primary tunnel connections (conn_idx > 0) to avoid
+/// resetting shared atomic metrics via `swap(0)`.
+pub fn spawn_noop() -> HeartbeatHandle {
+    let (ack_tx, _) = tokio::sync::mpsc::channel::<Bytes>(1);
+    // receiver is immediately dropped; on_ack() calls will silently fail
+    HeartbeatHandle { ack_tx }
+}
+
 /// Spawn the heartbeat task. Returns a handle for forwarding ACKs.
 pub fn spawn(
     config: Arc<Config>,

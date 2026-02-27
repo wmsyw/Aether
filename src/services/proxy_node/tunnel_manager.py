@@ -2,7 +2,7 @@
 WebSocket 隧道管理器
 
 管理所有活跃的 aether-proxy tunnel 连接，提供通过隧道发送 HTTP 请求的能力。
-每个 proxy node 最多一条 tunnel 连接。
+每个 proxy node 可持有多条 tunnel 连接（连接池），请求按 least-loaded 策略分配。
 """
 
 from __future__ import annotations
@@ -49,9 +49,18 @@ class TunnelConnection:
     def is_alive(self) -> bool:
         return self.ws.client_state == WebSocketState.CONNECTED
 
-    async def send_frame(self, frame: Frame) -> None:
-        async with self._write_lock:
-            await self.ws.send_bytes(frame.encode())
+    async def send_frame(self, frame: Frame, timeout: float = 10.0) -> None:
+        """发送帧到 WebSocket，带超时保护防止写阻塞。
+
+        在高丢包网络下 TCP 写缓冲区可能满，send_bytes 会长时间阻塞。
+        加超时避免所有协程在 _write_lock 上排队导致级联失败。
+        """
+        try:
+            async with asyncio.timeout(timeout):
+                async with self._write_lock:
+                    await self.ws.send_bytes(frame.encode())
+        except TimeoutError:
+            raise TunnelStreamError("frame send timeout (writer congested)")
 
     def create_stream(self, stream_id: int) -> _StreamState:
         state = _StreamState(stream_id)
@@ -163,42 +172,100 @@ class TunnelStreamError(Exception):
 
 
 class TunnelManager:
-    """管理所有活跃的 tunnel 连接"""
+    """管理所有活跃的 tunnel 连接（支持每个 node 多条连接的连接池）"""
 
     # 单条 tunnel 上允许的最大并发 stream 数（超出时拒绝新请求）
     MAX_STREAMS_PER_CONN = 2048
 
     def __init__(self) -> None:
-        self._connections: dict[str, TunnelConnection] = {}  # node_id -> conn
+        self._connections: dict[str, list[TunnelConnection]] = {}  # node_id -> [conn, ...]
+        self._background_tasks: set[asyncio.Task[None]] = set()
+
+    def _background(self, coro: Any) -> None:  # noqa: ANN401
+        """启动 fire-and-forget task，通过 set 持有引用防止 GC 回收，完成后自动清理"""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     @property
     def active_count(self) -> int:
-        return len(self._connections)
+        return sum(len(conns) for conns in self._connections.values())
 
     def get_connection(self, node_id: str) -> TunnelConnection | None:
-        conn = self._connections.get(node_id)
-        if conn and not conn.is_alive:
-            self._connections.pop(node_id, None)
-            conn.cancel_all_streams()
+        """获取负载最低的存活连接，同时清理 dead 连接"""
+        conns = self._connections.get(node_id)
+        if not conns:
             return None
-        return conn
+
+        # 清理 dead 连接
+        alive = [c for c in conns if c.is_alive]
+        dead = [c for c in conns if not c.is_alive]
+        for c in dead:
+            c.cancel_all_streams()
+
+        if not alive:
+            self._connections.pop(node_id, None)
+            return None
+
+        if len(alive) != len(conns):
+            self._connections[node_id] = alive
+
+        # Least-loaded: 选 stream_count 最小的连接
+        return min(alive, key=lambda c: c.stream_count)
 
     def register(self, conn: TunnelConnection) -> None:
-        old = self._connections.get(conn.node_id)
-        if old:
-            old.cancel_all_streams()
-        self._connections[conn.node_id] = conn
-        logger.info("tunnel connected: node_id={}, name={}", conn.node_id, conn.node_name)
+        """注册一条新连接到连接池"""
+        conns = self._connections.get(conn.node_id)
+        if conns is None:
+            conns = []
+            self._connections[conn.node_id] = conns
+        conns.append(conn)
+        logger.info(
+            "tunnel connected: node_id={}, name={}, pool_size={}",
+            conn.node_id,
+            conn.node_name,
+            len(conns),
+        )
 
-    def unregister(self, node_id: str) -> None:
-        conn = self._connections.pop(node_id, None)
-        if conn:
-            conn.cancel_all_streams()
-            logger.info("tunnel disconnected: node_id={}, name={}", node_id, conn.node_name)
+    def unregister(self, conn: TunnelConnection) -> bool:
+        """
+        从连接池中注销指定连接。
+
+        返回 True 表示成功移除，False 表示该连接已不在池中。
+        """
+        conns = self._connections.get(conn.node_id)
+        if not conns:
+            return False
+
+        try:
+            conns.remove(conn)  # identity comparison via list.remove
+        except ValueError:
+            return False
+
+        conn.cancel_all_streams()
+
+        if not conns:
+            self._connections.pop(conn.node_id, None)
+
+        remaining = len(conns) if conns else 0
+        logger.info(
+            "tunnel disconnected: node_id={}, name={}, remaining={}",
+            conn.node_id,
+            conn.node_name,
+            remaining,
+        )
+        return True
 
     def has_tunnel(self, node_id: str) -> bool:
         conn = self.get_connection(node_id)
         return conn is not None
+
+    def connection_count(self, node_id: str) -> int:
+        """返回指定 node 当前存活的连接数"""
+        conns = self._connections.get(node_id)
+        if not conns:
+            return 0
+        return sum(1 for c in conns if c.is_alive)
 
     async def send_request(
         self,
@@ -248,10 +315,15 @@ class TunnelManager:
 
         return stream_state
 
-    async def handle_incoming_frame(self, node_id: str, frame: Frame) -> None:
-        """处理从 proxy 收到的响应帧"""
-        conn = self.get_connection(node_id)
-        if not conn:
+    async def handle_incoming_frame(self, conn: TunnelConnection, frame: Frame) -> None:
+        """处理从 proxy 收到的响应帧（仅处理当前 active 连接的帧）。
+
+        重要：此方法在 WebSocket 主读循环中被 await 调用，不能长时间阻塞，
+        否则会阻止读取后续帧，导致 proxy 端 TCP 缓冲区满而级联失败。
+        """
+        # 防止已被移除的连接的帧继续被处理
+        conns = self._connections.get(conn.node_id)
+        if not conns or conn not in conns:
             return
 
         stream = conn.get_stream(frame.stream_id)
@@ -281,10 +353,19 @@ class TunnelManager:
                 conn.remove_stream(frame.stream_id)
 
         elif frame.msg_type == MsgType.HEARTBEAT_DATA:
-            await self._handle_heartbeat(conn, frame)
+            # fire-and-forget: 不阻塞主读循环
+            self._background(self._handle_heartbeat(conn, frame))
 
         elif frame.msg_type == MsgType.PING:
-            await conn.send_frame(Frame(0, MsgType.PONG, 0, frame.payload))
+            # fire-and-forget: pong 回复不阻塞读循环
+            self._background(self._send_pong(conn, frame.payload))
+
+    async def _send_pong(self, conn: TunnelConnection, payload: bytes) -> None:
+        """发送 PONG 回复（fire-and-forget，不阻塞主读循环）"""
+        try:
+            await conn.send_frame(Frame(0, MsgType.PONG, 0, payload))
+        except TunnelStreamError:
+            pass  # best-effort pong
 
     async def _handle_heartbeat(self, conn: TunnelConnection, frame: Frame) -> None:
         """处理 proxy 上报的心跳数据，更新 DB，返回 ACK"""
@@ -320,7 +401,10 @@ class TunnelManager:
             logger.warning("tunnel heartbeat DB update failed: {}", e)
             ack = {}
 
-        await conn.send_frame(Frame(0, MsgType.HEARTBEAT_ACK, 0, json.dumps(ack).encode()))
+        try:
+            await conn.send_frame(Frame(0, MsgType.HEARTBEAT_ACK, 0, json.dumps(ack).encode()))
+        except TunnelStreamError:
+            logger.debug("heartbeat ACK send failed for node_id={}", conn.node_id)
 
 
 # 全局单例

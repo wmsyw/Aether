@@ -225,6 +225,30 @@ pub struct Config {
     /// Maximum concurrent streams over tunnel (auto-detected from hardware if omitted)
     #[arg(long, env = "AETHER_PROXY_TUNNEL_MAX_STREAMS")]
     pub tunnel_max_streams: Option<u32>,
+
+    /// WebSocket tunnel TCP connect timeout in seconds
+    #[arg(
+        long,
+        env = "AETHER_PROXY_TUNNEL_CONNECT_TIMEOUT",
+        default_value_t = 15
+    )]
+    pub tunnel_connect_timeout_secs: u64,
+
+    /// WebSocket tunnel TCP keepalive in seconds (0 disables)
+    #[arg(long, env = "AETHER_PROXY_TUNNEL_TCP_KEEPALIVE", default_value_t = 30)]
+    pub tunnel_tcp_keepalive_secs: u64,
+
+    /// WebSocket tunnel TCP_NODELAY
+    #[arg(long, env = "AETHER_PROXY_TUNNEL_TCP_NODELAY", default_value_t = true)]
+    pub tunnel_tcp_nodelay: bool,
+
+    /// Tunnel connection staleness timeout in seconds (triggers reconnect if no data received)
+    #[arg(long, env = "AETHER_PROXY_TUNNEL_STALE_TIMEOUT", default_value_t = 45)]
+    pub tunnel_stale_timeout_secs: u64,
+
+    /// Number of parallel WebSocket tunnel connections per server (connection pool)
+    #[arg(long, env = "AETHER_PROXY_TUNNEL_CONNECTIONS", default_value_t = 3)]
+    pub tunnel_connections: u32,
 }
 
 /// Per-server connection config (used in multi-server TOML `[[servers]]`).
@@ -306,6 +330,16 @@ pub struct ConfigFile {
     pub tunnel_ping_interval_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tunnel_max_streams: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_connect_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_tcp_keepalive_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_tcp_nodelay: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_stale_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_connections: Option<u32>,
 
     /// Multi-server config: each entry connects to a separate Aether instance.
     /// When present, top-level aether_url/management_token are ignored for
@@ -548,6 +582,20 @@ impl ConfigFile {
             self.tunnel_ping_interval_secs
         );
         set!("AETHER_PROXY_TUNNEL_MAX_STREAMS", self.tunnel_max_streams);
+        set!(
+            "AETHER_PROXY_TUNNEL_CONNECT_TIMEOUT",
+            self.tunnel_connect_timeout_secs
+        );
+        set!(
+            "AETHER_PROXY_TUNNEL_TCP_KEEPALIVE",
+            self.tunnel_tcp_keepalive_secs
+        );
+        set!("AETHER_PROXY_TUNNEL_TCP_NODELAY", self.tunnel_tcp_nodelay);
+        set!(
+            "AETHER_PROXY_TUNNEL_STALE_TIMEOUT",
+            self.tunnel_stale_timeout_secs
+        );
+        set!("AETHER_PROXY_TUNNEL_CONNECTIONS", self.tunnel_connections);
 
         // allowed_ports needs special handling (comma-separated)
         if let Some(ref ports) = self.allowed_ports {

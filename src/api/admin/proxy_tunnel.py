@@ -23,11 +23,11 @@ router = APIRouter()
 # 单帧最大 64 MB -- AI API 请求体可能包含多张 base64 图片，需要足够余量
 _MAX_FRAME_SIZE = 64 * 1024 * 1024
 
-# WebSocket 空闲超时（秒）-- proxy 端 WebSocket ping 间隔 15s + 心跳 30s，180s 提供充足余量
-_IDLE_TIMEOUT = 180.0
+# WebSocket 空闲超时（秒）-- 需覆盖客户端 stale_timeout(45s) + 重连延迟(最长30s) 的窗口期
+_IDLE_TIMEOUT = 90.0
 
-# 服务端应用层 ping 间隔（秒）-- 确保即使 proxy 端心跳延迟，连接也不会因中间代理空闲超时而断开
-_SERVER_PING_INTERVAL = 30.0
+# 服务端应用层 ping 间隔（秒）-- 与客户端 ping 间隔一致，确保高频心跳
+_SERVER_PING_INTERVAL = 15.0
 
 
 async def _authenticate(ws: WebSocket) -> tuple[str, str] | None:
@@ -78,22 +78,26 @@ async def _authenticate(ws: WebSocket) -> tuple[str, str] | None:
 @router.websocket("/api/internal/proxy-tunnel")
 async def proxy_tunnel_ws(ws: WebSocket) -> None:
     """aether-proxy tunnel WebSocket 端点"""
+    # 先 accept，避免认证（DB/Redis）慢时卡在握手阶段导致网关返回 502。
+    await ws.accept()
+
     try:
-        auth = await _authenticate(ws)
+        auth = await asyncio.wait_for(_authenticate(ws), timeout=10.0)
+    except asyncio.TimeoutError:
+        logger.warning("tunnel auth timeout")
+        await ws.close(code=4002, reason="authentication timeout")
+        return
     except Exception as e:
         logger.warning("tunnel auth error: {}", e)
-        await ws.accept()
         await ws.close(code=4002, reason="authentication error")
         return
 
     if not auth:
-        await ws.accept()
         await ws.close(code=4001, reason="unauthorized")
         return
 
     node_id: str = auth[0]
     node_name: str = auth[1]
-    await ws.accept()
 
     manager = get_tunnel_manager()
     conn = TunnelConnection(node_id, node_name, ws)
@@ -129,7 +133,7 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
                 logger.warning("tunnel frame decode error from {}: {}", node_id, e)
                 continue
 
-            await manager.handle_incoming_frame(node_id, frame)
+            await manager.handle_incoming_frame(conn, frame)
 
     except WebSocketDisconnect:
         logger.info("tunnel WebSocket disconnected: node_id={}", node_id)
@@ -137,8 +141,11 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
         logger.error("tunnel WebSocket error for node_id={}: {}", node_id, e)
     finally:
         ping_task.cancel()
-        manager.unregister(node_id)
-        await _update_tunnel_status(node_id, connected=False)
+        manager.unregister(conn)
+        if not manager.has_tunnel(node_id):
+            await _update_tunnel_status(node_id, connected=False)
+        else:
+            logger.info("tunnel connection closed but pool still active: node_id={}", node_id)
 
 
 async def _ping_loop(conn: TunnelConnection) -> None:
