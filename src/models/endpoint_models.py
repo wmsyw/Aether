@@ -274,7 +274,7 @@ class ProviderEndpointCreate(BaseModel):
         description="请求体规则列表，支持 set/drop/rename/append/insert/regex_replace 操作",
     )
 
-    max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
+    max_retries: int = Field(default=2, ge=0, le=999, description="最大重试次数")
 
     # 额外配置
     config: dict[str, Any] | None = Field(default=None, description="额外配置（JSON）")
@@ -338,7 +338,7 @@ class ProviderEndpointUpdate(BaseModel):
         description="请求体规则列表，支持 set/drop/rename/append/insert/regex_replace 操作",
     )
 
-    max_retries: int | None = Field(default=None, ge=0, le=10, description="最大重试次数")
+    max_retries: int | None = Field(default=None, ge=0, le=999, description="最大重试次数")
     is_active: bool | None = Field(default=None, description="是否启用")
     config: dict[str, Any] | None = Field(default=None, description="额外配置")
     proxy: ProxyConfig | None = Field(default=None, description="代理配置")

@@ -134,7 +134,7 @@
               :model-value="form.max_retries ?? ''"
               type="number"
               min="0"
-              max="10"
+              max="999"
               placeholder="默认 2"
               @update:model-value="(v) => form.max_retries = parseNumberInput(v)"
             />

@@ -232,7 +232,7 @@ class CreateProviderRequest(BaseModel):
     is_active: bool | None = Field(True, description="是否启用")
     concurrent_limit: int | None = Field(None, ge=0, description="并发限制")
     # 请求配置（从 Endpoint 迁移）
-    max_retries: int | None = Field(2, ge=0, le=10, description="最大重试次数")
+    max_retries: int | None = Field(2, ge=0, le=999, description="最大重试次数")
     proxy: ProxyConfig | None = Field(None, description="代理配置")
     # 超时配置（秒），为空时使用全局配置
     stream_first_byte_timeout: float | None = Field(
@@ -341,7 +341,7 @@ class UpdateProviderRequest(BaseModel):
     is_active: bool | None = None
     concurrent_limit: int | None = Field(None, ge=0)
     # 请求配置（从 Endpoint 迁移）
-    max_retries: int | None = Field(None, ge=0, le=10, description="最大重试次数")
+    max_retries: int | None = Field(None, ge=0, le=999, description="最大重试次数")
     proxy: ProxyConfig | None = Field(None, description="代理配置")
     # 超时配置（秒），为空时使用全局配置
     stream_first_byte_timeout: float | None = Field(

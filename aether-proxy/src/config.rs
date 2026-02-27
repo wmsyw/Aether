@@ -3,6 +3,36 @@ use std::path::Path;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+/// Fields that existed in 0.1.x but were removed in 0.2.0.
+const LEGACY_ONLY_KEYS: &[&str] = &[
+    "hmac_key",
+    "listen_port",
+    "timestamp_tolerance",
+    "connect_timeout_secs",
+    "tls_handshake_timeout_secs",
+    "enable_tls",
+    "tls_cert",
+    "tls_key",
+];
+
+/// Fields renamed from 0.1.x `delegate_*` to 0.2.0 `upstream_*`.
+const DELEGATE_TO_UPSTREAM: &[(&str, &str)] = &[
+    (
+        "delegate_connect_timeout_secs",
+        "upstream_connect_timeout_secs",
+    ),
+    (
+        "delegate_pool_max_idle_per_host",
+        "upstream_pool_max_idle_per_host",
+    ),
+    (
+        "delegate_pool_idle_timeout_secs",
+        "upstream_pool_idle_timeout_secs",
+    ),
+    ("delegate_tcp_keepalive_secs", "upstream_tcp_keepalive_secs"),
+    ("delegate_tcp_nodelay", "upstream_tcp_nodelay"),
+];
+
 /// Aether tunnel proxy.
 ///
 /// Deployed on overseas VPS to relay API traffic for Aether instances
@@ -296,6 +326,84 @@ impl ConfigFile {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+
+    /// Detect and migrate a 0.1.x config file to 0.2.0 format in-place.
+    ///
+    /// Returns `true` if migration was performed, `false` if already current.
+    /// The original file is backed up as `<name>.v1.bak` before rewriting.
+    pub fn migrate_legacy(path: &Path) -> anyhow::Result<bool> {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return Ok(false),
+        };
+        let mut table: toml::map::Map<String, toml::Value> = toml::from_str(&content)?;
+
+        // Detect legacy format: presence of any 0.1.x-only key.
+        let is_legacy = LEGACY_ONLY_KEYS.iter().any(|k| table.contains_key(*k))
+            || DELEGATE_TO_UPSTREAM
+                .iter()
+                .any(|(old, _)| table.contains_key(*old));
+
+        if !is_legacy {
+            return Ok(false);
+        }
+
+        // 1. Rename delegate_* -> upstream_* (carry over user-customized values)
+        for &(old, new) in DELEGATE_TO_UPSTREAM {
+            if let Some(val) = table.remove(old) {
+                table.entry(new.to_string()).or_insert(val);
+            }
+        }
+
+        // 2. Build [[servers]] from top-level aether_url + management_token + node_name
+        if !table.contains_key("servers") {
+            let aether_url = table.get("aether_url").and_then(|v| v.as_str());
+            let management_token = table.get("management_token").and_then(|v| v.as_str());
+            if let (Some(url), Some(token)) = (aether_url, management_token) {
+                let mut entry = toml::map::Map::new();
+                entry.insert("aether_url".into(), toml::Value::String(url.to_string()));
+                entry.insert(
+                    "management_token".into(),
+                    toml::Value::String(token.to_string()),
+                );
+                if let Some(name) = table.get("node_name").and_then(|v| v.as_str()) {
+                    entry.insert("node_name".into(), toml::Value::String(name.to_string()));
+                }
+                table.insert(
+                    "servers".into(),
+                    toml::Value::Array(vec![toml::Value::Table(entry)]),
+                );
+            }
+        }
+
+        // 3. Remove top-level fields that are now in [[servers]] or obsolete
+        table.remove("aether_url");
+        table.remove("management_token");
+        table.remove("node_name");
+        for &key in LEGACY_ONLY_KEYS {
+            table.remove(key);
+        }
+
+        // 4. Backup original file (abort migration if backup fails)
+        let backup_path = path.with_extension("v1.bak");
+        std::fs::copy(path, &backup_path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to backup config before migration: {} -> {}: {}",
+                path.display(),
+                backup_path.display(),
+                e
+            )
+        })?;
+
+        // 5. Write migrated config
+        let new_content = toml::to_string_pretty(&table)?;
+        std::fs::write(path, &new_content)?;
+
+        eprintln!("  Config migrated from 0.1.x to 0.2.0 format.");
+        eprintln!("  Backup saved: {}", backup_path.display());
+
+        Ok(true)
     }
 
     /// Resolve the effective server list.

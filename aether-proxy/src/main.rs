@@ -56,8 +56,13 @@ async fn main() -> anyhow::Result<()> {
     // Load config file as env-var defaults (before clap parsing)
     let config_file_path =
         std::env::var("AETHER_PROXY_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
-    if std::path::Path::new(&config_file_path).exists() {
-        if let Ok(file_cfg) = config::ConfigFile::load(std::path::Path::new(&config_file_path)) {
+    let config_path = std::path::Path::new(&config_file_path);
+    if config_path.exists() {
+        // Migrate legacy 0.1.x config to 0.2.0 format if needed
+        if let Err(e) = config::ConfigFile::migrate_legacy(config_path) {
+            eprintln!("  WARNING: config migration failed: {}", e);
+        }
+        if let Ok(file_cfg) = config::ConfigFile::load(config_path) {
             file_cfg.inject_env();
         }
     }
