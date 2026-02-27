@@ -91,8 +91,24 @@ export async function deleteEndpointKey(keyId: string): Promise<{ message: strin
  * 获取 Provider 的所有 Keys
  */
 export async function getProviderKeys(providerId: string): Promise<EndpointAPIKey[]> {
-  const response = await client.get(`/api/admin/endpoints/providers/${providerId}/keys`)
-  return response.data
+  // 后端默认 limit=100，这里主动分页拉取，避免账号数 >100 时前端被截断
+  const pageSize = 1000
+  let skip = 0
+  const allKeys: EndpointAPIKey[] = []
+
+  while (true) {
+    const response = await client.get(`/api/admin/endpoints/providers/${providerId}/keys`, {
+      params: { skip, limit: pageSize },
+    })
+
+    const batch = Array.isArray(response.data) ? (response.data as EndpointAPIKey[]) : []
+    allKeys.push(...batch)
+
+    if (batch.length < pageSize) break
+    skip += pageSize
+  }
+
+  return allKeys
 }
 
 /**
