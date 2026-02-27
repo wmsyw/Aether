@@ -63,7 +63,7 @@ class TunnelConnection:
             raise TunnelStreamError("frame send timeout (writer congested)")
 
     def create_stream(self, stream_id: int) -> _StreamState:
-        state = _StreamState(stream_id)
+        state = _StreamState(stream_id, conn=self)
         self._pending_streams[stream_id] = state
         return state
 
@@ -109,9 +109,10 @@ class _StreamState:
         "_body_chunks",
         "_done_event",
         "_error",
+        "_conn",
     )
 
-    def __init__(self, stream_id: int) -> None:
+    def __init__(self, stream_id: int, conn: TunnelConnection | None = None) -> None:
         self.stream_id = stream_id
         self.status: int = 0
         self.headers: list[list[str]] = []
@@ -119,6 +120,7 @@ class _StreamState:
         self._body_chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._done_event = asyncio.Event()
         self._error: str | None = None
+        self._conn = conn
 
     def set_response_headers(self, status: int, headers: list[list[str]] | dict[str, str]) -> None:
         self.status = status

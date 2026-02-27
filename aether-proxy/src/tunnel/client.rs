@@ -170,8 +170,9 @@ fn configure_tcp_socket(stream: &TcpStream, state: &Arc<AppState>) {
     if state.config.tunnel_tcp_keepalive_secs > 0 {
         let keepalive = socket2::TcpKeepalive::new()
             .with_time(Duration::from_secs(state.config.tunnel_tcp_keepalive_secs))
-            .with_interval(Duration::from_secs(5))
-            .with_retries(3);
+            .with_interval(Duration::from_secs(5));
+        #[cfg(not(target_os = "windows"))]
+        let keepalive = keepalive.with_retries(3);
         if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive) {
             warn!(error = %e, "failed to set TCP keepalive on tunnel socket");
         }

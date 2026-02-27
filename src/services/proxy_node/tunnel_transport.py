@@ -95,7 +95,10 @@ class TunnelTransport(httpx.AsyncBaseTransport):
     def _cleanup_stream(self, manager: TunnelManager, stream_state: _StreamState | None) -> None:
         if stream_state is None:
             return
-        conn = manager.get_connection(self._node_id)
+        # 优先从 stream 记住的原始连接上移除，避免连接池竞态
+        conn = stream_state._conn
+        if conn is None:
+            conn = manager.get_connection(self._node_id)
         if conn:
             conn.remove_stream(stream_state.stream_id)
 
@@ -120,8 +123,10 @@ class TunnelResponseStream(httpx.AsyncByteStream):
             yield chunk
 
     async def aclose(self) -> None:
-        # 确保 stream 从 connection 的 pending 列表中移除，防止内存泄漏
-        conn = self._manager.get_connection(self._node_id)
+        # 从 stream 记住的原始连接上精确移除，避免连接池竞态
+        conn = self._stream_state._conn
+        if conn is None:
+            conn = self._manager.get_connection(self._node_id)
         if conn:
             conn.remove_stream(self._stream_state.stream_id)
 

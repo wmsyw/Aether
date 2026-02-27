@@ -37,6 +37,7 @@ where
     // Track spawned stream handlers so we can wait for them on shutdown
     let mut handler_handles: Vec<JoinHandle<()>> = Vec::new();
     let max_streams = state.config.tunnel_max_streams.unwrap_or(128) as usize;
+    let mut frames_since_cleanup: u32 = 0;
     let stale_timeout = Duration::from_secs(state.config.tunnel_stale_timeout_secs);
 
     // Track last time we received any data to detect stale connections
@@ -97,12 +98,20 @@ where
                     Err(e) => {
                         warn!(stream_id = frame.stream_id, error = %e, "invalid request metadata");
                         // Use try_send to avoid blocking the read loop
-                        let _ = frame_tx.try_send(Frame::new(
-                            frame.stream_id,
-                            MsgType::StreamError,
-                            0,
-                            Bytes::from(format!("invalid request metadata: {e}")),
-                        ));
+                        if frame_tx
+                            .try_send(Frame::new(
+                                frame.stream_id,
+                                MsgType::StreamError,
+                                0,
+                                Bytes::from(format!("invalid request metadata: {e}")),
+                            ))
+                            .is_err()
+                        {
+                            warn!(
+                                stream_id = frame.stream_id,
+                                "writer channel full, StreamError dropped"
+                            );
+                        }
                         continue;
                     }
                 };
@@ -112,12 +121,20 @@ where
                         stream_id = frame.stream_id,
                         "max concurrent streams reached"
                     );
-                    let _ = frame_tx.try_send(Frame::new(
-                        frame.stream_id,
-                        MsgType::StreamError,
-                        0,
-                        Bytes::from("max concurrent streams reached"),
-                    ));
+                    if frame_tx
+                        .try_send(Frame::new(
+                            frame.stream_id,
+                            MsgType::StreamError,
+                            0,
+                            Bytes::from("max concurrent streams reached"),
+                        ))
+                        .is_err()
+                    {
+                        warn!(
+                            stream_id = frame.stream_id,
+                            "writer channel full, StreamError dropped"
+                        );
+                    }
                     continue;
                 }
 
@@ -163,7 +180,12 @@ where
 
             MsgType::Ping => {
                 // Use try_send to avoid blocking the read loop when writer is congested
-                let _ = frame_tx.try_send(Frame::control(MsgType::Pong, frame.payload));
+                if frame_tx
+                    .try_send(Frame::control(MsgType::Pong, frame.payload))
+                    .is_err()
+                {
+                    warn!("writer channel full, Pong dropped");
+                }
             }
 
             MsgType::HeartbeatAck => {
@@ -180,9 +202,12 @@ where
             }
         }
 
-        // Periodically clean up finished handles to avoid unbounded growth
-        if handler_handles.len() > max_streams {
+        // Periodically clean up finished handles to avoid unbounded growth.
+        // Trigger every 64 frames OR when the count exceeds max_streams.
+        frames_since_cleanup += 1;
+        if frames_since_cleanup >= 64 || handler_handles.len() > max_streams {
             handler_handles.retain(|h| !h.is_finished());
+            frames_since_cleanup = 0;
         }
     };
 
