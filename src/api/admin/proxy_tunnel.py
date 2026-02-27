@@ -16,15 +16,18 @@ from src.services.proxy_node.tunnel_manager import (
     TunnelConnection,
     get_tunnel_manager,
 )
-from src.services.proxy_node.tunnel_protocol import Frame
+from src.services.proxy_node.tunnel_protocol import Frame, MsgType
 
 router = APIRouter()
 
 # 单帧最大 64 MB -- AI API 请求体可能包含多张 base64 图片，需要足够余量
 _MAX_FRAME_SIZE = 64 * 1024 * 1024
 
-# WebSocket 空闲超时（秒）-- proxy 端 ping 间隔默认 15s，3 倍余量
-_IDLE_TIMEOUT = 90.0
+# WebSocket 空闲超时（秒）-- proxy 端 WebSocket ping 间隔 15s + 心跳 30s，180s 提供充足余量
+_IDLE_TIMEOUT = 180.0
+
+# 服务端应用层 ping 间隔（秒）-- 确保即使 proxy 端心跳延迟，连接也不会因中间代理空闲超时而断开
+_SERVER_PING_INTERVAL = 30.0
 
 
 async def _authenticate(ws: WebSocket) -> tuple[str, str] | None:
@@ -99,6 +102,9 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
     # 更新 DB: tunnel_connected = True
     await _update_tunnel_status(node_id, connected=True)
 
+    # 启动服务端 ping 任务，防止中间代理因空闲超时关闭连接
+    ping_task = asyncio.create_task(_ping_loop(conn))
+
     try:
         oversized_count = 0
         while True:
@@ -130,8 +136,25 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
     except Exception as e:
         logger.error("tunnel WebSocket error for node_id={}: {}", node_id, e)
     finally:
+        ping_task.cancel()
         manager.unregister(node_id)
         await _update_tunnel_status(node_id, connected=False)
+
+
+async def _ping_loop(conn: TunnelConnection) -> None:
+    """定期发送应用层 PING 帧，保持连接活跃"""
+    try:
+        while True:
+            await asyncio.sleep(_SERVER_PING_INTERVAL)
+            if not conn.is_alive:
+                break
+            try:
+                await conn.send_frame(Frame(0, MsgType.PING, 0, b""))
+            except Exception as e:
+                logger.debug("ping loop send failed for node_id={}: {}", conn.node_id, e)
+                break
+    except asyncio.CancelledError:
+        pass
 
 
 async def _update_tunnel_status(node_id: str, *, connected: bool) -> None:

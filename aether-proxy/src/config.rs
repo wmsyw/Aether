@@ -206,7 +206,7 @@ pub struct Config {
     #[arg(
         long,
         env = "AETHER_PROXY_TUNNEL_RECONNECT_BASE_MS",
-        default_value_t = 1000
+        default_value_t = 500
     )]
     pub tunnel_reconnect_base_ms: u64,
 

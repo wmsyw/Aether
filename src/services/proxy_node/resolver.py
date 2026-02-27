@@ -21,7 +21,8 @@ from src.core.logger import logger
 # ProxyNode 信息缓存（降低高频 DB 查询开销）
 # ---------------------------------------------------------------------------
 _proxy_node_cache: dict[str, tuple[dict[str, Any] | None, float]] = {}
-_PROXY_NODE_CACHE_TTL_SECONDS = 60.0
+_PROXY_NODE_CACHE_TTL_SECONDS = 15.0
+_PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS = 5.0  # 不可用节点使用更短的 TTL，加速恢复感知
 _PROXY_NODE_CACHE_MAX_SIZE = 256
 
 
@@ -60,12 +61,12 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
     try:
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
         if not node or node.status != ProxyNodeStatus.ONLINE:
-            _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_TTL_SECONDS)
+            _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS)
             return None
 
         # tunnel 模式节点必须 tunnel 已连接才可用
         if node.tunnel_mode and not node.tunnel_connected:
-            _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_TTL_SECONDS)
+            _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS)
             return None
 
         if node.is_manual:

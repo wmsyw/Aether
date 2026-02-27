@@ -35,7 +35,7 @@ class ProxyNodeHealthScheduler:
         scheduler = get_scheduler()
         scheduler.add_interval_job(
             self._scheduled_check,
-            seconds=30,
+            seconds=15,
             job_id="proxy_node_health_check",
             name="代理节点心跳检测",
         )

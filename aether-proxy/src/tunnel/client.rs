@@ -54,8 +54,9 @@ pub async fn connect_and_run(
     // Split into read/write halves
     let (ws_sink, ws_read) = futures_util::StreamExt::split(ws_stream);
 
-    // Spawn writer task
-    let (frame_tx, mut writer_handle) = writer::spawn_writer(ws_sink);
+    // Spawn writer task (with WebSocket ping keepalive)
+    let ping_interval = Duration::from_secs(state.config.tunnel_ping_interval_secs);
+    let (frame_tx, mut writer_handle) = writer::spawn_writer(ws_sink, ping_interval);
 
     // Spawn heartbeat task
     let hb_handle = heartbeat::spawn(
