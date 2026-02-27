@@ -103,6 +103,13 @@ class TaskPollerService:
         scheduler.remove_job(self.adapter.job_id)
 
     async def poll_pending_tasks(self) -> None:
+        try:
+            await self._do_poll()
+        except asyncio.CancelledError:
+            logger.debug("[{}] poll_pending_tasks cancelled (shutdown?)", self.adapter.task_type)
+            return
+
+    async def _do_poll(self) -> None:
         async with self._lock:
             token = await self._acquire_redis_lock()
             if token is None:
