@@ -47,7 +47,7 @@ pub async fn run(
                 let duration = connect_start.elapsed();
                 if duration >= MIN_STABLE_DURATION {
                     // Stable session -- reset backoff for quick reconnect
-                    reconnect_attempts.store(0, Ordering::Relaxed);
+                    reconnect_attempts.store(0, Ordering::Release);
                     info!(
                         server = %server.server_label,
                         conn = conn_idx,

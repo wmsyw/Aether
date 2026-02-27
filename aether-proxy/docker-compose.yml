@@ -3,12 +3,9 @@ services:
     image: ghcr.io/fawney19/aether-proxy:latest
     container_name: aether-proxy
     restart: unless-stopped
-    ports:
-      - "${AETHER_PROXY_LISTEN_PORT:-18080}:18080"
     env_file:
       - .env
     environment:
-      AETHER_PROXY_LISTEN_PORT: 18080
       AETHER_PROXY_LOG_JSON: "true"
     logging:
       driver: json-file

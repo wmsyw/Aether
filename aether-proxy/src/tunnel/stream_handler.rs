@@ -26,6 +26,24 @@ const MAX_CHUNK_SIZE: usize = 32 * 1024;
 /// rather than blocking indefinitely and exhausting the stream pool.
 const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Minimum allowed upstream request timeout (seconds).
+const MIN_TIMEOUT_SECS: u64 = 5;
+/// Maximum allowed upstream request timeout (seconds).
+const MAX_TIMEOUT_SECS: u64 = 300;
+
+/// Headers that must not be forwarded to upstream (hop-by-hop or security-sensitive).
+const BLOCKED_HEADERS: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+];
+
 /// Handle a single stream: receive body, execute upstream, send response.
 pub async fn handle_stream(
     state: Arc<AppState>,
@@ -36,11 +54,11 @@ pub async fn handle_stream(
     frame_tx: FrameSender,
 ) {
     let start = Instant::now();
-    server.active_connections.fetch_add(1, Ordering::Relaxed);
+    server.active_connections.fetch_add(1, Ordering::Release);
 
     handle_stream_inner(&state, &server, stream_id, meta, &mut body_rx, &frame_tx).await;
 
-    server.active_connections.fetch_sub(1, Ordering::Relaxed);
+    server.active_connections.fetch_sub(1, Ordering::Release);
     server.metrics.record_request(start.elapsed());
 }
 
@@ -134,6 +152,20 @@ async fn handle_stream_inner(
         }
     };
 
+    // Only allow http/https schemes (block file://, data://, etc.)
+    match target_url.scheme() {
+        "http" | "https" => {}
+        other => {
+            send_error(
+                frame_tx,
+                stream_id,
+                &format!("unsupported URL scheme: {other}"),
+            )
+            .await;
+            return;
+        }
+    }
+
     let host = match target_url.host_str() {
         Some(h) => h.to_string(),
         None => {
@@ -143,13 +175,14 @@ async fn handle_stream_inner(
     };
     let port = target_url.port_or_known_default().unwrap_or(443);
 
-    // DNS + target validation (dns_cache is populated as a side effect)
+    // DNS + target validation (populates dns_cache for SafeDnsResolver)
     let dns_start = Instant::now();
     {
-        let allowed_ports = server.dynamic.read().unwrap().allowed_ports.clone();
+        let allowed_ports = Arc::clone(&server.dynamic.load().allowed_ports);
         if let Err(e) =
             target_filter::validate_target(&host, port, &allowed_ports, &state.dns_cache).await
         {
+            server.metrics.dns_failures.fetch_add(1, Ordering::Release);
             send_error(frame_tx, stream_id, &format!("target blocked: {e}")).await;
             return;
         }
@@ -158,12 +191,23 @@ async fn handle_stream_inner(
 
     // Execute upstream request
     let client = &state.reqwest_client;
-    let timeout = Duration::from_secs(meta.timeout);
+    let timeout = Duration::from_secs(meta.timeout.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS));
 
     let method: reqwest::Method = meta.method.parse().unwrap_or(reqwest::Method::GET);
     let mut req = client.request(method, &meta.url);
     for (k, v) in &meta.headers {
-        req = req.header(k.as_str(), v.as_str());
+        let k_lower = k.to_ascii_lowercase();
+        // Skip hop-by-hop and security-sensitive headers
+        if BLOCKED_HEADERS.contains(&k_lower.as_str()) {
+            continue;
+        }
+        // Validate header name/value are valid HTTP
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+            reqwest::header::HeaderValue::from_str(v),
+        ) {
+            req = req.header(name, value);
+        }
     }
     let body_size = body.len();
     if !body.is_empty() {
@@ -175,6 +219,10 @@ async fn handle_stream_inner(
     let response = match req.send().await {
         Ok(r) => r,
         Err(e) => {
+            server
+                .metrics
+                .failed_requests
+                .fetch_add(1, Ordering::Release);
             let msg = if e.is_timeout() {
                 "upstream timeout".to_string()
             } else if e.is_connect() {
@@ -190,7 +238,7 @@ async fn handle_stream_inner(
     // Send RESPONSE_HEADERS
     let status = response.status().as_u16();
     let ttfb_ms = upstream_start.elapsed().as_millis() as u64;
-    let mut resp_headers: Vec<(String, String)> = Vec::new();
+    let mut resp_headers: Vec<(String, String)> = Vec::with_capacity(response.headers().len() + 1);
     for (k, v) in response.headers() {
         if let Ok(vs) = v.to_str() {
             resp_headers.push((k.as_str().to_string(), vs.to_string()));
@@ -253,6 +301,7 @@ async fn handle_stream_inner(
                 }
             }
             Err(e) => {
+                server.metrics.stream_errors.fetch_add(1, Ordering::Release);
                 warn!(stream_id, error = %e, "upstream body read error");
                 send_error(frame_tx, stream_id, &format!("body read error: {e}")).await;
                 return;

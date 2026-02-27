@@ -251,6 +251,57 @@ pub struct Config {
     pub tunnel_connections: u32,
 }
 
+impl Config {
+    /// Validate configuration values are within sane ranges.
+    /// Called after parsing to catch misconfigurations early.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.heartbeat_interval == 0 {
+            anyhow::bail!("heartbeat_interval must be > 0");
+        }
+        if self.heartbeat_interval > 3600 {
+            anyhow::bail!("heartbeat_interval must be <= 3600");
+        }
+        if self.allowed_ports.is_empty() {
+            anyhow::bail!("allowed_ports must not be empty");
+        }
+        for &port in &self.allowed_ports {
+            if port == 0 {
+                anyhow::bail!("allowed_ports: port 0 is not valid");
+            }
+        }
+        if self.tunnel_connect_timeout_secs == 0 {
+            anyhow::bail!("tunnel_connect_timeout_secs must be > 0");
+        }
+        if self.tunnel_ping_interval_secs == 0 {
+            anyhow::bail!("tunnel_ping_interval_secs must be > 0");
+        }
+        if self.tunnel_stale_timeout_secs <= self.tunnel_ping_interval_secs {
+            anyhow::bail!(
+                "tunnel_stale_timeout_secs ({}) must be > tunnel_ping_interval_secs ({})",
+                self.tunnel_stale_timeout_secs,
+                self.tunnel_ping_interval_secs
+            );
+        }
+        if self.tunnel_connections == 0 {
+            anyhow::bail!("tunnel_connections must be > 0");
+        }
+        if self.aether_retry_max_attempts == 0 {
+            anyhow::bail!("aether_retry_max_attempts must be >= 1");
+        }
+        if self.tunnel_reconnect_base_ms > self.tunnel_reconnect_max_ms {
+            anyhow::bail!(
+                "tunnel_reconnect_base_ms ({}) must be <= tunnel_reconnect_max_ms ({})",
+                self.tunnel_reconnect_base_ms,
+                self.tunnel_reconnect_max_ms
+            );
+        }
+        if self.upstream_connect_timeout_secs == 0 {
+            anyhow::bail!("upstream_connect_timeout_secs must be > 0");
+        }
+        Ok(())
+    }
+}
+
 /// Per-server connection config (used in multi-server TOML `[[servers]]`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerEntry {
@@ -490,16 +541,16 @@ impl ConfigFile {
         let first_server = self.servers.first();
         let aether_url = self
             .aether_url
-            .clone()
-            .or_else(|| first_server.map(|s| s.aether_url.clone()));
+            .as_deref()
+            .or(first_server.map(|s| s.aether_url.as_str()));
         let management_token = self
             .management_token
-            .clone()
-            .or_else(|| first_server.map(|s| s.management_token.clone()));
+            .as_deref()
+            .or(first_server.map(|s| s.management_token.as_str()));
         let node_name = self
             .node_name
-            .clone()
-            .or_else(|| first_server.and_then(|s| s.node_name.clone()));
+            .as_deref()
+            .or(first_server.and_then(|s| s.node_name.as_deref()));
 
         set!("AETHER_PROXY_AETHER_URL", aether_url);
         set!("AETHER_PROXY_MANAGEMENT_TOKEN", management_token);

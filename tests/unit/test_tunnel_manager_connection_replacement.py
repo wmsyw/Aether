@@ -3,7 +3,11 @@ import asyncio
 import pytest
 from starlette.websockets import WebSocketState
 
-from src.services.proxy_node.tunnel_manager import TunnelConnection, TunnelManager
+from src.services.proxy_node.tunnel_manager import (
+    TunnelConnection,
+    TunnelManager,
+    TunnelStreamError,
+)
 from src.services.proxy_node.tunnel_protocol import Frame, MsgType
 
 
@@ -117,3 +121,45 @@ async def test_removed_connection_frames_ignored() -> None:
     pong = Frame.decode(ws2.sent[0])
     assert pong.msg_type == MsgType.PONG
     assert pong.payload == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_max_streams_from_header() -> None:
+    """TunnelConnection respects proxy-advertised max_streams (clamped)"""
+    ws = _DummyWebSocket()
+
+    # Explicit value within range
+    conn = TunnelConnection("n", "n", ws, max_streams=256)  # type: ignore[arg-type]
+    assert conn.max_streams == 256
+
+    # Clamped to minimum 64
+    conn_low = TunnelConnection("n", "n", ws, max_streams=10)  # type: ignore[arg-type]
+    assert conn_low.max_streams == 64
+
+    # Clamped to maximum 2048
+    conn_high = TunnelConnection("n", "n", ws, max_streams=9999)  # type: ignore[arg-type]
+    assert conn_high.max_streams == 2048
+
+    # None falls back to TunnelManager.MAX_STREAMS_PER_CONN
+    conn_default = TunnelConnection("n", "n", ws)  # type: ignore[arg-type]
+    assert conn_default.max_streams == TunnelManager.MAX_STREAMS_PER_CONN
+
+
+@pytest.mark.asyncio
+async def test_send_request_respects_per_conn_max_streams() -> None:
+    """send_request raises TunnelStreamError when per-connection limit is reached"""
+    manager = TunnelManager()
+    ws = _DummyWebSocket()
+    # Set a very low max_streams (clamped to minimum 64)
+    conn = TunnelConnection("node-1", "node-1", ws, max_streams=64)  # type: ignore[arg-type]
+    manager.register(conn)
+
+    # Fill up to max_streams
+    for i in range(64):
+        conn.create_stream(i * 2 + 2)
+
+    assert conn.stream_count == 64
+
+    # Next send_request should fail
+    with pytest.raises(TunnelStreamError, match="stream limit reached"):
+        await manager.send_request("node-1", method="GET", url="https://example.com", headers={})

@@ -4,19 +4,22 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use tokio::signal;
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex};
 use tracing::{error, info, warn};
 
 use crate::config::{Config, ServerEntry};
 use crate::net;
 use crate::registration::client::AetherClient;
 use crate::runtime::{self, DynamicConfig};
+use crate::safe_dns::SafeDnsResolver;
 use crate::state::{AppState, ProxyMetrics, ServerContext};
 use crate::{hardware, target_filter, tunnel};
 
 /// Run the full application lifecycle after config has been parsed.
 pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Result<()> {
+    config.validate()?;
     init_tracing(&config);
 
     info!(
@@ -65,7 +68,12 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
     ));
 
     // Build reqwest client for tunnel upstream requests (shared).
+    // Inject SafeDnsResolver so reqwest only connects to addresses that were
+    // validated by validate_target() — this eliminates the DNS rebinding
+    // TOCTTOU gap where a second DNS lookup could return a private IP.
+    let safe_resolver = SafeDnsResolver::new(Arc::clone(&dns_cache));
     let mut reqwest_builder = reqwest::Client::builder()
+        .dns_resolver(Arc::new(safe_resolver))
         .pool_max_idle_per_host(config.upstream_pool_max_idle_per_host)
         .pool_idle_timeout(Duration::from_secs(config.upstream_pool_idle_timeout_secs))
         .connect_timeout(Duration::from_secs(config.upstream_connect_timeout_secs))
@@ -81,8 +89,10 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
         .build()
         .expect("failed to build reqwest client");
 
-    // Register with each Aether server and build per-server contexts
-    let mut server_contexts: Vec<Arc<ServerContext>> = Vec::new();
+    // Register with each Aether server and build per-server contexts.
+    // Wrapped in Arc<Mutex> so retry_failed_registrations can append later.
+    let server_contexts: Arc<Mutex<Vec<Arc<ServerContext>>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut failed_entries: Vec<(String, ServerEntry)> = Vec::new();
     for (i, entry) in servers.iter().enumerate() {
         let label = if servers.len() == 1 {
             "server".to_string()
@@ -104,14 +114,18 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
         {
             Ok(node_id) => {
                 info!(server = %label, node_id = %node_id, url = %entry.aether_url, node_name = %node_name, "registered");
-                server_contexts.push(Arc::new(ServerContext {
+                // Initialize dynamic config with per-server node_name (not global),
+                // so that the heartbeat and reconnect use the correct name.
+                let mut dynamic = DynamicConfig::from_config(&config);
+                dynamic.node_name = node_name.clone();
+                server_contexts.lock().await.push(Arc::new(ServerContext {
                     server_label: label,
                     aether_url: entry.aether_url.clone(),
                     management_token: entry.management_token.clone(),
                     node_name,
                     node_id: Arc::new(RwLock::new(node_id)),
                     aether_client: client,
-                    dynamic: Arc::new(RwLock::new(DynamicConfig::from_config(&config))),
+                    dynamic: Arc::new(ArcSwap::from_pointee(dynamic)),
                     active_connections: Arc::new(AtomicU64::new(0)),
                     metrics: Arc::new(ProxyMetrics::new()),
                 }));
@@ -121,14 +135,24 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
                     server = %label,
                     url = %entry.aether_url,
                     error = %e,
-                    "registration failed, skipping server"
+                    "registration failed, will retry in background"
                 );
+                failed_entries.push((label, entry.clone()));
             }
         }
     }
 
-    if server_contexts.is_empty() {
-        anyhow::bail!("no servers registered successfully");
+    {
+        let ctx_count = server_contexts.lock().await.len();
+        if ctx_count == 0 && failed_entries.is_empty() {
+            anyhow::bail!("no servers configured");
+        }
+        if ctx_count == 0 {
+            anyhow::bail!(
+                "no servers registered successfully (all {} failed)",
+                failed_entries.len()
+            );
+        }
     }
 
     // Build shared application state
@@ -144,14 +168,14 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     info!(
-        active_servers = server_contexts.len(),
+        active_servers = server_contexts.lock().await.len(),
         "running in tunnel mode"
     );
 
     // Spawn tunnel connections per server (pool_size connections each)
     let pool_size = state.config.tunnel_connections.max(1) as usize;
     let mut tunnel_handles = Vec::new();
-    for server in &server_contexts {
+    for server in server_contexts.lock().await.iter() {
         for conn_idx in 0..pool_size {
             let s = Arc::clone(&state);
             let srv = Arc::clone(server);
@@ -162,13 +186,35 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
         }
     }
 
+    // Spawn background retry for failed server registrations
+    if !failed_entries.is_empty() {
+        let retry_state = Arc::clone(&state);
+        let retry_contexts = Arc::clone(&server_contexts);
+        let retry_public_ip = public_ip.clone();
+        let retry_hw_info = hw_info.clone();
+        let retry_shutdown = shutdown_rx.clone();
+        let retry_pool_size = pool_size;
+        tokio::spawn(async move {
+            retry_failed_registrations(
+                retry_state,
+                retry_contexts,
+                failed_entries,
+                retry_public_ip,
+                retry_hw_info,
+                retry_pool_size,
+                retry_shutdown,
+            )
+            .await;
+        });
+    }
+
     // Wait for shutdown signal
     wait_for_shutdown().await;
     info!("shutdown signal received, cleaning up...");
     let _ = shutdown_tx.send(true);
 
-    // Graceful unregister from all servers
-    for server in &server_contexts {
+    // Graceful unregister from all servers (including retry-registered ones)
+    for server in server_contexts.lock().await.iter() {
         let node_id = server.node_id.read().unwrap().clone();
         if let Err(e) = server.aether_client.unregister(&node_id).await {
             error!(
@@ -186,6 +232,97 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
 
     info!("aether-proxy stopped");
     Ok(())
+}
+
+/// Retry interval for failed server registrations (5 minutes).
+const REGISTRATION_RETRY_INTERVAL: Duration = Duration::from_secs(300);
+/// Max registration retry attempts before giving up.
+const REGISTRATION_RETRY_MAX: u32 = 12;
+
+/// Background task that retries registration for servers that failed at startup.
+async fn retry_failed_registrations(
+    state: Arc<AppState>,
+    server_contexts: Arc<Mutex<Vec<Arc<ServerContext>>>>,
+    failed: Vec<(String, ServerEntry)>,
+    public_ip: String,
+    hw_info: crate::hardware::HardwareInfo,
+    pool_size: usize,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    for (label, entry) in &failed {
+        let node_name = entry
+            .node_name
+            .clone()
+            .unwrap_or_else(|| state.config.node_name.clone());
+        let client = Arc::new(AetherClient::new(
+            &state.config,
+            &entry.aether_url,
+            &entry.management_token,
+        ));
+
+        let mut attempt = 0u32;
+        let node_id = loop {
+            attempt += 1;
+
+            tokio::select! {
+                _ = tokio::time::sleep(REGISTRATION_RETRY_INTERVAL) => {}
+                _ = shutdown.changed() => {
+                    info!(server = %label, "shutdown during registration retry");
+                    return;
+                }
+            }
+
+            match client
+                .register(&state.config, &node_name, &public_ip, Some(&hw_info))
+                .await
+            {
+                Ok(id) => {
+                    info!(server = %label, node_id = %id, attempt, "registration retry succeeded");
+                    break id;
+                }
+                Err(e) => {
+                    warn!(
+                        server = %label,
+                        attempt,
+                        max = REGISTRATION_RETRY_MAX,
+                        error = %e,
+                        "registration retry failed"
+                    );
+                    if attempt >= REGISTRATION_RETRY_MAX {
+                        error!(server = %label, "giving up registration after {} attempts", attempt);
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Build server context and spawn tunnels
+        let mut dynamic = DynamicConfig::from_config(&state.config);
+        dynamic.node_name = node_name.clone();
+        let server = Arc::new(ServerContext {
+            server_label: label.clone(),
+            aether_url: entry.aether_url.clone(),
+            management_token: entry.management_token.clone(),
+            node_name,
+            node_id: Arc::new(RwLock::new(node_id)),
+            aether_client: client,
+            dynamic: Arc::new(ArcSwap::from_pointee(dynamic)),
+            active_connections: Arc::new(AtomicU64::new(0)),
+            metrics: Arc::new(ProxyMetrics::new()),
+        });
+
+        // Add to shared list so shutdown can unregister this server
+        server_contexts.lock().await.push(Arc::clone(&server));
+
+        for conn_idx in 0..pool_size {
+            let s = Arc::clone(&state);
+            let srv = Arc::clone(&server);
+            let rx = shutdown.clone();
+            tokio::spawn(async move {
+                tunnel::run(&s, &srv, conn_idx, rx).await;
+            });
+        }
+    }
 }
 
 fn init_tracing(config: &Config) {

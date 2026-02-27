@@ -296,6 +296,13 @@ impl App {
     fn save(&mut self) -> anyhow::Result<()> {
         let cfg = self.to_config();
         cfg.save(&self.config_path)?;
+        // Restrict config file permissions to owner-only (contains management token).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                std::fs::set_permissions(&self.config_path, std::fs::Permissions::from_mode(0o600));
+        }
         self.modified = false;
         self.saved_once = true;
         self.message = Some((

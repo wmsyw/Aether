@@ -28,7 +28,9 @@ pub struct ServerContext {
     pub aether_url: String,
     /// Management token for this server.
     pub management_token: String,
-    /// Resolved node name (per-server override or global fallback).
+    /// Resolved node name at registration time (per-server override or global fallback).
+    /// After startup, the active node_name is read from `dynamic` (may be updated remotely).
+    #[allow(dead_code)]
     pub node_name: String,
     /// Node ID assigned by this Aether server.
     pub node_id: Arc<RwLock<String>>,
@@ -46,6 +48,9 @@ pub struct ServerContext {
 pub struct ProxyMetrics {
     pub total_requests: AtomicU64,
     pub total_latency_ns: AtomicU64,
+    pub failed_requests: AtomicU64,
+    pub dns_failures: AtomicU64,
+    pub stream_errors: AtomicU64,
 }
 
 impl ProxyMetrics {
@@ -53,12 +58,15 @@ impl ProxyMetrics {
         Self {
             total_requests: AtomicU64::new(0),
             total_latency_ns: AtomicU64::new(0),
+            failed_requests: AtomicU64::new(0),
+            dns_failures: AtomicU64::new(0),
+            stream_errors: AtomicU64::new(0),
         }
     }
 
     pub fn record_request(&self, elapsed: Duration) {
         let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
-        self.total_requests.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ns.fetch_add(nanos, Ordering::Relaxed);
+        self.total_requests.fetch_add(1, Ordering::Release);
+        self.total_latency_ns.fetch_add(nanos, Ordering::Release);
     }
 }

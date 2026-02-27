@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
 /// Check if an IP address belongs to a private/reserved network.
-fn is_private_ip(ip: &IpAddr) -> bool {
+pub fn is_private_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_private_ipv4(v4),
         IpAddr::V6(v6) => is_private_ipv6(v6),
@@ -36,6 +37,22 @@ fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
     }
     // 0.0.0.0/8
     if octets[0] == 0 {
+        return true;
+    }
+    // 100.64.0.0/10 (CGNAT / shared address space)
+    if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+        return true;
+    }
+    // 192.0.0.0/24 (IETF protocol assignments)
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 0 {
+        return true;
+    }
+    // 198.18.0.0/15 (benchmark testing)
+    if octets[0] == 198 && (18..=19).contains(&octets[1]) {
+        return true;
+    }
+    // 240.0.0.0/4 (reserved for future use)
+    if octets[0] >= 240 {
         return true;
     }
     false
@@ -71,6 +88,7 @@ pub enum FilterError {
     PrivateIp(IpAddr),
     PortNotAllowed(u16),
     DnsResolutionFailed(String),
+    NoPublicAddrs(String),
 }
 
 impl std::fmt::Display for FilterError {
@@ -79,17 +97,26 @@ impl std::fmt::Display for FilterError {
             Self::PrivateIp(ip) => write!(f, "target IP {} is in private/reserved range", ip),
             Self::PortNotAllowed(port) => write!(f, "port {} not in allowed list", port),
             Self::DnsResolutionFailed(host) => write!(f, "DNS resolution failed for {}", host),
+            Self::NoPublicAddrs(host) => {
+                write!(
+                    f,
+                    "all resolved addresses for {} are private/reserved",
+                    host
+                )
+            }
         }
     }
 }
 
 struct DnsCacheEntry {
-    addr: SocketAddr,
+    addrs: Arc<Vec<SocketAddr>>,
     expires_at: Instant,
     inserted_at: Instant,
 }
 
 /// Lightweight DNS cache with TTL + capacity bounds.
+/// Stores all public resolved addresses per host (used by SafeDnsResolver
+/// to ensure reqwest connects to the same validated addresses).
 pub struct DnsCache {
     ttl: Duration,
     capacity: usize,
@@ -105,7 +132,27 @@ impl DnsCache {
         }
     }
 
-    pub async fn get(&self, host: &str, port: u16) -> Option<SocketAddr> {
+    /// Look up cached public addresses for a host (any port).
+    ///
+    /// Used by `SafeDnsResolver` which only knows the hostname — returns the
+    /// first unexpired entry whose key starts with `host:`.
+    pub async fn get_by_host(&self, host: &str) -> Option<Arc<Vec<SocketAddr>>> {
+        if self.capacity == 0 || self.ttl.is_zero() {
+            return None;
+        }
+        let prefix = format!("{}:", host.to_ascii_lowercase());
+        let now = Instant::now();
+        let entries = self.entries.read().await;
+        for (key, entry) in entries.iter() {
+            if key.starts_with(&prefix) && entry.expires_at > now {
+                return Some(Arc::clone(&entry.addrs));
+            }
+        }
+        None
+    }
+
+    /// Look up cached public addresses for a host + port.
+    pub async fn get(&self, host: &str, port: u16) -> Option<Arc<Vec<SocketAddr>>> {
         if self.capacity == 0 || self.ttl.is_zero() {
             return None;
         }
@@ -116,7 +163,7 @@ impl DnsCache {
         {
             let entries = self.entries.read().await;
             match entries.get(&key) {
-                Some(entry) if entry.expires_at > now => return Some(entry.addr),
+                Some(entry) if entry.expires_at > now => return Some(Arc::clone(&entry.addrs)),
                 None => return None,
                 Some(_) => {} // expired, fall through to evict
             }
@@ -128,8 +175,9 @@ impl DnsCache {
         None
     }
 
-    pub async fn insert(&self, host: &str, port: u16, addr: SocketAddr) {
-        if self.capacity == 0 || self.ttl.is_zero() {
+    /// Insert resolved public addresses into cache.
+    pub async fn insert(&self, host: &str, port: u16, addrs: Arc<Vec<SocketAddr>>) {
+        if self.capacity == 0 || self.ttl.is_zero() || addrs.is_empty() {
             return;
         }
         let key = Self::key(host, port);
@@ -150,7 +198,7 @@ impl DnsCache {
         entries.insert(
             key,
             DnsCacheEntry {
-                addr,
+                addrs,
                 expires_at: now + self.ttl,
                 inserted_at: now,
             },
@@ -158,22 +206,62 @@ impl DnsCache {
     }
 
     fn key(host: &str, port: u16) -> String {
-        format!("{}:{}", host, port)
+        format!("{}:{}", host.to_ascii_lowercase(), port)
     }
+}
+
+/// Resolve a hostname to public (non-private) socket addresses.
+///
+/// Results are cached in `dns_cache`. Private/reserved IPs are filtered out.
+/// Returns an error if no public addresses remain after filtering.
+pub async fn resolve_public_addrs(
+    host: &str,
+    port: u16,
+    dns_cache: &DnsCache,
+) -> Result<Vec<SocketAddr>, FilterError> {
+    // Cache hit
+    if let Some(addrs) = dns_cache.get(host, port).await {
+        return Ok((*addrs).clone());
+    }
+
+    // Async DNS resolution
+    let addr_str = format!("{}:{}", host, port);
+    let resolved: Vec<SocketAddr> = tokio::net::lookup_host(&addr_str)
+        .await
+        .map_err(|_| FilterError::DnsResolutionFailed(host.to_string()))?
+        .collect();
+
+    if resolved.is_empty() {
+        return Err(FilterError::DnsResolutionFailed(host.to_string()));
+    }
+
+    // Filter out private/reserved addresses
+    let public: Vec<SocketAddr> = resolved
+        .into_iter()
+        .filter(|addr| !is_private_ip(&addr.ip()))
+        .collect();
+
+    if public.is_empty() {
+        return Err(FilterError::NoPublicAddrs(host.to_string()));
+    }
+
+    // Cache the validated public addresses
+    let arc_addrs = Arc::new(public);
+    dns_cache.insert(host, port, Arc::clone(&arc_addrs)).await;
+    Ok((*arc_addrs).clone())
 }
 
 /// Validate that the target host:port is allowed.
 ///
-/// Uses async DNS resolution (via `tokio::net::lookup_host`) to avoid
-/// blocking the async runtime on potentially slow DNS lookups.
-///
-/// Returns the resolved socket address to connect to.
+/// Performs port whitelist check, private IP filtering, and DNS resolution
+/// with caching. The resolved addresses are stored in the shared DnsCache
+/// so that the SafeDnsResolver can reuse them, eliminating the TOCTTOU gap.
 pub async fn validate_target(
     host: &str,
     port: u16,
     allowed_ports: &HashSet<u16>,
     dns_cache: &DnsCache,
-) -> Result<SocketAddr, FilterError> {
+) -> Result<Vec<SocketAddr>, FilterError> {
     // Port whitelist check
     if !allowed_ports.contains(&port) {
         return Err(FilterError::PortNotAllowed(port));
@@ -184,35 +272,11 @@ pub async fn validate_target(
         if is_private_ip(&ip) {
             return Err(FilterError::PrivateIp(ip));
         }
-        return Ok(SocketAddr::new(ip, port));
+        return Ok(vec![SocketAddr::new(ip, port)]);
     }
 
-    if let Some(addr) = dns_cache.get(host, port).await {
-        return Ok(addr);
-    }
-
-    // Async DNS resolution with private IP check (DNS rebinding protection)
-    let addr_str = format!("{}:{}", host, port);
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&addr_str)
-        .await
-        .map_err(|_| FilterError::DnsResolutionFailed(host.to_string()))?
-        .collect();
-
-    if addrs.is_empty() {
-        return Err(FilterError::DnsResolutionFailed(host.to_string()));
-    }
-
-    // All resolved addresses must be non-private
-    for addr in &addrs {
-        if is_private_ip(&addr.ip()) {
-            return Err(FilterError::PrivateIp(addr.ip()));
-        }
-    }
-
-    // Return the first valid address
-    let selected = addrs[0];
-    dns_cache.insert(host, port, selected).await;
-    Ok(selected)
+    // Resolve and validate DNS (populates cache for SafeDnsResolver)
+    resolve_public_addrs(host, port, dns_cache).await
 }
 
 #[cfg(test)]
@@ -235,6 +299,19 @@ mod tests {
         assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
         assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
         assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
+        // CGNAT
+        assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
+        assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(
+            100, 127, 255, 254
+        ))));
+        assert!(!is_private_ip(&IpAddr::V4(Ipv4Addr::new(
+            100, 63, 255, 254
+        ))));
+        // Benchmark testing
+        assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1))));
+        // Reserved
+        assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1))));
+        // Public
         assert!(!is_private_ip(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_private_ip(&IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1))));
     }
@@ -272,5 +349,33 @@ mod tests {
         let cache = cache();
         let result = validate_target("8.8.8.8", 443, &ports(), &cache).await;
         assert!(result.is_ok());
+        let addrs = result.unwrap();
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0].ip(), IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+    }
+
+    #[tokio::test]
+    async fn test_cache_stores_multiple_addrs() {
+        let cache = cache();
+        let addrs = vec![
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 443),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)), 443),
+        ];
+        cache
+            .insert("example.com", 443, Arc::new(addrs.clone()))
+            .await;
+        let cached = cache.get("example.com", 443).await.unwrap();
+        assert_eq!(*cached, addrs);
+    }
+
+    #[tokio::test]
+    async fn test_cache_key_case_insensitive() {
+        let cache = cache();
+        let addrs = vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 443)];
+        cache
+            .insert("Example.COM", 443, Arc::new(addrs.clone()))
+            .await;
+        let cached = cache.get("example.com", 443).await.unwrap();
+        assert_eq!(*cached, addrs);
     }
 }

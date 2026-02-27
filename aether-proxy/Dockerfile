@@ -7,6 +7,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 COPY build/linux-${TARGETARCH}/aether-proxy /usr/local/bin/aether-proxy
 
-EXPOSE 18080
-
 ENTRYPOINT ["aether-proxy"]

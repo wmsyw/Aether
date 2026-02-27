@@ -30,16 +30,30 @@ class TunnelConnection:
         "node_name",
         "ws",
         "connected_at",
+        "max_streams",
         "_pending_streams",
         "_write_lock",
         "_next_stream_id",
     )
 
-    def __init__(self, node_id: str, node_name: str, ws: WebSocket) -> None:
+    def __init__(
+        self,
+        node_id: str,
+        node_name: str,
+        ws: WebSocket,
+        max_streams: int | None = None,
+    ) -> None:
         self.node_id = node_id
         self.node_name = node_name
         self.ws = ws
         self.connected_at = time.time()
+        # Per-connection max concurrent streams: use proxy-advertised value
+        # (from X-Tunnel-Max-Streams header), clamped to [64, 2048].
+        # Falls back to TunnelManager.MAX_STREAMS_PER_CONN if not provided.
+        if max_streams is not None:
+            self.max_streams = max(64, min(max_streams, 2048))
+        else:
+            self.max_streams = TunnelManager.MAX_STREAMS_PER_CONN
         self._pending_streams: dict[int, _StreamState] = {}
         self._write_lock = asyncio.Lock()
         # Per-connection stream ID 分配器（Aether 端使用偶数，从 2 开始）
@@ -286,12 +300,12 @@ class TunnelManager:
         if not conn:
             raise TunnelStreamError(f"tunnel not connected for node {node_id}")
 
-        if conn.stream_count >= self.MAX_STREAMS_PER_CONN:
+        if conn.stream_count >= conn.max_streams:
             raise TunnelStreamError(
-                f"tunnel stream limit reached ({self.MAX_STREAMS_PER_CONN}) for node {node_id}"
+                f"tunnel stream limit reached ({conn.max_streams}) for node {node_id}"
             )
 
-        stream_id = conn.alloc_stream_id(self.MAX_STREAMS_PER_CONN)
+        stream_id = conn.alloc_stream_id(conn.max_streams)
         stream_state = conn.create_stream(stream_id)
 
         try:

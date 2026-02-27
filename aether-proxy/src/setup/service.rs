@@ -67,6 +67,7 @@ pub fn install_service(config_path: &Path) -> anyhow::Result<()> {
          Restart=on-failure\n\
          RestartSec=5\n\
          LimitNOFILE=65535\n\
+         UMask=0077\n\
          \n\
          [Install]\n\
          WantedBy=multi-user.target\n",

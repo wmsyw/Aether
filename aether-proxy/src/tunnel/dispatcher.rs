@@ -139,7 +139,7 @@ where
                 }
 
                 // Create body channel and spawn handler
-                let (body_tx, body_rx) = mpsc::channel::<Frame>(16);
+                let (body_tx, body_rx) = mpsc::channel::<Frame>(64);
                 streams.insert(frame.stream_id, body_tx);
 
                 let state_clone = Arc::clone(&state);

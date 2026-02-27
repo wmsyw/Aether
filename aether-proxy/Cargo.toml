@@ -20,6 +20,7 @@ bytes = "1"
 sha2 = "0.10"
 hex = "0.4"
 anyhow = "1"
+arc-swap = "1"
 toml = "0.8"
 rustls = { version = "0.23", features = ["ring"] }
 ratatui = "0.30"

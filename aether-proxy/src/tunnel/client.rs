@@ -8,6 +8,7 @@ use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tracing::{debug, info, warn};
 
 use crate::state::{AppState, ServerContext};
@@ -44,10 +45,19 @@ pub async fn connect_and_run(
     );
     let node_id = server.node_id.read().unwrap().clone();
     headers.insert("X-Node-Id", http::HeaderValue::from_str(&node_id)?);
+    // Use dynamic node_name (may be updated by remote config) instead of
+    // the static server.node_name, so that remote name changes take effect
+    // on the next reconnect.
+    let dynamic_node_name = server.dynamic.load().node_name.clone();
     headers.insert(
         "X-Node-Name",
-        http::HeaderValue::from_str(&server.node_name)?,
+        http::HeaderValue::from_str(&dynamic_node_name)?,
     );
+    // Advertise per-connection max concurrent streams so the backend can
+    // respect the proxy's capacity limit (backward-compatible: old backends
+    // ignore this header).
+    let max_streams = state.config.tunnel_max_streams.unwrap_or(128);
+    headers.insert("X-Tunnel-Max-Streams", http::HeaderValue::from(max_streams));
 
     // Parse host:port from URL
     let uri: http::Uri = ws_url.parse()?;
@@ -79,10 +89,23 @@ pub async fn connect_and_run(
     } else {
         None
     };
+    // Match Python-side _MAX_FRAME_SIZE (64 MiB) to prevent tungstenite's
+    // default 16 MiB limit from rejecting large AI API payloads (multi-image
+    // base64 requests can exceed 16 MiB).
+    let ws_config = WebSocketConfig {
+        max_frame_size: Some(64 << 20),
+        max_message_size: Some(64 << 20),
+        ..Default::default()
+    };
     let handshake_timeout = Duration::from_secs(state.config.tunnel_connect_timeout_secs);
     let (ws_stream, _response) = tokio::time::timeout(
         handshake_timeout,
-        tokio_tungstenite::client_async_tls_with_config(request, tcp_stream, None, connector),
+        tokio_tungstenite::client_async_tls_with_config(
+            request,
+            tcp_stream,
+            Some(ws_config),
+            connector,
+        ),
     )
     .await
     .map_err(|_| {
@@ -137,8 +160,17 @@ pub async fn connect_and_run(
                 Err(e) => return Err(e),
             }
         }
-        _ = &mut writer_handle => {
-            warn!("writer task exited, triggering reconnect");
+        writer_result = &mut writer_handle => {
+            match writer_result {
+                Ok(()) => warn!("writer task exited normally, triggering reconnect"),
+                Err(e) => {
+                    if e.is_panic() {
+                        tracing::error!(error = %e, "writer task panicked, triggering reconnect");
+                    } else {
+                        warn!(error = %e, "writer task cancelled, triggering reconnect");
+                    }
+                }
+            }
             TunnelOutcome::Disconnected
         }
         _ = shutdown.changed() => {

@@ -99,8 +99,18 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
     node_id: str = auth[0]
     node_name: str = auth[1]
 
+    # Read proxy-advertised max concurrent streams (backward-compatible:
+    # old proxies don't send this header, we fall back to the default).
+    max_streams_raw = ws.headers.get("x-tunnel-max-streams", "").strip()
+    max_streams: int | None = None
+    if max_streams_raw:
+        try:
+            max_streams = int(max_streams_raw)
+        except ValueError:
+            pass
+
     manager = get_tunnel_manager()
-    conn = TunnelConnection(node_id, node_name, ws)
+    conn = TunnelConnection(node_id, node_name, ws, max_streams=max_streams)
     manager.register(conn)
 
     # 更新 DB: tunnel_connected = True

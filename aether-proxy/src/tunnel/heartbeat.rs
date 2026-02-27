@@ -39,27 +39,44 @@ pub fn spawn_noop() -> HeartbeatHandle {
 
 /// Spawn the heartbeat task. Returns a handle for forwarding ACKs.
 pub fn spawn(
-    config: Arc<Config>,
+    _config: Arc<Config>,
     server: Arc<ServerContext>,
     frame_tx: FrameSender,
     mut shutdown: watch::Receiver<bool>,
 ) -> HeartbeatHandle {
     let (ack_tx, mut ack_rx) = tokio::sync::mpsc::channel::<Bytes>(4);
-    let interval = Duration::from_secs(config.heartbeat_interval);
 
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.tick().await; // Skip first immediate tick
+        // Read initial interval from dynamic config (may be updated by remote config).
+        let initial_interval = Duration::from_secs(server.dynamic.load().heartbeat_interval);
+        let mut current_interval = initial_interval;
+
+        // Skip first immediate tick by sleeping first.
+        tokio::time::sleep(current_interval).await;
 
         loop {
             tokio::select! {
-                _ = ticker.tick() => {
+                _ = tokio::time::sleep(current_interval) => {
                     let payload = build_heartbeat_payload(&server);
                     let frame = Frame::control(MsgType::HeartbeatData, payload);
                     if frame_tx.send(frame).await.is_err() {
                         break; // Writer closed
                     }
                     debug!("sent heartbeat data");
+
+                    // Re-read interval from dynamic config (remote config may have
+                    // updated it since the last heartbeat).
+                    let new_interval = Duration::from_secs(
+                        server.dynamic.load().heartbeat_interval
+                    );
+                    if new_interval != current_interval {
+                        debug!(
+                            old_secs = current_interval.as_secs(),
+                            new_secs = new_interval.as_secs(),
+                            "heartbeat interval updated from dynamic config"
+                        );
+                        current_interval = new_interval;
+                    }
                 }
                 Some(ack_payload) = ack_rx.recv() => {
                     handle_ack(&server, &ack_payload);
@@ -78,8 +95,11 @@ pub fn spawn(
 fn build_heartbeat_payload(server: &ServerContext) -> Bytes {
     let node_id = server.node_id.read().unwrap().clone();
 
-    let interval_requests = server.metrics.total_requests.swap(0, Ordering::Relaxed);
-    let interval_latency_ns = server.metrics.total_latency_ns.swap(0, Ordering::Relaxed);
+    let interval_requests = server.metrics.total_requests.swap(0, Ordering::AcqRel);
+    let interval_latency_ns = server.metrics.total_latency_ns.swap(0, Ordering::AcqRel);
+    let interval_failed = server.metrics.failed_requests.swap(0, Ordering::AcqRel);
+    let interval_dns_failures = server.metrics.dns_failures.swap(0, Ordering::AcqRel);
+    let interval_stream_errors = server.metrics.stream_errors.swap(0, Ordering::AcqRel);
     let avg_latency_ms = if interval_requests > 0 {
         Some(interval_latency_ns as f64 / interval_requests as f64 / 1_000_000.0)
     } else {
@@ -88,9 +108,12 @@ fn build_heartbeat_payload(server: &ServerContext) -> Bytes {
 
     let payload = serde_json::json!({
         "node_id": node_id,
-        "active_connections": server.active_connections.load(Ordering::Relaxed),
+        "active_connections": server.active_connections.load(Ordering::Acquire),
         "total_requests": interval_requests,
         "avg_latency_ms": avg_latency_ms,
+        "failed_requests": interval_failed,
+        "dns_failures": interval_dns_failures,
+        "stream_errors": interval_stream_errors,
     });
 
     Bytes::from(serde_json::to_vec(&payload).unwrap_or_default())
