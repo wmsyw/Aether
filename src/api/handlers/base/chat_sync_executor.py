@@ -193,6 +193,8 @@ class ChatSyncExecutor:
             request_metadata = handler._build_request_metadata() or {}
             if ctx.sync_proxy_info:
                 request_metadata["proxy"] = ctx.sync_proxy_info
+            if getattr(exec_result, "pool_summary", None):
+                request_metadata["pool_summary"] = exec_result.pool_summary
             total_cost = await handler.telemetry.record_success(  # noqa: F841
                 provider=ctx.provider_name,
                 model=model,
@@ -425,6 +427,7 @@ class ChatSyncExecutor:
         envelope = prep.envelope
         upstream_is_stream = prep.upstream_is_stream
         auth_info = prep.auth_info
+        tls_profile = prep.tls_profile
 
         # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
         provider_payload, provider_hdrs = handler._request_builder.build(
@@ -435,6 +438,7 @@ class ChatSyncExecutor:
             is_stream=upstream_is_stream,
             extra_headers=prep.extra_headers if prep.extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
+            envelope=envelope,
         )
         if upstream_is_stream:
             from src.core.api_format.headers import set_accept_if_absent
@@ -496,7 +500,9 @@ class ChatSyncExecutor:
 
         delegate_cfg = resolve_delegate_config(_effective_proxy)
         http_client = await HTTPClientPool.get_upstream_client(
-            delegate_cfg, proxy_config=_effective_proxy
+            delegate_cfg,
+            proxy_config=_effective_proxy,
+            tls_profile=tls_profile,
         )
 
         # 注意：不使用 async with，因为复用的客户端不应该被关闭

@@ -30,6 +30,7 @@ class _FakeScheduler:
         max_candidates: int | None = None,
         is_stream: bool = False,
         capability_requirements: dict[str, bool] | None = None,
+        request_body: dict | None = None,
     ) -> tuple[list[Any], str, int]:
         _ = (
             db,

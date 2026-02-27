@@ -37,10 +37,13 @@
                 <SelectValue placeholder="请选择" />
               </SelectTrigger>
               <SelectContent>
-                <!-- 新建模式：允许自定义、Codex、Kiro 和 Antigravity -->
+                <!-- 新建模式：允许自定义及各反代类型 -->
                 <template v-if="!isEditMode">
                   <SelectItem value="custom">
                     自定义
+                  </SelectItem>
+                  <SelectItem value="claude_code">
+                    ClaudeCode
                   </SelectItem>
                   <SelectItem value="codex">
                     Codex
@@ -216,14 +219,15 @@
         </div>
       </div>
 
-      <!-- 格式转换配置 -->
+      <!-- 功能开关 -->
       <div class="space-y-3">
         <h3 class="text-sm font-medium border-b pb-2">
-          格式转换
+          功能开关
         </h3>
+
         <div class="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
           <div class="space-y-0.5">
-            <span class="text-sm font-medium">保持优先级</span>
+            <span class="text-sm font-medium">格式转换保持优先级</span>
             <p class="text-xs text-muted-foreground">
               跨格式请求时保持原优先级排名，不降级到格式匹配的提供商之后
             </p>
@@ -233,30 +237,17 @@
             @update:model-value="(v: boolean) => form.keep_priority_on_conversion = v"
           />
         </div>
-      </div>
 
-      <!-- 代理配置 -->
-      <div class="space-y-3">
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-medium">
-            代理配置
-          </h3>
-          <div class="flex items-center gap-2">
-            <Switch
-              :model-value="form.proxy_enabled"
-              @update:model-value="handleProxyToggle"
-            />
-            <span class="text-sm text-muted-foreground">启用代理</span>
+        <div class="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
+          <div class="space-y-0.5">
+            <span class="text-sm font-medium">号池调度模式</span>
+            <p class="text-xs text-muted-foreground">
+              启用后该提供商的密钥将由号池统一调度
+            </p>
           </div>
-        </div>
-        <div
-          v-if="form.proxy_enabled"
-          class="space-y-1.5 p-3 border rounded-lg bg-muted/50"
-        >
-          <Label class="text-xs">代理节点 *</Label>
-          <ProxyNodeSelect
-            ref="proxyNodeSelectRef"
-            v-model="form.proxy_node_id"
+          <Switch
+            :model-value="form.pool_mode_enabled"
+            @update:model-value="(v: boolean) => form.pool_mode_enabled = v"
           />
         </div>
       </div>
@@ -282,7 +273,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   Dialog,
   Button,
@@ -301,8 +292,6 @@ import { useFormDialog } from '@/composables/useFormDialog'
 import { createProvider, updateProvider, type ProviderWithEndpointsSummary } from '@/api/endpoints'
 import { parseApiError } from '@/utils/errorParser'
 import { parseNumberInput } from '@/utils/form'
-import ProxyNodeSelect from './ProxyNodeSelect.vue'
-import { useProxyNodesStore } from '@/stores/proxy-nodes'
 
 const props = defineProps<{
   modelValue: boolean
@@ -318,16 +307,6 @@ const emit = defineEmits<{
 
 const { success, error: showError } = useToast()
 const loading = ref(false)
-const proxyNodeSelectRef = ref<InstanceType<typeof ProxyNodeSelect> | null>(null)
-const proxyNodesStore = useProxyNodesStore()
-
-/** 启用代理时懒加载节点列表 */
-function handleProxyToggle(v: boolean) {
-  form.value.proxy_enabled = v
-  if (v) {
-    proxyNodesStore.ensureLoaded()
-  }
-}
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
@@ -363,9 +342,8 @@ const form = ref({
   // 超时配置（秒）
   stream_first_byte_timeout: undefined as number | undefined,
   request_timeout: undefined as number | undefined,
-  // 代理配置
-  proxy_enabled: false,
-  proxy_node_id: '',
+  // 号池模式
+  pool_mode_enabled: false,
 })
 
 // 重置表单
@@ -390,9 +368,8 @@ function resetForm() {
     // 超时配置
     stream_first_byte_timeout: undefined,
     request_timeout: undefined,
-    // 代理配置
-    proxy_enabled: false,
-    proxy_node_id: '',
+    // 号池模式
+    pool_mode_enabled: false,
   }
 }
 
@@ -400,7 +377,6 @@ function resetForm() {
 function loadProviderData() {
   if (!props.provider) return
 
-  const proxy = props.provider.proxy
   form.value = {
     name: props.provider.name,
     provider_type: props.provider.provider_type || 'custom',
@@ -423,14 +399,8 @@ function loadProviderData() {
     // 超时配置
     stream_first_byte_timeout: props.provider.stream_first_byte_timeout ?? undefined,
     request_timeout: props.provider.request_timeout ?? undefined,
-    // 代理配置
-    proxy_enabled: proxy?.enabled ?? false,
-    proxy_node_id: proxy?.node_id || '',
-  }
-
-  // 如果有代理配置，确保加载节点列表（直接调用 store，避免 ref 未挂载时静默失败）
-  if (proxy?.enabled) {
-    proxyNodesStore.ensureLoaded()
+    // 号池模式
+    pool_mode_enabled: !!props.provider.pool_advanced,
   }
 }
 
@@ -444,6 +414,13 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   resetForm,
 })
 
+// 新建模式下切换 provider_type 时自动设置号池模式：非自定义类型默认开启
+watch(() => form.value.provider_type, (newType) => {
+  if (!isEditMode.value) {
+    form.value.pool_mode_enabled = newType !== 'custom'
+  }
+})
+
 // 提交表单
 const handleSubmit = async () => {
   // 月卡类型必须设置周期开始时间
@@ -452,20 +429,8 @@ const handleSubmit = async () => {
     return
   }
 
-  // 启用代理时的验证
-  if (form.value.proxy_enabled && !form.value.proxy_node_id) {
-    showError('请选择代理节点', '验证失败')
-    return
-  }
-
   loading.value = true
   try {
-    // 构建代理配置
-    const proxy = form.value.proxy_enabled && form.value.proxy_node_id ? {
-      node_id: form.value.proxy_node_id,
-      enabled: true,
-    } : null
-
     const payload = {
       name: form.value.name,
       provider_type: form.value.provider_type,
@@ -484,7 +449,9 @@ const handleSubmit = async () => {
       // 超时配置（null 表示清除，使用全局配置）
       stream_first_byte_timeout: form.value.stream_first_byte_timeout ?? null,
       request_timeout: form.value.request_timeout ?? null,
-      proxy,
+      pool_advanced: form.value.pool_mode_enabled
+        ? (props.provider?.pool_advanced ?? {})
+        : null,
     }
 
     if (isEditMode.value && props.provider) {

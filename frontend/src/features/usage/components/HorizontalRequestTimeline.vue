@@ -253,6 +253,62 @@
                     </span>
                   </div>
                   <div
+                    v-if="currentAttempt.extra_data?.pool_selection"
+                    class="info-item"
+                  >
+                    <span class="info-label">号池调度</span>
+                    <span class="info-value info-value-stacked">
+                      <span class="pool-reason">
+                        <span
+                          class="pool-reason-tag"
+                          :class="'pool-' + currentAttempt.extra_data.pool_selection.reason"
+                        >
+                          {{ poolSelectionLabel(currentAttempt.extra_data.pool_selection.reason) }}
+                        </span>
+                        <span
+                          v-if="currentAttempt.extra_data.pool_selection.cost_soft_threshold"
+                          class="pool-cost-warn"
+                        >接近限额</span>
+                      </span>
+                      <span
+                        v-if="currentAttempt.extra_data.pool_selection.cost_window_usage"
+                        class="text-xs text-muted-foreground"
+                      >
+                        {{ formatNumber(currentAttempt.extra_data.pool_selection.cost_window_usage) }}
+                        <template v-if="currentAttempt.extra_data.pool_selection.cost_limit">
+                          / {{ formatNumber(currentAttempt.extra_data.pool_selection.cost_limit) }}
+                        </template>
+                        tokens
+                      </span>
+                    </span>
+                  </div>
+                  <div
+                    v-if="currentAttempt.extra_data?.pool_skip"
+                    class="info-item"
+                  >
+                    <span class="info-label">号池跳过</span>
+                    <span class="info-value info-value-stacked">
+                      <span class="pool-skip-type">
+                        {{ poolSkipLabel(currentAttempt.extra_data.pool_skip.type) }}
+                      </span>
+                      <span
+                        v-if="currentAttempt.extra_data.pool_skip.cooldown_reason"
+                        class="text-xs text-muted-foreground"
+                      >
+                        {{ currentAttempt.extra_data.pool_skip.cooldown_reason }}
+                        <template v-if="currentAttempt.extra_data.pool_skip.cooldown_ttl != null">
+                          ({{ currentAttempt.extra_data.pool_skip.cooldown_ttl }}s)
+                        </template>
+                      </span>
+                      <span
+                        v-if="currentAttempt.extra_data.pool_skip.cost_window_usage"
+                        class="text-xs text-muted-foreground"
+                      >
+                        {{ formatNumber(currentAttempt.extra_data.pool_skip.cost_window_usage) }} tokens
+                      </span>
+                    </span>
+                  </div>
+                  <div
                     v-if="mergedCapabilities.length > 0"
                     class="info-item"
                   >
@@ -762,6 +818,25 @@ const formatCapabilityLabel = (cap: string): string => {
     'function_calling': '函数调用',
   }
   return labels[cap] || cap
+}
+
+const poolSelectionLabel = (reason: string): string => {
+  const labels: Record<string, string> = {
+    sticky: '粘性会话',
+    lru: 'LRU',
+    random: '随机',
+    tiebreak: '随机 (平分)',
+  }
+  return labels[reason] || reason
+}
+
+const poolSkipLabel = (type: string): string => {
+  const labels: Record<string, string> = {
+    cooldown: '冷却中',
+    cost_exhausted: '额度耗尽',
+    upstream: '上游跳过',
+  }
+  return labels[type] || type
 }
 
 // 检查组是否被悬浮
@@ -1483,6 +1558,52 @@ const getStatusColorClass = (status: string) => {
   display: flex;
   align-items: center;
   gap: 0.375rem;
+}
+
+/* 号池调度 */
+.pool-reason {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.pool-reason-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  border-radius: 4px;
+  white-space: nowrap;
+  border: 1px solid hsl(var(--border));
+}
+
+.pool-reason-tag.pool-sticky {
+  color: hsl(var(--chart-4));
+  border-color: hsl(var(--chart-4) / 0.3);
+  background: hsl(var(--chart-4) / 0.08);
+}
+
+.pool-reason-tag.pool-lru {
+  color: hsl(var(--chart-2));
+  border-color: hsl(var(--chart-2) / 0.3);
+  background: hsl(var(--chart-2) / 0.08);
+}
+
+.pool-reason-tag.pool-random,
+.pool-reason-tag.pool-tiebreak {
+  color: hsl(var(--muted-foreground));
+}
+
+.pool-cost-warn {
+  font-size: 0.65rem;
+  color: hsl(var(--chart-5));
+  font-weight: 500;
+}
+
+.pool-skip-type {
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
 }
 
 /* 能力标签 */

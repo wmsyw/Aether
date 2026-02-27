@@ -159,7 +159,7 @@
                     </div>
                   </div>
                   <div class="space-y-1.5">
-                    <label class="text-xs font-medium text-muted-foreground">TOTP Secret (可选)</label>
+                    <label class="text-xs font-medium text-muted-foreground">TOTP Secret (可选, 2FA认证)</label>
                     <input
                       v-model="device.totp_secret"
                       type="text"

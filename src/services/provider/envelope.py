@@ -50,6 +50,39 @@ class ProviderEnvelope(Protocol):
     def force_stream_rewrite(self) -> bool:
         """Whether streaming should always go through the rewrite/conversion path."""
 
+    # ------------------------------------------------------------------
+    # Optional lifecycle hooks (checked via hasattr before calling)
+    # ------------------------------------------------------------------
+
+    def prepare_context(
+        self,
+        *,
+        provider_config: Any,
+        key_id: str,
+        is_stream: bool,
+        provider_id: str | None = None,
+    ) -> str | None:
+        """Pre-wrap hook: build provider-specific request context.
+
+        Called before wrap_request(). Returns tls_profile (or None).
+        Implementations typically set contextvars that wrap_request()
+        and extra_headers() will read.
+        """
+
+    async def post_wrap_request(self, request_body: dict[str, Any]) -> None:
+        """Post-wrap hook: async processing after wrap_request().
+
+        Called after wrap_request() completes. Use for async operations
+        like distributed session control that cannot run in sync wrap_request().
+        """
+
+    def excluded_beta_tokens(self) -> frozenset[str]:
+        """Beta tokens to strip from the merged anthropic-beta header.
+
+        Called by the request builder after merging envelope extra_headers
+        with client original headers. Return an empty frozenset to keep all.
+        """
+
 
 # ---------------------------------------------------------------------------
 # Envelope Registry
@@ -119,10 +152,14 @@ def ensure_providers_bootstrapped() -> None:
         from src.services.provider.adapters.antigravity.plugin import (
             register_all as _reg_antigravity,
         )
+        from src.services.provider.adapters.claude_code.plugin import (
+            register_all as _reg_claude_code,
+        )
         from src.services.provider.adapters.codex.plugin import register_all as _reg_codex
         from src.services.provider.adapters.kiro.plugin import register_all as _reg_kiro
 
         _reg_antigravity()
+        _reg_claude_code()
         _reg_codex()
         _reg_kiro()
 

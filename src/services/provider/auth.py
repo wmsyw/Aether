@@ -236,6 +236,7 @@ async def get_provider_auth(
     key: "ProviderAPIKey",
     *,
     force_refresh: bool = False,
+    refresh_skew: int | None = None,
 ) -> ProviderAuthInfo | None:
     """
     获取 Provider 的认证信息
@@ -261,7 +262,12 @@ async def get_provider_auth(
     if auth_type == "oauth":
         # OAuth token 保存在 key.api_key（加密），refresh_token/expires_at 等在 auth_config（加密 JSON）中。
         # 在请求前做一次懒刷新：接近过期时刷新 access_token，并用 Redis lock 避免并发风暴。
+
         encrypted_auth_config = getattr(key, "auth_config", None)
+
+        # 先解密 auth_config -- 下游 build_provider_url 等依赖 decrypted_auth_config
+        # 中的 provider_type / project_id / region 等元数据，即使 access_token 命中缓存
+        # 也不能跳过。
         if encrypted_auth_config:
             try:
                 decrypted_config = crypto_service.decrypt(encrypted_auth_config)
@@ -271,16 +277,51 @@ async def get_provider_auth(
         else:
             token_meta = {}
 
+        decrypted_auth_config: dict[str, Any] | None = (
+            token_meta if isinstance(token_meta, dict) and token_meta else None
+        )
+
+        # 快路径：查 Redis token 缓存，命中则跳过 refresh 和 api_key 解密。
+        # 注意：token_meta/decrypted_auth_config 已在上方解密，此处只是跳过后续刷新逻辑。
+        if not force_refresh and encrypted_auth_config:
+            try:
+                from src.services.provider.pool.oauth_cache import get_cached_token
+
+                _cached = await get_cached_token(str(key.id))
+                if _cached:
+                    return ProviderAuthInfo(
+                        auth_header="Authorization",
+                        auth_value=f"Bearer {_cached}",
+                        decrypted_auth_config=decrypted_auth_config,
+                    )
+            except Exception:
+                logger.debug("OAuth token cache lookup failed for key {}", str(key.id)[:8])
+
         expires_at = token_meta.get("expires_at")
         refresh_token = token_meta.get("refresh_token")
         provider_type = str(token_meta.get("provider_type") or "")
         cached_access_token = str(token_meta.get("access_token") or "").strip()
 
-        # 120s skew (or force refresh when upstream returns 401)
+        # Refresh skew: providers with pool config use configurable
+        # proactive_refresh_seconds (default 180 s), others use 120 s.
+        # Prefer the caller-supplied value to avoid ORM lazy-load on key.provider.
+        _refresh_skew = refresh_skew if refresh_skew is not None else 120
+        if refresh_skew is None:
+            try:
+                from src.services.provider.pool.config import parse_pool_config
+
+                provider_obj = getattr(key, "provider", None)
+                pcfg = getattr(provider_obj, "config", None) if provider_obj else None
+                pool_cfg = parse_pool_config(pcfg) if pcfg else None
+                if pool_cfg is not None:
+                    _refresh_skew = pool_cfg.proactive_refresh_seconds
+            except Exception:
+                pass
+
         should_refresh = False
         try:
             if expires_at is not None:
-                should_refresh = int(time.time()) >= int(expires_at) - 120
+                should_refresh = int(time.time()) >= int(expires_at) - _refresh_skew
         except Exception:
             should_refresh = False
 
@@ -294,6 +335,7 @@ async def get_provider_auth(
             elif crypto_service.decrypt(key.api_key) == "__placeholder__":
                 should_refresh = True
 
+        _refreshed = False
         if should_refresh and refresh_token and provider_type:
             try:
                 from src.core.provider_templates.fixed_providers import FIXED_PROVIDERS
@@ -313,6 +355,7 @@ async def get_provider_auth(
                             token_meta = await _refresh_generic_oauth_token(
                                 key, endpoint, template, provider_type, refresh_token, token_meta
                             )
+                        _refreshed = True
                     finally:
                         if got_lock:
                             await _release_refresh_lock(redis, key.id)
@@ -328,7 +371,20 @@ async def get_provider_auth(
         else:
             effective_token = crypto_service.decrypt(key.api_key)
 
-        decrypted_auth_config: dict[str, Any] | None = None
+        # 刷新成功后写入 Redis token 缓存（所有 OAuth key 均可受益）
+        if _refreshed and effective_token:
+            try:
+                from src.services.provider.pool.oauth_cache import cache_token
+
+                new_expires_at = token_meta.get("expires_at")
+                if new_expires_at is not None:
+                    remaining = int(new_expires_at) - int(time.time())
+                    if remaining > 0:
+                        await cache_token(str(key.id), effective_token, remaining)
+            except Exception:
+                logger.debug("OAuth token cache write failed for key {}", str(key.id)[:8])
+
+        # 刷新可能更新了 token_meta，同步 decrypted_auth_config
         if isinstance(token_meta, dict) and token_meta:
             decrypted_auth_config = token_meta
 

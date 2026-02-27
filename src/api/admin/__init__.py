@@ -9,6 +9,7 @@ from .endpoints import router as endpoints_router
 from .models import router as models_router
 from .modules import router as modules_router
 from .monitoring import router as monitoring_router
+from .pool import router as pool_router
 from .provider_oauth import router as provider_oauth_router
 from .provider_ops import router as provider_ops_router
 from .provider_query import router as provider_query_router
@@ -38,6 +39,7 @@ router.include_router(security_router)
 router.include_router(stats_router)
 router.include_router(provider_query_router)
 router.include_router(modules_router)
+router.include_router(pool_router)
 router.include_router(provider_ops_router)
 router.include_router(video_tasks_router)
 

@@ -208,6 +208,8 @@ class StreamTelemetryRecorder:
             metadata["perf"] = ctx.perf_metrics
         if ctx.proxy_info:
             metadata["proxy"] = ctx.proxy_info
+        if ctx.pool_summary:
+            metadata["pool_summary"] = ctx.pool_summary
 
         await writer.record_success(
             provider=ctx.provider_name or "unknown",

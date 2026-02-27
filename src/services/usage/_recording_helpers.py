@@ -38,6 +38,7 @@ METADATA_KEEP_KEYS: frozenset[str] = frozenset(
         "billing_snapshot",
         "billing_updated_at",
         "perf",
+        "pool_summary",
         "_metadata_truncated",
     }
 )

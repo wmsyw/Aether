@@ -188,6 +188,8 @@ class CliStreamMixin:
                 ctx.endpoint_id = endpoint_id
             if not ctx.key_id:
                 ctx.key_id = key_id
+            if getattr(exec_result, "pool_summary", None):
+                ctx.pool_summary = exec_result.pool_summary
             # 同步整流状态（如果请求体被整流过）
             ctx.rectified = request_body_ref.get("_rectified", False)
 
@@ -319,6 +321,15 @@ class CliStreamMixin:
             client_is_stream=True,
             policy=upstream_policy,
         )
+        # Envelope lifecycle: prepare_context (pre-wrap hook).
+        envelope_tls_profile: str | None = None
+        if envelope and hasattr(envelope, "prepare_context"):
+            envelope_tls_profile = envelope.prepare_context(
+                provider_config=getattr(provider, "config", None),
+                key_id=str(getattr(key, "id", "") or ""),
+                is_stream=upstream_is_stream,
+                provider_id=str(getattr(provider, "id", "") or ""),
+            )
 
         # 跨格式：先做请求体转换（失败触发 failover）
         if needs_conversion and provider_api_format:
@@ -374,6 +385,9 @@ class CliStreamMixin:
                 url_model=url_model,
                 decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
             )
+            # Envelope lifecycle: post_wrap_request (post-wrap hook).
+            if hasattr(envelope, "post_wrap_request"):
+                await envelope.post_wrap_request(request_body)
 
         # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
         extra_headers: dict[str, str] = {}
@@ -391,6 +405,7 @@ class CliStreamMixin:
             is_stream=upstream_is_stream,
             extra_headers=extra_headers if extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
+            envelope=envelope,
         )
         if upstream_is_stream:
             from src.core.api_format.headers import set_accept_if_absent
@@ -429,7 +444,9 @@ class CliStreamMixin:
             request_timeout_sync = provider.request_timeout or config.http_request_timeout
             delegate_cfg = resolve_delegate_config(effective_proxy)
             http_client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg, proxy_config=effective_proxy
+                delegate_cfg,
+                proxy_config=effective_proxy,
+                tls_profile=envelope_tls_profile,
             )
 
             try:
@@ -623,7 +640,9 @@ class CliStreamMixin:
 
         delegate_cfg = resolve_delegate_config(effective_proxy)
         http_client = await HTTPClientPool.get_upstream_client(
-            delegate_cfg, proxy_config=effective_proxy
+            delegate_cfg,
+            proxy_config=effective_proxy,
+            tls_profile=envelope_tls_profile,
         )
 
         # 用于存储内部函数的结果（必须在函数定义前声明，供 nonlocal 使用）
@@ -798,6 +817,8 @@ class CliStreamMixin:
             last_data_time = time.time()
             buffer = b""
             output_state = {"first_yield": True, "streaming_updated": False}
+            _sample_lines: list[str] = []  # 采集前几行原始内容，用于空流诊断
+            _MAX_SAMPLE_LINES = 5
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -864,6 +885,8 @@ class CliStreamMixin:
                         continue
 
                     ctx.chunk_count += 1
+                    if len(_sample_lines) < _MAX_SAMPLE_LINES:
+                        _sample_lines.append(normalized_line[:200])
 
                     # 空流检测：超过阈值且无数据，发送错误事件并结束
                     if ctx.chunk_count > self.EMPTY_CHUNK_THRESHOLD and ctx.data_count == 0:
@@ -922,7 +945,12 @@ class CliStreamMixin:
 
             # 检查是否收到数据
             if ctx.data_count == 0:
-                logger.warning("Provider '{}' 返回空流式响应", ctx.provider_name)
+                sample_info = f", 前几行内容: {_sample_lines!r}" if _sample_lines else ""
+                logger.warning(
+                    "Provider '{}' 返回空流式响应{}",
+                    ctx.provider_name,
+                    sample_info,
+                )
                 ctx.status_code = 503
                 ctx.error_message = "上游服务返回了空的流式响应"
                 ctx.upstream_response = (

@@ -63,33 +63,6 @@
           >
             已选 {{ selectedNames.length }} 个
           </span>
-          <!-- 刷新上游模型按钮 -->
-          <button
-            v-if="upstreamModelsLoaded"
-            type="button"
-            class="p-2 hover:bg-muted rounded-md transition-colors shrink-0"
-            :disabled="fetchingUpstreamModels"
-            title="刷新上游模型"
-            @click="fetchUpstreamModels()"
-          >
-            <RefreshCw
-              class="w-4 h-4"
-              :class="{ 'animate-spin': fetchingUpstreamModels }"
-            />
-          </button>
-          <button
-            v-else-if="!fetchingUpstreamModels"
-            type="button"
-            class="p-2 hover:bg-muted rounded-md transition-colors shrink-0"
-            title="从提供商获取模型"
-            @click="fetchUpstreamModels()"
-          >
-            <Zap class="w-4 h-4" />
-          </button>
-          <Loader2
-            v-else
-            class="w-4 h-4 animate-spin text-muted-foreground shrink-0"
-          />
         </div>
 
         <!-- 模型列表 -->
@@ -124,22 +97,14 @@
               <!-- 自定义映射名称 -->
               <div v-if="customNames.length > 0">
                 <div
-                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors"
-                  @click="toggleGroupCollapse('custom')"
+                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20"
                 >
                   <div class="flex items-center gap-2">
-                    <ChevronDown
-                      class="w-4 h-4 transition-transform shrink-0"
-                      :class="collapsedGroups.has('custom') ? '-rotate-90' : ''"
-                    />
                     <span class="text-xs font-medium">自定义模型</span>
                     <span class="text-xs text-muted-foreground">({{ customNames.length }})</span>
                   </div>
                 </div>
-                <div
-                  v-show="!collapsedGroups.has('custom')"
-                  class="space-y-1 p-2"
-                >
+                <div class="space-y-1 p-2">
                   <div
                     v-for="name in sortedCustomNames"
                     :key="name"
@@ -159,52 +124,6 @@
                   </div>
                 </div>
               </div>
-
-              <!-- 上游模型 -->
-              <template v-if="filteredUpstreamModels.length > 0">
-                <div
-                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors"
-                  @click="toggleGroupCollapse('upstream')"
-                >
-                  <div class="flex items-center gap-2">
-                    <ChevronDown
-                      class="w-4 h-4 transition-transform shrink-0"
-                      :class="collapsedGroups.has('upstream') ? '-rotate-90' : ''"
-                    />
-                    <span class="text-xs font-medium">上游模型</span>
-                    <span class="text-xs text-muted-foreground">({{ upstreamModelNames.length }})</span>
-                  </div>
-                  <button
-                    type="button"
-                    class="text-xs text-primary hover:underline"
-                    @click.stop="toggleAllUpstreamModels"
-                  >
-                    {{ isAllUpstreamModelsSelected ? '取消全选' : '全选' }}
-                  </button>
-                </div>
-                <div
-                  v-show="!collapsedGroups.has('upstream')"
-                  class="space-y-1 p-2"
-                >
-                  <div
-                    v-for="name in filteredUpstreamModels"
-                    :key="name"
-                    class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer"
-                    @click="toggleName(name)"
-                  >
-                    <div
-                      class="w-4 h-4 border rounded flex items-center justify-center shrink-0"
-                      :class="selectedNames.includes(name) ? 'bg-primary border-primary' : ''"
-                    >
-                      <Check
-                        v-if="selectedNames.includes(name)"
-                        class="w-3 h-3 text-primary-foreground"
-                      />
-                    </div>
-                    <span class="text-sm font-mono truncate flex-1">{{ name }}</span>
-                  </div>
-                </div>
-              </template>
 
               <!-- 空状态 -->
               <div
@@ -248,7 +167,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Tag, Loader2, Plus, Search, Check, ChevronDown, RefreshCw, Zap } from 'lucide-vue-next'
+import { Tag, Loader2, Plus, Search, Check } from 'lucide-vue-next'
 import {
   Button,
   Input,
@@ -265,16 +184,14 @@ import { parseApiError } from '@/utils/errorParser'
 import {
   type Model,
   type ProviderModelAlias,
-  type UpstreamModel,
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
-import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
 
 export interface AliasGroup {
   model: Model
-  /** @deprecated 作用域功能已废弃，将在后续版本移除 */
+  /** @deprecated */
   apiFormatsKey: string
-  /** @deprecated 作用域功能已废弃，将在后续版本移除 */
+  /** @deprecated */
   apiFormats: string[]
   aliases: ProviderModelAlias[]
 }
@@ -282,12 +199,11 @@ export interface AliasGroup {
 const props = defineProps<{
   open: boolean
   providerId: string
-  /** @deprecated 作用域功能已废弃，此 prop 将在后续版本移除 */
+  /** @deprecated */
   providerApiFormats?: string[]
   models: Model[]
   editingGroup?: AliasGroup | null
   preselectedModelId?: string | null
-  hasAutoFetchKey?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -296,22 +212,13 @@ const emit = defineEmits<{
 }>()
 
 const { error: showError, success: showSuccess } = useToast()
-const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
 
 // 状态
 const submitting = ref(false)
 const loadingModels = ref(false)
-const fetchingUpstreamModels = ref(false)
-const upstreamModelsLoaded = ref(false)
 
 // 搜索
 const searchQuery = ref('')
-
-// 折叠状态
-const collapsedGroups = ref<Set<string>>(new Set())
-
-// 上游模型
-const upstreamModels = ref<UpstreamModel[]>([])
 
 // 表单数据
 const formData = ref<{
@@ -326,26 +233,9 @@ const selectedNames = ref<string[]>([])
 // 自定义名称列表（手动添加的）
 const allCustomNames = ref<string[]>([])
 
-// 所有已知名称集合
-const allKnownNames = computed(() => {
-  const set = new Set<string>()
-  upstreamModels.value.forEach(m => set.add(m.id))
-  return set
-})
-
-// 上游模型名称列表（去重后）
-const upstreamModelNames = computed(() => {
-  const names = new Set<string>()
-  upstreamModels.value.forEach(m => {
-    names.add(m.id)
-  })
-  return Array.from(names).sort()
-})
-
-// 自定义名称列表（排除上游模型中已有的）
+// 自定义名称列表
 const customNames = computed(() => {
-  const upstreamSet = new Set(upstreamModelNames.value)
-  return allCustomNames.value.filter(name => !upstreamSet.has(name))
+  return allCustomNames.value
 })
 
 // 排序后的自定义名称
@@ -369,31 +259,14 @@ const sortedCustomNames = computed(() => {
 const canAddAsCustom = computed(() => {
   const search = searchQuery.value.trim()
   if (!search) return false
-  // 已经选中了就不显示
   if (selectedNames.value.includes(search)) return false
-  // 已经在自定义列表中就不显示
   if (allCustomNames.value.includes(search)) return false
-  // 精确匹配上游模型就不显示
-  if (upstreamModelNames.value.includes(search)) return false
   return true
-})
-
-// 过滤后的上游模型
-const filteredUpstreamModels = computed(() => {
-  if (!searchQuery.value.trim()) return upstreamModelNames.value
-  const query = searchQuery.value.toLowerCase()
-  return upstreamModelNames.value.filter(name => name.toLowerCase().includes(query))
 })
 
 // 空状态判断
 const showEmptyState = computed(() => {
-  return filteredUpstreamModels.value.length === 0 && customNames.value.length === 0
-})
-
-// 上游模型是否全选
-const isAllUpstreamModelsSelected = computed(() => {
-  if (filteredUpstreamModels.value.length === 0) return false
-  return filteredUpstreamModels.value.every(name => selectedNames.value.includes(name))
+  return customNames.value.length === 0
 })
 
 // 切换名称选中状态
@@ -411,62 +284,10 @@ function addCustomName() {
   const name = searchQuery.value.trim()
   if (name && !selectedNames.value.includes(name)) {
     selectedNames.value.push(name)
-    if (!allKnownNames.value.has(name) && !allCustomNames.value.includes(name)) {
+    if (!allCustomNames.value.includes(name)) {
       allCustomNames.value.push(name)
     }
     searchQuery.value = ''
-  }
-}
-
-// 全选/取消全选上游模型
-function toggleAllUpstreamModels() {
-  const allNames = filteredUpstreamModels.value
-  if (isAllUpstreamModelsSelected.value) {
-    selectedNames.value = selectedNames.value.filter(name => !allNames.includes(name))
-  } else {
-    allNames.forEach(name => {
-      if (!selectedNames.value.includes(name)) {
-        selectedNames.value.push(name)
-      }
-    })
-  }
-}
-
-// 切换折叠状态
-function toggleGroupCollapse(group: string) {
-  if (collapsedGroups.value.has(group)) {
-    collapsedGroups.value.delete(group)
-  } else {
-    collapsedGroups.value.add(group)
-  }
-  collapsedGroups.value = new Set(collapsedGroups.value)
-}
-
-// 从提供商获取模型（使用缓存）
-async function fetchUpstreamModels() {
-  if (!props.providerId) return
-  try {
-    loadingModels.value = true
-    fetchingUpstreamModels.value = true
-    const result = await fetchCachedModels(props.providerId)
-    if (result.models.length > 0) {
-      upstreamModels.value = result.models
-      upstreamModelsLoaded.value = true
-      // 获取上游模型后，将不在上游列表中的已选名称添加到自定义列表
-      const upstreamIds = new Set(result.models.map(m => m.id))
-      const customFromSelected = selectedNames.value.filter(name => !upstreamIds.has(name))
-      // 合并现有自定义名称和从已选中提取的自定义名称
-      const mergedCustom = new Set([...allCustomNames.value, ...customFromSelected])
-      allCustomNames.value = Array.from(mergedCustom).filter(name => !upstreamIds.has(name))
-    }
-    if (result.error) {
-      showError(result.error, '获取上游模型失败')
-    }
-  } catch (err: unknown) {
-    showError(parseApiError(err, '获取上游模型列表失败'), '错误')
-  } finally {
-    loadingModels.value = false
-    fetchingUpstreamModels.value = false
   }
 }
 
@@ -474,10 +295,6 @@ async function fetchUpstreamModels() {
 watch(() => props.open, async (isOpen) => {
   if (isOpen) {
     initForm()
-    // 只有在有 key 配置了自动获取时才自动加载上游模型
-    if (props.hasAutoFetchKey) {
-      await fetchUpstreamModels()
-    }
   }
 })
 
@@ -489,7 +306,6 @@ function initForm() {
     }
     const existingNames = props.editingGroup.aliases.map(a => a.name)
     selectedNames.value = [...existingNames]
-    // 将已有映射名称添加到自定义列表，使其在列表中可见（可取消选中来移除映射）
     allCustomNames.value = [...existingNames]
   } else {
     formData.value = {
@@ -499,10 +315,6 @@ function initForm() {
     allCustomNames.value = []
   }
   searchQuery.value = ''
-  upstreamModels.value = []
-  upstreamModelsLoaded.value = false
-  // 默认展开所有分组
-  collapsedGroups.value = new Set()
 }
 
 // 处理模型选择变更
@@ -532,7 +344,6 @@ async function handleSubmit() {
     const currentAliases = targetModel.provider_model_mappings || []
     let newAliases: ProviderModelAlias[]
 
-    // 为每个选中的名称创建映射（所有映射使用相同优先级，实现同级负载均衡）
     const buildAliases = (names: string[]): ProviderModelAlias[] => {
       return names.map((name) => ({
         name: name.trim(),

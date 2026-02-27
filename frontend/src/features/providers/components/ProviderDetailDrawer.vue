@@ -51,7 +51,7 @@
                     </Button>
                   </span>
                   <Popover
-                    v-if="provider.provider_type !== 'custom'"
+                    v-if="provider.pool_advanced"
                     :open="providerProxyPopoverOpen"
                     @update:open="handleProviderProxyPopoverToggle"
                   >
@@ -427,9 +427,9 @@
                         >
                           <Shield class="w-3.5 h-3.5" />
                         </Button>
-                        <!-- 代理节点配置（仅非 custom 类型显示） -->
+                        <!-- 代理节点配置（仅号池模式显示） -->
                         <Popover
-                          v-if="provider.provider_type !== 'custom'"
+                          v-if="provider.pool_advanced"
                           :open="proxyPopoverOpenKeyId === key.id"
                           @update:open="(v: boolean) => handleProxyPopoverToggle(key.id, v)"
                         >

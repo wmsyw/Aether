@@ -147,6 +147,15 @@ class CliSyncMixin:
                 client_is_stream=False,
                 policy=upstream_policy,
             )
+            # Envelope lifecycle: prepare_context (pre-wrap hook).
+            envelope_tls_profile: str | None = None
+            if envelope and hasattr(envelope, "prepare_context"):
+                envelope_tls_profile = envelope.prepare_context(
+                    provider_config=getattr(provider, "config", None),
+                    key_id=str(getattr(key, "id", "") or ""),
+                    is_stream=upstream_is_stream,
+                    provider_id=str(getattr(provider, "id", "") or ""),
+                )
 
             # 跨格式：先做请求体转换（失败触发 failover）
             if needs_conversion and provider_api_format:
@@ -202,6 +211,9 @@ class CliSyncMixin:
                     url_model=url_model,
                     decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
                 )
+                # Envelope lifecycle: post_wrap_request (post-wrap hook).
+                if hasattr(envelope, "post_wrap_request"):
+                    await envelope.post_wrap_request(request_body)
 
             # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
             extra_headers: dict[str, str] = {}
@@ -219,6 +231,7 @@ class CliSyncMixin:
                 is_stream=upstream_is_stream,
                 extra_headers=extra_headers if extra_headers else None,
                 pre_computed_auth=auth_info.as_tuple() if auth_info else None,
+                envelope=envelope,
             )
             if upstream_is_stream:
                 from src.core.api_format.headers import set_accept_if_absent
@@ -274,7 +287,9 @@ class CliSyncMixin:
 
             delegate_cfg = resolve_delegate_config(_effective_proxy)
             http_client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg, proxy_config=_effective_proxy
+                delegate_cfg,
+                proxy_config=_effective_proxy,
+                tls_profile=envelope_tls_profile,
             )
 
             # 注意：不使用 async with，因为复用的客户端不应该被关闭
@@ -521,6 +536,8 @@ class CliSyncMixin:
             request_metadata = self._build_request_metadata() or {}
             if sync_proxy_info:
                 request_metadata["proxy"] = sync_proxy_info
+            if getattr(exec_result, "pool_summary", None):
+                request_metadata["pool_summary"] = exec_result.pool_summary
             total_cost = await self.telemetry.record_success(
                 provider=provider_name,
                 model=model,

@@ -52,6 +52,7 @@ class CandidateResolver:
         is_stream: bool = False,
         capability_requirements: dict[str, bool] | None = None,
         preferred_key_ids: list[str] | None = None,
+        request_body: dict | None = None,
     ) -> tuple[list[ProviderCandidate], str]:
         """
         获取所有可用候选
@@ -96,6 +97,7 @@ class CandidateResolver:
                     provider_limit=provider_batch_size,
                     is_stream=is_stream,
                     capability_requirements=capability_requirements,
+                    request_body=request_body,
                 )
             )
 

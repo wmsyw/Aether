@@ -442,6 +442,30 @@ export interface PublicEndpointStatusMonitorResponse {
 
 export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity' | 'kiro'
 
+export interface ClaudeCodeAdvancedConfig {
+  // 会话数量控制：null/undefined 表示不限制
+  max_sessions?: number | null
+  session_idle_timeout_minutes?: number | null
+  // TLS 指纹模拟（模拟 Node.js/Claude Code 客户端指纹）
+  enable_tls_fingerprint?: boolean
+  // 会话 ID 伪装（固定 metadata.user_id 中 session 片段）
+  session_id_masking_enabled?: boolean
+}
+
+export interface PoolAdvancedConfig {
+  sticky_session_ttl_seconds?: number | null
+  load_threshold_percent?: number | null
+  lru_enabled?: boolean
+  cost_window_seconds?: number | null
+  cost_limit_per_key_tokens?: number | null
+  cost_soft_threshold_percent?: number | null
+  rate_limit_cooldown_seconds?: number | null
+  overload_cooldown_seconds?: number | null
+  proactive_refresh_seconds?: number | null
+  health_policy_enabled?: boolean
+  unschedulable_rules?: Array<Record<string, unknown>> | null
+}
+
 export interface ProviderWithEndpointsSummary {
   id: string
   name: string
@@ -475,6 +499,8 @@ export interface ProviderWithEndpointsSummary {
   unhealthy_endpoints: number
   api_formats: string[]
   endpoint_health_details: EndpointHealthDetail[]
+  claude_code_advanced?: ClaudeCodeAdvancedConfig | null
+  pool_advanced?: PoolAdvancedConfig | null
   ops_configured: boolean  // 是否配置了扩展操作（余额监控等）
   ops_architecture_id?: string  // 扩展操作使用的架构 ID（如 cubence, anyrouter）
   created_at: string

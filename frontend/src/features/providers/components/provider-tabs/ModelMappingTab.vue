@@ -325,7 +325,6 @@
     :models="models"
     :editing-group="editingGroup"
     :preselected-model-id="preselectedModelId"
-    :has-auto-fetch-key="hasAutoFetchKey"
     @saved="onDialogSaved"
   />
 
@@ -423,11 +422,6 @@ const providerKeysState = computed(() => props.providerKeys ?? [])
 
 // 展开状态
 const expandedItems = ref<Set<string>>(new Set())
-
-// 是否有 key 配置了自动获取上游模型
-const hasAutoFetchKey = computed(() => {
-  return providerKeysState.value.some(k => k.auto_fetch_models)
-})
 
 // 生成作用域唯一键
 function getApiFormatsKey(formats: string[] | undefined): string {

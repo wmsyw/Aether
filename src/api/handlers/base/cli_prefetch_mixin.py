@@ -342,6 +342,8 @@ class CliPrefetchMixin:
             last_data_time = time.time()
             buffer = b""
             output_state = {"first_yield": True, "streaming_updated": False}
+            _sample_lines: list[str] = []  # 采集前几行原始内容，用于空流诊断
+            _MAX_SAMPLE_LINES = 5
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -409,6 +411,8 @@ class CliPrefetchMixin:
                         continue
 
                     ctx.chunk_count += 1
+                    if len(_sample_lines) < _MAX_SAMPLE_LINES:
+                        _sample_lines.append(normalized_line[:200])
 
                     # 格式转换或直接透传
                     if needs_conversion:
@@ -468,6 +472,8 @@ class CliPrefetchMixin:
                         continue
 
                     ctx.chunk_count += 1
+                    if len(_sample_lines) < _MAX_SAMPLE_LINES:
+                        _sample_lines.append(normalized_line[:200])
 
                     # 空流检测：超过阈值且无数据，发送错误事件并结束
                     if ctx.chunk_count > self.EMPTY_CHUNK_THRESHOLD and ctx.data_count == 0:
@@ -524,9 +530,10 @@ class CliPrefetchMixin:
             # 检查是否收到数据
             if ctx.data_count == 0:
                 # 空流通常意味着配置错误（如 base_url 指向了网页而非 API）
+                sample_info = f", 前几行内容: {_sample_lines!r}" if _sample_lines else ""
                 logger.error(
                     f"Provider '{ctx.provider_name}' 返回空流式响应 (收到 {ctx.chunk_count} 个非数据行), "
-                    f"可能是 endpoint base_url 配置错误"
+                    f"可能是 endpoint base_url 配置错误{sample_info}"
                 )
                 # 设置错误状态用于后续记录
                 ctx.status_code = 503

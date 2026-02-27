@@ -135,6 +135,9 @@ class StreamContext:
     # 代理信息（用于 usage 记录和日志，含 ttfb_ms）
     proxy_info: dict[str, Any] | None = None
 
+    # 号池调度摘要（来自 ExecutionResult.pool_summary）
+    pool_summary: dict[str, Any] | None = None
+
     # 流式格式转换状态（跨 chunk 追踪）
     stream_conversion_state: StreamState | None = None
     stream_conversion_event_count: int = 0  # 流式转换成功的 event 计数

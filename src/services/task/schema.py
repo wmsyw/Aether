@@ -33,6 +33,9 @@ class ExecutionResult:
     attempt_count: int = 0
     request_candidate_id: str | None = None
 
+    # pool scheduling summary (populated when pool mode is active)
+    pool_summary: dict[str, Any] | None = None
+
     # failure
     error_type: str | None = None
     error_message: str | None = None

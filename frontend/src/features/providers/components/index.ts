@@ -13,3 +13,4 @@ export { default as OAuthKeyEditDialog } from './OAuthKeyEditDialog.vue'
 
 export { default as ModelsTab } from './provider-tabs/ModelsTab.vue'
 export { default as ProviderAuthDialog } from './ProviderAuthDialog.vue'
+export { default as PoolStatusCard } from './PoolStatusCard.vue'

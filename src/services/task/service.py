@@ -186,6 +186,151 @@ class TaskService:
             request_body=request_body,
         )
 
+    @staticmethod
+    def _extract_session_uuid(
+        provider_type: str, request_body: dict[str, Any] | None
+    ) -> str | None:
+        """Extract a session UUID from the request body (provider-type aware)."""
+        if not isinstance(request_body, dict):
+            return None
+        from src.services.provider.pool.hooks import get_pool_hook
+
+        hook = get_pool_hook(provider_type)
+        if hook is not None:
+            return hook.extract_session_uuid(request_body)
+        return None
+
+    @staticmethod
+    async def _apply_pool_reorder(
+        candidates: list[Any],
+        request_body: dict[str, Any] | None,
+    ) -> tuple[list[Any], list[Any]]:
+        """Apply Account Pool reordering when applicable.
+
+        Groups candidates by provider_id and applies pool reordering
+        independently per provider, then reassembles in original group order.
+        Non-pool providers are left in their original order.
+
+        Returns:
+            Tuple of (reordered_candidates, pool_traces) where pool_traces
+            is a list of :class:`PoolSchedulingTrace` objects (one per
+            pooled provider group, may be empty).
+        """
+        if not candidates:
+            return candidates, []
+
+        pool_traces: list[Any] = []
+
+        try:
+            from collections import OrderedDict
+
+            from src.services.provider.pool.config import parse_pool_config
+            from src.services.provider.pool.manager import PoolManager
+
+            # Group candidates by provider_id while preserving order.
+            groups: OrderedDict[str, list[Any]] = OrderedDict()
+            for c in candidates:
+                pid = str(getattr(c.provider, "id", "") or "")
+                groups.setdefault(pid, []).append(c)
+
+            result: list[Any] = []
+            for pid, group in groups.items():
+                provider = group[0].provider
+                pool_cfg = parse_pool_config(getattr(provider, "config", None))
+                if pool_cfg is None or not pid:
+                    result.extend(group)
+                    continue
+
+                provider_type = str(getattr(provider, "provider_type", "") or "")
+                session_uuid = TaskService._extract_session_uuid(provider_type, request_body)
+                mgr = PoolManager(pid, pool_cfg)
+                reordered = await mgr.reorder_candidates(session_uuid, group)
+                result.extend(reordered)
+
+                # Extract trace attached by PoolManager.reorder_candidates
+                if reordered:
+                    trace = getattr(reordered[0], "_pool_scheduling_trace", None)
+                    if trace is not None:
+                        pool_traces.append(trace)
+
+            return result, pool_traces
+        except Exception:
+            from src.core.logger import logger
+
+            logger.opt(exception=True).debug("Pool reorder failed, using original order")
+            return candidates, []
+
+    @staticmethod
+    async def _pool_on_success(
+        candidate: Any,
+        request_body: dict[str, Any] | None,
+    ) -> None:
+        """Notify the pool manager about a successful request (sticky + LRU)."""
+        try:
+            from src.services.provider.pool.config import parse_pool_config
+            from src.services.provider.pool.manager import PoolManager
+
+            provider = candidate.provider
+            provider_config = getattr(provider, "config", None)
+            pool_cfg = parse_pool_config(provider_config)
+            if pool_cfg is None:
+                return
+
+            provider_id = str(getattr(provider, "id", "") or "")
+            key_id = str(getattr(candidate.key, "id", "") or "")
+            if not provider_id or not key_id:
+                return
+
+            provider_type = str(getattr(provider, "provider_type", "") or "")
+            session_uuid = TaskService._extract_session_uuid(provider_type, request_body)
+
+            mgr = PoolManager(provider_id, pool_cfg)
+            await mgr.on_request_success(
+                session_uuid=session_uuid,
+                key_id=key_id,
+            )
+        except Exception:
+            logger.opt(exception=True).debug("Pool on_request_success failed (non-blocking)")
+
+    @staticmethod
+    async def _pool_on_error(
+        provider: Any,
+        key: Any,
+        status_code: int,
+        cause: Any,
+    ) -> None:
+        """Notify the pool manager about an upstream error (health policy)."""
+        try:
+            from src.services.provider.pool.config import parse_pool_config
+            from src.services.provider.pool.health_policy import apply_health_policy
+
+            pool_cfg = parse_pool_config(getattr(provider, "config", None))
+            if pool_cfg is None:
+                return
+
+            error_text = ""
+            resp_headers: dict[str, str] = {}
+            if getattr(cause, "response", None) is not None:
+                try:
+                    error_text = (cause.response.text or "")[:4000]
+                except Exception:
+                    pass
+                try:
+                    resp_headers = dict(cause.response.headers)
+                except Exception:
+                    pass
+
+            await apply_health_policy(
+                provider_id=str(provider.id),
+                key_id=str(key.id),
+                status_code=status_code,
+                error_body=error_text,
+                response_headers=resp_headers,
+                config=pool_cfg,
+            )
+        except Exception:
+            pass
+
     async def _execute_sync_unified(
         self,
         *,
@@ -287,6 +432,12 @@ class TaskService:
             is_stream=is_stream,
             capability_requirements=capability_requirements,
             preferred_key_ids=preferred_key_ids,
+            request_body=request_body,
+        )
+
+        # Account Pool: reorder candidates for claude_code providers.
+        all_candidates, pool_traces = await self._apply_pool_reorder(
+            all_candidates, request_body=request_body
         )
 
         candidate_record_map = candidate_resolver.create_candidate_records(
@@ -349,6 +500,9 @@ class TaskService:
                 )
             )
             _ = (attempt_id, _provider_name, _provider_id, _endpoint_id, _key_id)
+
+            # Account Pool: on success, update sticky binding + LRU.
+            await self._pool_on_success(candidate, request_body)
 
             if is_stream:
                 return AttemptResult(
@@ -441,6 +595,16 @@ class TaskService:
         )
 
         if result.success:
+            # Build pool scheduling summary from traces collected during reorder.
+            if pool_traces and result.key_id:
+                try:
+                    for pt in pool_traces:
+                        summary = pt.build_summary(result.key_id)
+                        if summary:
+                            result.pool_summary = summary
+                            break
+                except Exception:
+                    pass
             return result
 
         self._raise_all_failed_exception(
@@ -932,6 +1096,9 @@ class TaskService:
                 max_attempts=max_attempts,
                 attempt=attempt,
             )
+
+            # Account Pool: apply health policy (cooldown/disable).
+            await self._pool_on_error(provider, key, status_code, cause)
 
             converted_error = extra_data.get("converted_error")
             serializable_extra_data = {

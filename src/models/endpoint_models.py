@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.models.admin_requests import ProxyConfig
+from src.models.admin_requests import ClaudeCodeAdvancedConfig, PoolAdvancedConfig, ProxyConfig
 
 # ========== Header Rule 类型定义 ==========
 # 请求头规则支持三种操作：
@@ -934,6 +934,10 @@ class ProviderUpdateRequest(BaseModel):
     request_timeout: float | None = Field(
         None, ge=1, le=600, description="非流式请求整体超时（秒）"
     )
+    claude_code_advanced: ClaudeCodeAdvancedConfig | None = Field(
+        None, description="Claude Code 高级配置"
+    )
+    pool_advanced: PoolAdvancedConfig | None = Field(None, description="通用号池配置")
 
 
 class ProviderWithEndpointsSummary(BaseModel):
@@ -974,6 +978,10 @@ class ProviderWithEndpointsSummary(BaseModel):
         default=None, description="流式请求首字节超时（秒）"
     )
     request_timeout: float | None = Field(default=None, description="非流式请求整体超时（秒）")
+    claude_code_advanced: ClaudeCodeAdvancedConfig | None = Field(
+        default=None, description="Claude Code 高级配置"
+    )
+    pool_advanced: PoolAdvancedConfig | None = Field(default=None, description="通用号池配置")
 
     # Endpoint 统计
     total_endpoints: int = Field(default=0, description="总 Endpoint 数量")

@@ -361,6 +361,7 @@ class CacheAwareScheduler:
         max_candidates: int | None = None,
         is_stream: bool = False,
         capability_requirements: dict[str, bool] | None = None,
+        request_body: dict | None = None,
     ) -> tuple[list[ProviderCandidate], str, int]:
         """
         预先获取所有可用的 Provider/Endpoint/Key 组合
@@ -519,6 +520,7 @@ class CacheAwareScheduler:
             is_stream=is_stream,
             capability_requirements=capability_requirements,
             global_conversion_enabled=global_conversion_enabled,
+            request_body=request_body,
         )
 
         # 3. 应用优先级模式排序 + 调度模式排序

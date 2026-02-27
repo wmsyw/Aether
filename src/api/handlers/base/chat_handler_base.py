@@ -102,6 +102,7 @@ class ProviderRequestResult:
     provider_api_format: str = ""
     client_api_format: str = ""
     auth_info: Any = None
+    tls_profile: str | None = None
 
 
 class ChatHandlerBase(BaseMessageHandler, ABC):
@@ -579,6 +580,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             ctx.provider_id = provider_id
             ctx.endpoint_id = endpoint_id
             ctx.key_id = key_id
+            if getattr(exec_result, "pool_summary", None):
+                ctx.pool_summary = exec_result.pool_summary
             # 同步整流状态（如果请求体被整流过）
             ctx.rectified = request_body_ref.get("_rectified", False)
 
@@ -714,6 +717,16 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             policy=upstream_policy,
         )
 
+        # Envelope lifecycle: prepare_context (pre-wrap hook).
+        envelope_tls_profile: str | None = None
+        if envelope and hasattr(envelope, "prepare_context"):
+            envelope_tls_profile = envelope.prepare_context(
+                provider_config=getattr(provider, "config", None),
+                key_id=str(getattr(key, "id", "") or ""),
+                is_stream=upstream_is_stream,
+                provider_id=str(getattr(provider, "id", "") or ""),
+            )
+
         # 跨格式：先做请求体转换（失败触发 failover）
         registry = get_format_converter_registry()
         if needs_conversion:
@@ -776,6 +789,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 url_model=url_model,
                 decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
             )
+            # Envelope lifecycle: post_wrap_request (post-wrap hook).
+            if hasattr(envelope, "post_wrap_request"):
+                await envelope.post_wrap_request(request_body)
 
         # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
         extra_headers: dict[str, str] = {}
@@ -793,6 +809,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             provider_api_format=provider_api_format,
             client_api_format=client_api_format,
             auth_info=auth_info,
+            tls_profile=envelope_tls_profile,
         )
 
     async def _execute_stream_request(
@@ -853,6 +870,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         envelope = prep.envelope
         upstream_is_stream = prep.upstream_is_stream
         auth_info = prep.auth_info
+        tls_profile = prep.tls_profile
 
         # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
         provider_payload, provider_headers = self._request_builder.build(
@@ -863,6 +881,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             is_stream=upstream_is_stream,
             extra_headers=prep.extra_headers if prep.extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
+            envelope=envelope,
         )
         if upstream_is_stream:
             from src.core.api_format.headers import set_accept_if_absent
@@ -908,7 +927,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             request_timeout_sync = provider.request_timeout or config.http_request_timeout
             delegate_cfg = resolve_delegate_config(effective_proxy)
             http_client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg, proxy_config=effective_proxy
+                delegate_cfg,
+                proxy_config=effective_proxy,
+                tls_profile=tls_profile,
             )
 
             try:
@@ -1104,7 +1125,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
         delegate_cfg = resolve_delegate_config(effective_proxy)
         http_client = await HTTPClientPool.get_upstream_client(
-            delegate_cfg, proxy_config=effective_proxy
+            delegate_cfg,
+            proxy_config=effective_proxy,
+            tls_profile=tls_profile,
         )
 
         # 用于存储内部函数的结果（必须在函数定义前声明，供 nonlocal 使用）

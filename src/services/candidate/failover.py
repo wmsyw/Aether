@@ -513,6 +513,10 @@ class FailoverEngine:
         api_key_id: str | None,
     ) -> str:
         # Create "available" record, then caller will mark pending.
+        extra: dict = {}
+        pool_extra = getattr(candidate, "_pool_extra_data", None)
+        if pool_extra:
+            extra.update(pool_extra)
         row = RequestCandidateService.create_candidate(
             db=self.db,
             request_id=request_id,
@@ -525,7 +529,7 @@ class FailoverEngine:
             key_id=str(candidate.key.id),
             status="available",
             is_cached=bool(getattr(candidate, "is_cached", False)),
-            extra_data={},
+            extra_data=extra,
         )
         return str(row.id)
 
@@ -539,6 +543,10 @@ class FailoverEngine:
         api_key_id: str | None,
         skip_reason: str | None,
     ) -> str:
+        extra: dict = {}
+        pool_extra = getattr(candidate, "_pool_extra_data", None)
+        if pool_extra:
+            extra.update(pool_extra)
         row = RequestCandidateService.create_candidate(
             db=self.db,
             request_id=request_id,
@@ -552,7 +560,7 @@ class FailoverEngine:
             status="skipped",
             skip_reason=skip_reason,
             is_cached=bool(getattr(candidate, "is_cached", False)),
-            extra_data={},
+            extra_data=extra,
         )
         # ensure visible for subsequent recorder reads
         if self.db.in_transaction():
