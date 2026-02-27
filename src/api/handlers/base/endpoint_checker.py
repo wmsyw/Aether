@@ -32,7 +32,6 @@ from src.core.api_format import (
     redact_headers_for_log,
 )
 from src.core.logger import logger
-from src.utils.ssl_utils import get_ssl_context
 
 
 def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -73,7 +72,7 @@ async def run_endpoint_check(
     provider_id: str | None = None,
     db: Any | None = None,  # Session对象，需要时才导入
     user: Any | None = None,  # User对象
-    proxy_param: Any | None = None,  # httpx 可接受的代理参数
+    proxy_config: dict[str, Any] | None = None,  # 原始代理配置（支持 tunnel 模式）
 ) -> dict[str, Any]:
     """
     执行端点检查（重构版本，使用新的架构）：
@@ -95,7 +94,7 @@ async def run_endpoint_check(
         db=db,
         user=user,
         request_id=str(uuid.uuid4())[:8],
-        proxy_param=proxy_param,
+        proxy_config=proxy_config,
     )
 
     # 使用协调器执行检查
@@ -567,7 +566,7 @@ class EndpointCheckRequest:
     user: Any | None = None
     request_id: str | None = None
     timeout: float = 30.0
-    proxy_param: Any | None = None  # httpx 可接受的代理参数
+    proxy_config: dict[str, Any] | None = None  # 原始代理配置（支持 tunnel 模式）
 
 
 @dataclass
@@ -600,17 +599,10 @@ class HttpRequestExecutor:
         try:
             from src.services.proxy_node.resolver import build_proxy_client_kwargs
 
-            if request.proxy_param is not None:
-                # 调用方已提供解析好的代理参数，直接使用（跳过系统默认回退）
-                client_kwargs: dict[str, Any] = {
-                    "timeout": self.timeout,
-                    "verify": get_ssl_context(),
-                }
-                if request.proxy_param:
-                    client_kwargs["proxy"] = request.proxy_param
-            else:
-                # 未提供代理参数，通过 build_proxy_client_kwargs 统一解析（含系统默认回退）
-                client_kwargs = build_proxy_client_kwargs(timeout=self.timeout)
+            # 统一通过 build_proxy_client_kwargs 构建（支持 tunnel 模式 + 普通代理 + 系统默认回退）
+            client_kwargs = build_proxy_client_kwargs(
+                proxy_config=request.proxy_config, timeout=self.timeout
+            )
 
             async with httpx.AsyncClient(**client_kwargs) as client:
                 if is_stream:

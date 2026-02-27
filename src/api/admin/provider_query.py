@@ -9,7 +9,6 @@ import asyncio
 import json
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
@@ -36,7 +35,7 @@ from src.services.model.upstream_fetcher import (
     get_adapter_for_format,
 )
 from src.services.provider.oauth_token import resolve_oauth_access_token
-from src.services.proxy_node.resolver import resolve_effective_proxy, resolve_proxy_param
+from src.services.proxy_node.resolver import resolve_effective_proxy
 from src.utils.auth_utils import get_current_user
 
 router = APIRouter(prefix="/api/admin/provider-query", tags=["Provider Query"])
@@ -807,7 +806,6 @@ async def test_model(
         test_proxy = resolve_effective_proxy(
             getattr(provider, "proxy", None), getattr(api_key, "proxy", None)
         )
-        test_proxy_param = resolve_proxy_param(test_proxy)
 
         logger.debug("[test-model] 开始端点测试...")
 
@@ -832,7 +830,7 @@ async def test_model(
                 auth_type=auth_type,
                 provider_type=p_type if p_type else None,
                 decrypted_auth_config=oauth_meta if oauth_meta else None,
-                proxy_param=test_proxy_param,
+                proxy_config=test_proxy,
             )
 
         def _response_has_error(resp: dict) -> bool:
