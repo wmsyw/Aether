@@ -179,7 +179,7 @@
         端点 {{ provider.active_endpoints }}/{{ provider.total_endpoints }}
       </span>
       <span class="text-muted-foreground">
-        {{ provider.provider_type && provider.provider_type !== 'custom' ? '账号' : '密钥' }} {{ provider.active_keys }}/{{ provider.total_keys }}
+        {{ getCredentialLabel(provider) }} {{ provider.active_keys }}/{{ provider.total_keys }}
       </span>
       <span class="text-muted-foreground">
         模型 {{ provider.active_models }}/{{ provider.total_models }}
@@ -301,5 +301,10 @@ function handleDescriptionKeydown(event: KeyboardEvent) {
   } else if (event.key === 'Escape') {
     handleCancel(event)
   }
+}
+
+function getCredentialLabel(provider: ProviderWithEndpointsSummary): '账号' | '密钥' {
+  const providerType = String(provider.provider_type || '').trim().toLowerCase()
+  return providerType && providerType !== 'custom' ? '账号' : '密钥'
 }
 </script>

@@ -78,22 +78,18 @@
       />
     </TableCell>
     <TableCell class="py-3.5 text-center">
-      <div class="space-y-0.5 text-xs">
-        <div class="flex items-center justify-center gap-1.5">
-          <span class="text-muted-foreground/70">端点:</span>
-          <span class="font-medium text-foreground/90">{{ provider.active_endpoints }}</span>
-          <span class="text-muted-foreground/50">/{{ provider.total_endpoints }}</span>
-        </div>
-        <div class="flex items-center justify-center gap-1.5">
-          <span class="text-muted-foreground/70">密钥:</span>
-          <span class="font-medium text-foreground/90">{{ provider.active_keys }}</span>
-          <span class="text-muted-foreground/50">/{{ provider.total_keys }}</span>
-        </div>
-        <div class="flex items-center justify-center gap-1.5">
-          <span class="text-muted-foreground/70">模型:</span>
-          <span class="font-medium text-foreground/90">{{ provider.active_models }}</span>
-          <span class="text-muted-foreground/50">/{{ provider.total_models }}</span>
-        </div>
+      <div class="inline-grid grid-cols-[1.75rem_1.75rem_1.75rem] gap-x-0.5 gap-y-0.5 text-xs text-left">
+        <span class="text-muted-foreground/70">端点:</span>
+        <span class="font-medium text-foreground/90 tabular-nums text-right">{{ provider.active_endpoints }}</span>
+        <span class="text-muted-foreground/50 tabular-nums">/{{ provider.total_endpoints }}</span>
+
+        <span class="text-muted-foreground/70">{{ `${getCredentialLabel(provider)}:` }}</span>
+        <span class="font-medium text-foreground/90 tabular-nums text-right">{{ provider.active_keys }}</span>
+        <span class="text-muted-foreground/50 tabular-nums">/{{ provider.total_keys }}</span>
+
+        <span class="text-muted-foreground/70">模型:</span>
+        <span class="font-medium text-foreground/90 tabular-nums text-right">{{ provider.active_models }}</span>
+        <span class="text-muted-foreground/50 tabular-nums">/{{ provider.total_models }}</span>
       </div>
     </TableCell>
     <TableCell class="py-3.5 align-middle">
@@ -284,5 +280,10 @@ function handleDescriptionKeydown(event: KeyboardEvent) {
   } else if (event.key === 'Escape') {
     handleCancel(event)
   }
+}
+
+function getCredentialLabel(provider: ProviderWithEndpointsSummary): '账号' | '密钥' {
+  const providerType = String(provider.provider_type || '').trim().toLowerCase()
+  return providerType && providerType !== 'custom' ? '账号' : '密钥'
 }
 </script>

@@ -101,12 +101,6 @@
                   class="node-line"
                   :class="{ 'conversion-boundary': groupIndex + 1 === conversionBoundaryIndex }"
                 />
-                <span
-                  v-if="groupIndex + 1 === conversionBoundaryIndex"
-                  class="boundary-label"
-                >
-                  格式转换
-                </span>
               </div>
             </div>
           </div>
@@ -200,10 +194,6 @@
                     <span class="info-label">格式</span>
                     <span class="info-value">
                       <code class="format-code">{{ formatApiFormat(currentAttempt.extra_data.provider_api_format) }}</code>
-                      <span
-                        v-if="currentAttempt.extra_data?.needs_conversion"
-                        class="conversion-badge ml-1.5"
-                      >格式转换</span>
                     </span>
                   </div>
                   <div
@@ -1270,27 +1260,6 @@ const getStatusColorClass = (status: string) => {
   background: none;
   height: 0;
   border-top: 2px dashed hsl(var(--muted-foreground) / 0.4);
-}
-
-.boundary-label {
-  position: absolute;
-  top: -14px;
-  font-size: 0.55rem;
-  color: hsl(var(--muted-foreground) / 0.6);
-  white-space: nowrap;
-}
-
-/* 详情面板中的格式转换标签 */
-.conversion-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.1rem 0.4rem;
-  font-size: 0.65rem;
-  font-weight: 500;
-  color: hsl(var(--muted-foreground));
-  background: hsl(var(--muted) / 0.5);
-  border: 1px dashed hsl(var(--border));
-  border-radius: 4px;
 }
 
 /* 详情面板 */
