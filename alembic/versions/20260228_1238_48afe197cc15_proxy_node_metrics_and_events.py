@@ -50,10 +50,13 @@ def upgrade() -> None:
         op.execute("UPDATE proxy_nodes SET status = 'offline' WHERE status = 'unhealthy'")
         op.execute("ALTER TYPE proxynodestatus RENAME TO proxynodestatus_old")
         op.execute("CREATE TYPE proxynodestatus AS ENUM ('online', 'offline')")
+        # 必须先移除旧枚举类型的 DEFAULT，否则 ALTER TYPE 会因无法转换默认值而报错
+        op.execute("ALTER TABLE proxy_nodes ALTER COLUMN status DROP DEFAULT")
         op.execute(
             "ALTER TABLE proxy_nodes ALTER COLUMN status TYPE proxynodestatus"
             " USING status::text::proxynodestatus"
         )
+        op.execute("ALTER TABLE proxy_nodes ALTER COLUMN status SET DEFAULT 'online'::proxynodestatus")
         op.execute("DROP TYPE proxynodestatus_old")
 
     # proxy_nodes: 新增错误指标字段
@@ -130,10 +133,12 @@ def downgrade() -> None:
     if not _enum_has_value("proxynodestatus", "unhealthy"):
         op.execute("ALTER TYPE proxynodestatus RENAME TO proxynodestatus_old")
         op.execute("CREATE TYPE proxynodestatus AS ENUM ('online', 'unhealthy', 'offline')")
+        op.execute("ALTER TABLE proxy_nodes ALTER COLUMN status DROP DEFAULT")
         op.execute(
             "ALTER TABLE proxy_nodes ALTER COLUMN status TYPE proxynodestatus"
             " USING status::text::proxynodestatus"
         )
+        op.execute("ALTER TABLE proxy_nodes ALTER COLUMN status SET DEFAULT 'online'::proxynodestatus")
         op.execute("DROP TYPE proxynodestatus_old")
 
     if _table_exists("proxy_node_events"):
