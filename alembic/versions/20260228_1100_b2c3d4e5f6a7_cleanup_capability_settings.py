@@ -33,9 +33,21 @@ depends_on: str | Sequence[str] | None = None
 
 def column_exists(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
-    inspector = inspect(bind)
-    columns = [c["name"] for c in inspector.get_columns(table_name)]
+    insp = inspect(bind)
+    columns = [c["name"] for c in insp.get_columns(table_name)]
     return column_name in columns
+
+
+def table_exists(table_name: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    return table_name in insp.get_table_names()
+
+
+def index_exists(table_name: str, index_name: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    return any(idx["name"] == index_name for idx in insp.get_indexes(table_name))
 
 
 def upgrade() -> None:
@@ -126,33 +138,36 @@ def upgrade() -> None:
         )
 
     # --- 3. Create user_model_usage_counts table ---
-    op.create_table(
-        "user_model_usage_counts",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column(
-            "user_id",
-            sa.String(36),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column("model", sa.String(100), nullable=False),
-        sa.Column("usage_count", sa.Integer, nullable=False, server_default="0"),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.UniqueConstraint("user_id", "model", name="uq_user_model_usage_count"),
-    )
-    op.create_index("idx_user_model_usage_user", "user_model_usage_counts", ["user_id"])
-    op.create_index("idx_user_model_usage_model", "user_model_usage_counts", ["model"])
+    if not table_exists("user_model_usage_counts"):
+        op.create_table(
+            "user_model_usage_counts",
+            sa.Column("id", sa.String(36), primary_key=True),
+            sa.Column(
+                "user_id",
+                sa.String(36),
+                sa.ForeignKey("users.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column("model", sa.String(100), nullable=False),
+            sa.Column("usage_count", sa.Integer, nullable=False, server_default="0"),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.UniqueConstraint("user_id", "model", name="uq_user_model_usage_count"),
+        )
+    if not index_exists("user_model_usage_counts", "idx_user_model_usage_user"):
+        op.create_index("idx_user_model_usage_user", "user_model_usage_counts", ["user_id"])
+    if not index_exists("user_model_usage_counts", "idx_user_model_usage_model"):
+        op.create_index("idx_user_model_usage_model", "user_model_usage_counts", ["model"])
 
     # Backfill from existing usage records
     rows = conn.execute(
@@ -179,18 +194,26 @@ def upgrade() -> None:
         )
 
     # --- 4. Enforce models.global_model_id NOT NULL ---
-    op.execute("DELETE FROM models WHERE global_model_id IS NULL")
-    op.alter_column("models", "global_model_id", existing_type=sa.String(36), nullable=False)
+    conn = op.get_bind()
+    insp = inspect(conn)
+    model_cols = {c["name"]: c for c in insp.get_columns("models")}
+    if model_cols.get("global_model_id", {}).get("nullable", True):
+        op.execute("DELETE FROM models WHERE global_model_id IS NULL")
+        op.alter_column("models", "global_model_id", existing_type=sa.String(36), nullable=False)
 
 
 def downgrade() -> None:
     # Revert models.global_model_id to nullable
-    op.alter_column("models", "global_model_id", existing_type=sa.String(36), nullable=True)
+    if column_exists("models", "global_model_id"):
+        op.alter_column("models", "global_model_id", existing_type=sa.String(36), nullable=True)
 
     # Drop user_model_usage_counts
-    op.drop_index("idx_user_model_usage_model", table_name="user_model_usage_counts")
-    op.drop_index("idx_user_model_usage_user", table_name="user_model_usage_counts")
-    op.drop_table("user_model_usage_counts")
+    if table_exists("user_model_usage_counts"):
+        if index_exists("user_model_usage_counts", "idx_user_model_usage_model"):
+            op.drop_index("idx_user_model_usage_model", table_name="user_model_usage_counts")
+        if index_exists("user_model_usage_counts", "idx_user_model_usage_user"):
+            op.drop_index("idx_user_model_usage_user", table_name="user_model_usage_counts")
+        op.drop_table("user_model_usage_counts")
 
     # Drop cache_creation columns
     if column_exists("usage", "cache_creation_input_tokens_1h"):
