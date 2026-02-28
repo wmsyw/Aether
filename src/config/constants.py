@@ -29,8 +29,8 @@ class CacheTTL:
     DASHBOARD_DAILY = 600  # 10分钟（每日统计）
 
     # Admin usage pages (heavy DB aggregations / list queries)
-    ADMIN_USAGE_AGGREGATION = 30  # 30秒
-    ADMIN_USAGE_RECORDS = 10  # 10秒（列表页短缓存，避免轮询/重复刷新打爆 DB）
+    ADMIN_USAGE_AGGREGATION = 60  # 60秒（聚合统计变化不频繁，适当延长减少 DB 压力）
+    ADMIN_USAGE_RECORDS = 15  # 15秒（列表页短缓存，活跃请求通过轮询接口实时更新）
 
     # Admin leaderboard (heavier, slower moving)
     ADMIN_LEADERBOARD = 300  # 5分钟

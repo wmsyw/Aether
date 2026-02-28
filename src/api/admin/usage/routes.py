@@ -869,6 +869,21 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         from src.utils.database_helpers import escape_like_pattern, safe_truncate_escaped
 
         db = context.db
+
+        # -- 构建轻量 count 查询（仅按需 JOIN） --
+        needs_user_join = bool(self.search or self.username)
+        needs_provider_join = bool(self.search or self.provider)
+        needs_apikey_join = bool(self.search)
+
+        count_query = db.query(func.count(Usage.id))
+        if needs_user_join:
+            count_query = count_query.outerjoin(User, Usage.user_id == User.id)
+        if needs_provider_join:
+            count_query = count_query.outerjoin(Provider, Usage.provider_id == Provider.id)
+        if needs_apikey_join:
+            count_query = count_query.outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
+
+        # -- 构建数据查询（完整 JOIN） --
         query = (
             db.query(Usage, User, ProviderEndpoint, ProviderAPIKey, ApiKey)
             .outerjoin(User, Usage.user_id == User.id)
@@ -889,57 +904,65 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             for keyword in keywords:
                 escaped = safe_truncate_escaped(escape_like_pattern(keyword), 100)
                 search_pattern = f"%{escaped}%"
-                query = query.filter(
-                    or_(
-                        User.username.ilike(search_pattern, escape="\\"),
-                        ApiKey.name.ilike(search_pattern, escape="\\"),
-                        Usage.model.ilike(search_pattern, escape="\\"),
-                        Provider.name.ilike(search_pattern, escape="\\"),
-                    )
+                search_filter = or_(
+                    User.username.ilike(search_pattern, escape="\\"),
+                    ApiKey.name.ilike(search_pattern, escape="\\"),
+                    Usage.model.ilike(search_pattern, escape="\\"),
+                    Provider.name.ilike(search_pattern, escape="\\"),
                 )
+                query = query.filter(search_filter)
+                count_query = count_query.filter(search_filter)
 
         if self.user_id:
             query = query.filter(Usage.user_id == self.user_id)
+            count_query = count_query.filter(Usage.user_id == self.user_id)
         if self.username:
             # 支持用户名模糊搜索
             escaped = escape_like_pattern(self.username)
-            query = query.filter(User.username.ilike(f"%{escaped}%", escape="\\"))
+            username_filter = User.username.ilike(f"%{escaped}%", escape="\\")
+            query = query.filter(username_filter)
+            count_query = count_query.filter(username_filter)
         if self.model:
             # 模型筛选：前端为下拉框精确值，使用精确匹配以启用索引
             # 如需模糊搜索，请使用 search 参数。
             query = query.filter(Usage.model == self.model)
+            count_query = count_query.filter(Usage.model == self.model)
         if self.provider:
             # 提供商筛选：前端为下拉框精确值，使用精确匹配以启用索引
             # 如需模糊搜索，请使用 search 参数。
             query = query.filter(Provider.name == self.provider)
+            count_query = count_query.filter(Provider.name == self.provider)
         if self.api_format:
             # API 格式筛选：精确匹配（大小写不敏感）
-            query = query.filter(func.lower(Usage.api_format) == self.api_format.lower())
+            api_format_filter = func.lower(Usage.api_format) == self.api_format.lower()
+            query = query.filter(api_format_filter)
+            count_query = count_query.filter(api_format_filter)
         if self.status:
             # 状态筛选
             # 旧的筛选值（基于 is_stream 和 status_code）：stream, standard, error
             # 新的筛选值（基于 status 字段）：pending, streaming, completed, failed, active
+            status_filter = None
             if self.status == "stream":
-                query = query.filter(Usage.is_stream == True)  # noqa: E712
+                status_filter = Usage.is_stream == True  # noqa: E712
             elif self.status == "standard":
-                query = query.filter(Usage.is_stream == False)  # noqa: E712
+                status_filter = Usage.is_stream == False  # noqa: E712
             elif self.status == "error":
-                query = query.filter((Usage.status_code >= 400) | (Usage.error_message.isnot(None)))
+                status_filter = (Usage.status_code >= 400) | (Usage.error_message.isnot(None))
             elif self.status in ("pending", "streaming", "completed", "cancelled"):
                 # 新的状态筛选：直接按 status 字段过滤
-                query = query.filter(Usage.status == self.status)
+                status_filter = Usage.status == self.status
             elif self.status == "failed":
                 # 失败请求需要同时考虑新旧两种判断方式：
                 # 1. 新方式：status = "failed"
                 # 2. 旧方式：status_code >= 400 或 error_message 不为空
-                query = query.filter(
+                status_filter = (
                     (Usage.status == "failed")
                     | (Usage.status_code >= 400)
                     | (Usage.error_message.isnot(None))
                 )
             elif self.status == "active":
                 # 活跃请求：pending 或 streaming 状态
-                query = query.filter(Usage.status.in_(["pending", "streaming"]))
+                status_filter = Usage.status.in_(["pending", "streaming"])
             elif self.status == "has_retry":
                 # 发生重试：存在 retry_index > 0 的已执行候选
                 retry_subq = (
@@ -951,7 +974,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     .distinct()
                     .subquery()
                 )
-                query = query.filter(Usage.request_id.in_(retry_subq))
+                status_filter = Usage.request_id.in_(retry_subq)
             elif self.status == "has_fallback":
                 # 发生转移：同一请求有多个不同 candidate_index 的已执行候选
                 fallback_subq = (
@@ -961,13 +984,21 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     .having(func.count(func.distinct(RequestCandidate.candidate_index)) > 1)
                     .subquery()
                 )
-                query = query.filter(Usage.request_id.in_(fallback_subq))
+                status_filter = Usage.request_id.in_(fallback_subq)
+
+            if status_filter is not None:
+                query = query.filter(status_filter)
+                count_query = count_query.filter(status_filter)
+
         if self.time_range:
             start_utc, end_utc = self.time_range.to_utc_datetime_range()
-            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+            time_filter_start = Usage.created_at >= start_utc
+            time_filter_end = Usage.created_at < end_utc
+            query = query.filter(time_filter_start, time_filter_end)
+            count_query = count_query.filter(time_filter_start, time_filter_end)
 
-        # Perf: avoid Query.count() building a subquery selecting many columns
-        total = int(query.with_entities(func.count(Usage.id)).scalar() or 0)
+        # Perf: count query uses fewer JOINs than the data query
+        total = int(count_query.scalar() or 0)
 
         # Perf: do not load large request/response columns for list view
         query = query.options(

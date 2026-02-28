@@ -2203,6 +2203,10 @@ class RequestCandidate(Base):
         Index("idx_request_candidates_status", "status"),
         Index("idx_request_candidates_provider_id", "provider_id"),
         Index("idx_request_candidates_created_at", "created_at"),
+        # 复合索引: 按 request_id + status 查询 fallback/retry 场景
+        Index("idx_rc_request_id_status", "request_id", "status"),
+        # 复合索引: 按 provider 聚合统计（provider_id + status + created_at）
+        Index("idx_rc_provider_status_created", "provider_id", "status", "created_at"),
     )
 
     # 关系

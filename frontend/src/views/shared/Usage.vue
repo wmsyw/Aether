@@ -411,34 +411,30 @@ const selectedRequestId = ref<string | null>(null)
 
 // 初始化加载
 onMounted(async () => {
-  // 并行加载统计数据和热力图（使用 allSettled 避免其中一个失败影响另一个）
-  const [statsResult, heatmapResult] = await Promise.allSettled([
-    loadStats(timeRange.value),
-    loadHeatmapData()
-  ])
-
-  // 检查加载结果并通知用户
-  if (statsResult.status === 'rejected') {
-    log.error('加载统计数据失败:', statsResult.reason)
+  // 所有数据源并行加载（stats/heatmap/records/users 之间没有数据依赖）
+  const statsTask = loadStats(timeRange.value).catch(err => {
+    log.error('加载统计数据失败:', err)
     warning('统计数据加载失败，请刷新重试')
-  }
-  if (heatmapResult.status === 'rejected') {
-    log.error('加载热力图数据失败:', heatmapResult.reason)
-    // 热力图加载失败不提示，因为 UI 已显示占位符
+  })
+  const heatmapTask = loadHeatmapData().catch(err => {
+    log.error('加载热力图数据失败:', err)
+  })
+  const recordsTask = loadRecords(
+    { page: currentPage.value, pageSize: pageSize.value },
+    getCurrentFilters()
+  )
+
+  const tasks: Promise<unknown>[] = [statsTask, heatmapTask, recordsTask]
+
+  if (isAdminPage.value) {
+    tasks.push(
+      usersApi.getAllUsers().then(users => {
+        availableUsers.value = users.map(u => ({ id: u.id, username: u.username, email: u.email }))
+      })
+    )
   }
 
-  // 加载记录和用户列表
-  if (isAdminPage.value) {
-    // 管理员页面：并行加载用户列表和记录
-    const [users] = await Promise.all([
-      usersApi.getAllUsers(),
-      loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
-    ])
-    availableUsers.value = users.map(u => ({ id: u.id, username: u.username, email: u.email }))
-  } else {
-    // 用户页面：加载记录
-    await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
-  }
+  await Promise.allSettled(tasks)
 })
 
 // 处理时间范围变化
