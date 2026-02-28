@@ -172,7 +172,7 @@ async def unregister_proxy_node(request: Request, db: Session = Depends(get_db))
 @router.get("")
 async def list_proxy_nodes(
     request: Request,
-    status: str | None = Query(None, description="按状态筛选：online/unhealthy/offline"),
+    status: str | None = Query(None, description="按状态筛选：online/offline"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),

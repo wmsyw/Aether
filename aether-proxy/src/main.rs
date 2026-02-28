@@ -136,8 +136,8 @@ async fn run_proxy(config: Config) -> anyhow::Result<()> {
     // Skip this check when we ARE the systemd service (INVOCATION_ID is set by systemd).
     if std::env::var_os("INVOCATION_ID").is_none() && setup::service::is_service_active() {
         eprintln!("Warning: systemd service is already running.");
-        eprintln!("Use `aether-proxy stop` to stop it first, or manage via subcommands:");
-        eprintln!("  aether-proxy status / logs / restart / stop");
+        eprintln!("Use `./aether-proxy stop` to stop it first, or manage via subcommands:");
+        eprintln!("  ./aether-proxy status / logs / restart / stop");
         std::process::exit(1);
     }
 

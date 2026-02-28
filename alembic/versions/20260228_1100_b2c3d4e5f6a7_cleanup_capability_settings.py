@@ -169,7 +169,8 @@ def upgrade() -> None:
     if not index_exists("user_model_usage_counts", "idx_user_model_usage_model"):
         op.create_index("idx_user_model_usage_model", "user_model_usage_counts", ["model"])
 
-    # Backfill from existing usage records
+    # Backfill from existing usage records (truncate first for idempotency)
+    conn.execute(sa.text("DELETE FROM user_model_usage_counts"))
     rows = conn.execute(
         sa.text(
             "SELECT user_id, model, COUNT(*) AS cnt FROM usage"
