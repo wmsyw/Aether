@@ -337,6 +337,8 @@ class Usage(Base):
     # 缓存相关 tokens (for Claude models)
     cache_creation_input_tokens = Column(Integer, default=0)
     cache_read_input_tokens = Column(Integer, default=0)
+    cache_creation_input_tokens_5m = Column(Integer, default=0)  # 5min TTL 缓存创建
+    cache_creation_input_tokens_1h = Column(Integer, default=0)  # 1h TTL 缓存创建
 
     # 成本计算
     input_cost_usd = Column(Float, default=0.0)
@@ -1093,9 +1095,7 @@ class Model(ExportMixin, Base):
 
     设计原则:
     - Model 表示 Provider 对某个模型的具体实现
-    - global_model_id 可为空：
-      - 为空时：模型尚未关联到 GlobalModel，不参与路由
-      - 不为空时：模型已关联 GlobalModel，参与路由
+    - global_model_id 必填，必须关联到一个 GlobalModel
     - provider_model_name 是 Provider 侧的实际模型名称 (可能与 GlobalModel.name 不同)
     - 价格和能力配置可为空，为空时使用 GlobalModel 的默认值
     """
@@ -1115,8 +1115,8 @@ class Model(ExportMixin, Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     provider_id = Column(String(36), ForeignKey("providers.id"), nullable=False)
-    # 可为空：NULL 表示未关联，不参与路由；非 NULL 表示已关联，参与路由
-    global_model_id = Column(String(36), ForeignKey("global_models.id"), nullable=True, index=True)
+    # 必须关联一个 GlobalModel
+    global_model_id = Column(String(36), ForeignKey("global_models.id"), nullable=False, index=True)
 
     # Provider 映射配置
     provider_model_name = Column(String(200), nullable=False)  # Provider 侧的主模型名称
