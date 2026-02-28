@@ -1214,8 +1214,10 @@ def _parse_tokens_input(raw_input: str) -> list[str]:
 
     支持的格式：
     1. 单个 Token 字符串
-    2. JSON 数组: ["token1", "token2", ...]
-    3. 纯 Token 导入（一行一个）: "token1\\ntoken2\\ntoken3"
+    2. JSON 字符串数组: ["token1", "token2", ...]
+    3. JSON 对象数组: [{"refresh_token": "token1", ...}, ...]
+    4. 单个 JSON 对象: {"refresh_token": "token1", ...}
+    5. 纯 Token 导入（一行一个）: "token1\\ntoken2\\ntoken3"
 
     返回: Token 字符串列表
     """
@@ -1233,9 +1235,24 @@ def _parse_tokens_input(raw_input: str) -> list[str]:
                 for item in parsed:
                     if isinstance(item, str) and item.strip():
                         result.append(item.strip())
+                    elif isinstance(item, dict):
+                        token = item.get("refresh_token", "")
+                        if isinstance(token, str) and token.strip():
+                            result.append(token.strip())
                 return result
         except json.JSONDecodeError:
             pass  # 不是有效 JSON，继续尝试其他格式
+
+    # 单个 JSON 对象
+    if raw.startswith("{"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                token = parsed.get("refresh_token", "")
+                if isinstance(token, str) and token.strip():
+                    return [token.strip()]
+        except json.JSONDecodeError:
+            pass
 
     # 纯 Token 导入（一行一个）
     lines = raw.splitlines()

@@ -401,102 +401,71 @@
 
         <!-- ===== 导入授权 ===== -->
         <div
-          class="flex flex-col gap-3 transition-opacity duration-150"
+          class="flex flex-col gap-3 justify-center transition-opacity duration-150"
           :class="mode === 'import' ? 'opacity-100' : 'opacity-0 pointer-events-none'"
         >
           <input
             ref="fileInputRef"
             type="file"
-            accept=".json"
+            accept=".json,.txt"
+            multiple
             class="hidden"
             @change="handleFileSelect"
           >
 
-          <!-- 主区域：拖拽 或 粘贴输入框（同一位置切换） -->
+          <!-- 拖拽模式 -->
           <div
-            v-if="!importText"
-            class="mt-3"
+            v-if="!showManualInput"
+            class="rounded-xl border-2 border-dashed transition-colors cursor-pointer"
+            :class="isDragging
+              ? 'border-primary bg-primary/5'
+              : 'border-border hover:border-muted-foreground/40'"
+            @click="fileInputRef?.click()"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="handleFileDrop"
           >
-            <!-- 拖拽模式 -->
-            <div
-              v-if="!showManualInput"
-              class="rounded-xl border-2 border-dashed transition-colors cursor-pointer"
-              :class="isDragging
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:border-muted-foreground/40'"
-              @click="fileInputRef?.click()"
-              @dragover.prevent="isDragging = true"
-              @dragleave.prevent="isDragging = false"
-              @drop.prevent="handleFileDrop"
-            >
-              <div class="flex flex-col items-center justify-center py-10 gap-2">
-                <div class="w-8 h-8 rounded-full bg-muted/60 flex items-center justify-center">
-                  <Upload class="w-4 h-4 text-muted-foreground" />
-                </div>
-                <div class="text-center">
-                  <p class="text-xs font-medium">
-                    拖入授权文件或点击选择
-                  </p>
-                  <p class="text-[10px] text-muted-foreground mt-0.5">
-                    支持 .json 格式
-                  </p>
-                </div>
+            <div class="flex flex-col items-center justify-center py-12 gap-2">
+              <div class="w-9 h-9 rounded-full bg-muted/60 flex items-center justify-center">
+                <Upload class="w-4 h-4 text-muted-foreground" />
+              </div>
+              <div class="text-center">
+                <p class="text-xs font-medium">
+                  拖入授权文件或点击选择
+                </p>
+                <p class="text-[11px] text-muted-foreground mt-0.5">
+                  支持 .json / .txt，可多选
+                </p>
               </div>
             </div>
-
-            <!-- 粘贴模式 -->
-            <Textarea
-              v-else
-              v-model="manualPasteText"
-              :disabled="importing"
-              placeholder="粘贴 Refresh Token 或 JSON 内容"
-              class="min-h-[168px] text-xs font-mono break-all !rounded-xl"
-              spellcheck="false"
-            />
           </div>
 
-          <!-- 底部切换链接：占满剩余空间居中 -->
-          <div
-            v-if="!importText"
-            class="flex-1 flex items-center justify-center"
-          >
+          <!-- 粘贴模式 -->
+          <Textarea
+            v-else
+            v-model="importText"
+            :disabled="importing"
+            placeholder="粘贴 Refresh Token 或 JSON 内容"
+            class="min-h-[200px] text-xs font-mono break-all !rounded-xl"
+            spellcheck="false"
+          />
+
+          <!-- 底部切换链接 -->
+          <div class="flex items-center justify-center pt-1">
             <button
               v-if="!showManualInput"
-              class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              class="text-sm text-muted-foreground hover:text-foreground transition-colors"
               @click="showManualInput = true"
             >
               或手动粘贴 Refresh Token
             </button>
             <button
               v-else
-              class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-              @click="showManualInput = false"
+              class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              @click="showManualInput = false; importText = ''"
             >
               或选择 JSON 文件导入
             </button>
-          </div>
-
-          <!-- 已有内容（文件导入后）：显示文本框 -->
-          <div
-            v-if="importText"
-            class="space-y-2"
-          >
-            <div class="flex items-center justify-between">
-              <span class="text-xs text-muted-foreground">{{ importFileName || '已粘贴内容' }}</span>
-              <button
-                class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                :disabled="importing"
-                @click="clearImport"
-              >
-                清除
-              </button>
-            </div>
-            <Textarea
-              v-model="importText"
-              :disabled="importing"
-              class="min-h-[160px] text-xs font-mono break-all !rounded-xl"
-              spellcheck="false"
-            />
           </div>
         </div>
       </div>
@@ -692,8 +661,6 @@ let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 // 导入状态
 const importText = ref('')
-const importFileName = ref('')
-const manualPasteText = ref('')
 const importing = ref(false)
 const isDragging = ref(false)
 const showManualInput = ref(false)
@@ -721,8 +688,7 @@ const canCompleteOAuth = computed(() => {
 })
 
 const canImport = computed(() => {
-  const text = importText.value || manualPasteText.value
-  return text.trim().length > 0 && !importing.value
+  return importText.value.trim().length > 0 && !importing.value
 })
 
 function stopDevicePolling() {
@@ -753,24 +719,12 @@ function resetForm() {
   totp.stop()
   device.value = createInitialDeviceState()
   importText.value = ''
-  importFileName.value = ''
-  manualPasteText.value = ''
   importing.value = false
   isDragging.value = false
   showManualInput.value = false
   proxyPopoverOpen.value = false
   selectedProxyNodeId.value = ''
   mode.value = 'oauth'
-  if (fileInputRef.value) {
-    fileInputRef.value.value = ''
-  }
-}
-
-function clearImport() {
-  importText.value = ''
-  importFileName.value = ''
-  manualPasteText.value = ''
-  showManualInput.value = false
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
   }
@@ -845,11 +799,11 @@ async function handleCompleteOAuth() {
 // 检测是否为批量导入格式
 function isBatchImport(text: string): boolean {
   const trimmed = text.trim()
-  // JSON 数组
+  // JSON 数组（含单元素数组）
   if (trimmed.startsWith('[')) {
     try {
       const parsed = JSON.parse(trimmed)
-      return Array.isArray(parsed) && parsed.length > 1
+      return Array.isArray(parsed) && parsed.length >= 1
     } catch {
       return false
     }
@@ -897,38 +851,87 @@ function parseImportText(text: string): { refresh_token: string; name?: string }
   return { refresh_token: trimmed }
 }
 
-function readFile(file: File) {
-  if (!file.name.endsWith('.json') && !file.name.endsWith('.txt') && file.type !== 'application/json' && file.type !== 'text/plain') {
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const content = e.target?.result
+      if (typeof content === 'string') resolve(content)
+      else reject(new Error('读取失败'))
+    }
+    reader.onerror = () => reject(new Error('读取失败'))
+    reader.readAsText(file)
+  })
+}
+
+function isValidFileType(file: File): boolean {
+  return file.name.endsWith('.json') || file.name.endsWith('.txt')
+    || file.type === 'application/json' || file.type === 'text/plain'
+}
+
+/** 合并多个文件内容为统一的凭据文本（JSON 数组） */
+function mergeFileContents(contents: string[]): string {
+  const items: unknown[] = []
+  for (const raw of contents) {
+    const trimmed = raw.trim()
+    if (!trimmed) continue
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        items.push(...parsed)
+      } else {
+        items.push(parsed)
+      }
+      continue
+    } catch {
+      // not JSON
+    }
+    // 按行拆分（纯 Token）
+    const lines = trimmed.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'))
+    items.push(...lines.map(l => l.trim()))
+  }
+  if (items.length === 1) {
+    // 单条：保持原始格式
+    return typeof items[0] === 'string' ? items[0] : JSON.stringify(items[0], null, 2)
+  }
+  return JSON.stringify(items, null, 2)
+}
+
+async function readFiles(files: File[]) {
+  const validFiles = files.filter(isValidFileType)
+  if (validFiles.length === 0) {
     showError('仅支持 .json 或 .txt 文件', '格式错误')
     return
   }
-  importFileName.value = file.name
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    const content = e.target?.result
-    if (typeof content === 'string') {
-      importText.value = content
-    }
+  if (validFiles.length < files.length) {
+    showError(`已忽略 ${files.length - validFiles.length} 个不支持的文件`, '提示')
   }
-  reader.readAsText(file)
+  try {
+    const contents = await Promise.all(validFiles.map(readFileAsText))
+    const merged = validFiles.length === 1 ? contents[0] : mergeFileContents(contents)
+    importText.value = merged
+    showManualInput.value = true
+  } catch {
+    showError('文件读取失败', '错误')
+  }
 }
 
 function handleFileSelect(event: Event) {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (file) readFile(file)
+  const files = input.files
+  if (files && files.length > 0) readFiles(Array.from(files))
 }
 
 function handleFileDrop(event: DragEvent) {
   isDragging.value = false
-  const file = event.dataTransfer?.files?.[0]
-  if (file) readFile(file)
+  const files = event.dataTransfer?.files
+  if (files && files.length > 0) readFiles(Array.from(files))
 }
 
 async function handleImport() {
   if (!canImport.value || !props.providerId) return
 
-  const inputText = (importText.value || manualPasteText.value).trim()
+  const inputText = importText.value.trim()
   if (!inputText) {
     showError('请输入凭据数据', '格式错误')
     return
