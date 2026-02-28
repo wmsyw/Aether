@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from src.core.logger import logger
 from src.models.database import ApiKey, Provider, Usage, User, UserModelUsageCount
+from src.services.provider_keys.codex_quota_sync_dispatcher import (
+    dispatch_codex_quota_sync_from_response_headers,
+)
 from src.services.usage._billing_integration import UsageBillingIntegrationMixin
 from src.services.usage._recording_helpers import (
     METADATA_KEEP_KEYS,
@@ -208,6 +211,12 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             usage.billing_status = "settled"
             usage.finalized_at = datetime.now(timezone.utc)
 
+        dispatch_codex_quota_sync_from_response_headers(
+            provider_api_key_id=provider_api_key_id,
+            response_headers=response_headers,
+            db=db,
+        )
+
         db.commit()  # 立即提交事务，释放数据库锁
         return usage
 
@@ -399,6 +408,12 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
         if status not in ("pending", "streaming"):
             usage.billing_status = "settled"
             usage.finalized_at = datetime.now(timezone.utc)
+
+        dispatch_codex_quota_sync_from_response_headers(
+            provider_api_key_id=provider_api_key_id,
+            response_headers=response_headers,
+            db=db,
+        )
 
         # 提交事务
         try:
@@ -648,6 +663,12 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             usage.billing_status = "settled"
             usage.finalized_at = datetime.now(timezone.utc)
 
+        dispatch_codex_quota_sync_from_response_headers(
+            provider_api_key_id=provider_api_key_id,
+            response_headers=response_headers,
+            db=db,
+        )
+
         try:
             db.commit()
         except Exception as e:
@@ -764,6 +785,7 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             int
         )  # (user_id, model) -> count
         provider_costs: dict[str, float] = defaultdict(float)  # provider_id -> cost
+        quota_update_candidates: dict[str, dict[str, Any]] = {}
 
         # 合并所有需要处理的记录（用于预取 user/api_key）
         all_records = records_to_insert + records_to_update
@@ -922,6 +944,15 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                     apikey_stats[key_id]["cost"] += total_cost
                     apikey_stats[key_id]["is_standalone"] = api_key.is_standalone
 
+                provider_api_key_id = record.get("provider_api_key_id")
+                response_headers = record.get("response_headers")
+                if (
+                    isinstance(provider_api_key_id, str)
+                    and provider_api_key_id
+                    and isinstance(response_headers, dict)
+                ):
+                    quota_update_candidates[provider_api_key_id] = response_headers
+
             except Exception as e:
                 skipped_count += 1
                 logger.warning("批量记录中更新失败: {}, request_id={}", e, request_id)
@@ -973,6 +1004,15 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                     apikey_stats[key_id]["requests"] += 1
                     apikey_stats[key_id]["cost"] += total_cost
                     apikey_stats[key_id]["is_standalone"] = api_key.is_standalone
+
+                provider_api_key_id = record.get("provider_api_key_id")
+                response_headers = record.get("response_headers")
+                if (
+                    isinstance(provider_api_key_id, str)
+                    and provider_api_key_id
+                    and isinstance(response_headers, dict)
+                ):
+                    quota_update_candidates[provider_api_key_id] = response_headers
 
             except Exception as e:
                 skipped_count += 1
@@ -1089,6 +1129,14 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                         updated_at=sql_func.now(),
                     )
                 )
+
+        # 配额头实时同步：同一 key 仅取本批次最后一组响应头并执行一次对比更新。
+        for provider_api_key_id, response_headers in quota_update_candidates.items():
+            dispatch_codex_quota_sync_from_response_headers(
+                provider_api_key_id=provider_api_key_id,
+                response_headers=response_headers,
+                db=db,
+            )
 
         # 单次提交所有更改
         try:

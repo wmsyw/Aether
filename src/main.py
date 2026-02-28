@@ -151,6 +151,15 @@ async def lifespan(app: FastAPI) -> Any:
     await init_batch_committer()
     logger.info("[OK] 批量提交器已启动，数据库写入性能优化已启用")
 
+    # 初始化 Codex 配额异步同步器（请求路径仅投递事件）
+    logger.info("初始化 Codex 配额异步同步器...")
+    from src.services.provider_keys.codex_quota_sync_dispatcher import (
+        init_codex_quota_sync_dispatcher,
+    )
+
+    await init_codex_quota_sync_dispatcher()
+    logger.info("[OK] Codex 配额异步同步器已启动")
+
     # 初始化 Usage 队列消费者（可选）
     if config.usage_queue_enabled:
         logger.info("初始化 Usage 队列消费者...")
@@ -287,6 +296,15 @@ async def lifespan(app: FastAPI) -> Any:
 
     # 关闭时执行
     logger.info("正在关闭服务...")
+
+    # 停止 Codex 配额异步同步器（停止前会 flush 待同步事件）
+    logger.info("停止 Codex 配额异步同步器...")
+    from src.services.provider_keys.codex_quota_sync_dispatcher import (
+        shutdown_codex_quota_sync_dispatcher,
+    )
+
+    await shutdown_codex_quota_sync_dispatcher()
+    logger.info("[OK] Codex 配额异步同步器已停止")
 
     # 停止批量提交器（确保所有待提交的数据都被保存）
     logger.info("停止批量提交器...")
