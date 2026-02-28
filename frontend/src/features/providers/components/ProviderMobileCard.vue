@@ -179,7 +179,7 @@
         端点 {{ provider.active_endpoints }}/{{ provider.total_endpoints }}
       </span>
       <span class="text-muted-foreground">
-        密钥 {{ provider.active_keys }}/{{ provider.total_keys }}
+        {{ provider.provider_type && provider.provider_type !== 'custom' ? '账号' : '密钥' }} {{ provider.active_keys }}/{{ provider.total_keys }}
       </span>
       <span class="text-muted-foreground">
         模型 {{ provider.active_models }}/{{ provider.total_models }}
