@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session
 
 from src.core.logger import logger
 from src.models.database import ApiKey, Usage, User
+from src.services.provider_keys.codex_quota_sync_dispatcher import (
+    dispatch_codex_quota_sync_from_response_headers,
+)
 from src.services.system.config import SystemConfigService
 
 
@@ -310,7 +313,14 @@ class UsageLifecycleMixin:
             )
             .values(**values)
         )
-        return result.rowcount == 1
+        finalized = result.rowcount == 1
+        if finalized:
+            dispatch_codex_quota_sync_from_response_headers(
+                provider_api_key_id=provider_api_key_id,
+                response_headers=response_headers,
+                db=db,
+            )
+        return finalized
 
     @classmethod
     def update_settled_billing(

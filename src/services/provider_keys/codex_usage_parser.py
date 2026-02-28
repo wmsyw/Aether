@@ -5,6 +5,7 @@ Codex 配额响应解析器。
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -117,6 +118,84 @@ def _write_window(
         )
 
 
+def _normalize_plan_type(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _is_blank_string(value: Any) -> bool:
+    return isinstance(value, str) and not value.strip()
+
+
+def _coerce_optional_float(value: Any, field: str) -> float | None:
+    if value is None or _is_blank_string(value):
+        return None
+    return _coerce_float(value, field)
+
+
+def _coerce_optional_int(value: Any, field: str) -> int | None:
+    if value is None or _is_blank_string(value):
+        return None
+    return _coerce_int(value, field)
+
+
+def _coerce_optional_bool(value: Any, field: str) -> bool | None:
+    if value is None or _is_blank_string(value):
+        return None
+    return _coerce_bool(value, field)
+
+
+def _normalize_header_map(headers: Mapping[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for raw_key, raw_value in headers.items():
+        key = str(raw_key).strip().lower()
+        if not key:
+            continue
+        normalized[key] = raw_value
+    return normalized
+
+
+def _read_header_window(
+    *,
+    headers: Mapping[str, Any],
+    used_percent_key: str,
+    reset_seconds_key: str,
+    reset_at_key: str,
+    window_minutes_key: str,
+    source_field: str,
+) -> dict[str, Any]:
+    window: dict[str, Any] = {}
+
+    used_percent = _coerce_optional_float(
+        headers.get(used_percent_key),
+        f"{source_field}.used_percent",
+    )
+    if used_percent is not None:
+        window["used_percent"] = used_percent
+
+    reset_seconds = _coerce_optional_int(
+        headers.get(reset_seconds_key),
+        f"{source_field}.reset_after_seconds",
+    )
+    if reset_seconds is not None:
+        window["reset_after_seconds"] = reset_seconds
+
+    reset_at = _coerce_optional_int(headers.get(reset_at_key), f"{source_field}.reset_at")
+    if reset_at is not None:
+        window["reset_at"] = reset_at
+
+    window_minutes = _coerce_optional_int(
+        headers.get(window_minutes_key),
+        f"{source_field}.limit_window_minutes",
+    )
+    if window_minutes is not None:
+        window["limit_window_seconds"] = window_minutes * 60
+
+    return window
+
+
 def parse_codex_wham_usage_response(data: dict[str, Any]) -> dict[str, Any] | None:
     """
     解析 Codex wham/usage API 响应，提取限额信息
@@ -144,7 +223,7 @@ def parse_codex_wham_usage_response(data: dict[str, Any]) -> dict[str, Any] | No
     if raw_plan_type is not None:
         if not isinstance(raw_plan_type, str):
             _raise_type_error("plan_type", "string", raw_plan_type)
-        normalized_plan_type = raw_plan_type.strip().lower()
+        normalized_plan_type = _normalize_plan_type(raw_plan_type)
         if normalized_plan_type:
             plan_type = normalized_plan_type
             result["plan_type"] = normalized_plan_type
@@ -204,6 +283,127 @@ def parse_codex_wham_usage_response(data: dict[str, Any]) -> dict[str, Any] | No
         result["credits_balance"] = _coerce_float(balance, "credits.balance")
 
     # 添加更新时间戳
+    if result:
+        result["updated_at"] = int(time.time())
+
+    return result if result else None
+
+
+def parse_codex_usage_headers(headers: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """
+    解析 Codex 反代响应头中的配额信息，提取账号配额（不依赖 code review 字段）。
+
+    Team/Plus/Enterprise:
+    - x-codex-primary-*   : 5H 限额
+    - x-codex-secondary-* : 周限额
+
+    Free:
+    - x-codex-primary-*   : 周限额
+    """
+    if headers is None:
+        return None
+    if not isinstance(headers, Mapping):
+        _raise_type_error("headers", "object", headers)
+    if not headers:
+        return None
+
+    normalized_headers = _normalize_header_map(headers)
+    if not any(k.startswith("x-codex-") for k in normalized_headers):
+        return None
+
+    result: dict[str, Any] = {}
+
+    plan_type = _normalize_plan_type(normalized_headers.get("x-codex-plan-type"))
+    if plan_type:
+        result["plan_type"] = plan_type
+
+    primary_window = _read_header_window(
+        headers=normalized_headers,
+        used_percent_key="x-codex-primary-used-percent",
+        reset_seconds_key="x-codex-primary-reset-after-seconds",
+        reset_at_key="x-codex-primary-reset-at",
+        window_minutes_key="x-codex-primary-window-minutes",
+        source_field="headers.primary_window",
+    )
+    secondary_window = _read_header_window(
+        headers=normalized_headers,
+        used_percent_key="x-codex-secondary-used-percent",
+        reset_seconds_key="x-codex-secondary-reset-after-seconds",
+        reset_at_key="x-codex-secondary-reset-at",
+        window_minutes_key="x-codex-secondary-window-minutes",
+        source_field="headers.secondary_window",
+    )
+    # 兼容未来可能出现的 code review header（当前反代可缺失）
+    code_review_primary = _read_header_window(
+        headers=normalized_headers,
+        used_percent_key="x-codex-code-review-primary-used-percent",
+        reset_seconds_key="x-codex-code-review-primary-reset-after-seconds",
+        reset_at_key="x-codex-code-review-primary-reset-at",
+        window_minutes_key="x-codex-code-review-primary-window-minutes",
+        source_field="headers.code_review.primary_window",
+    )
+
+    # 与 wham/usage 解析保持一致：
+    # - metadata.primary_* 统一表示周限额
+    # - metadata.secondary_* 统一表示 5H 限额
+    use_paid_windows = bool(secondary_window) and plan_type != "free"
+    if use_paid_windows:
+        _write_window(
+            result,
+            source=secondary_window,
+            source_field="headers.secondary_window",
+            target_prefix="primary",
+        )
+        _write_window(
+            result,
+            source=primary_window,
+            source_field="headers.primary_window",
+            target_prefix="secondary",
+        )
+    else:
+        _write_window(
+            result,
+            source=primary_window,
+            source_field="headers.primary_window",
+            target_prefix="primary",
+        )
+
+    _write_window(
+        result,
+        source=code_review_primary,
+        source_field="headers.code_review.primary_window",
+        target_prefix="code_review",
+    )
+
+    # 当前窗口挤占占比（有值才记录）
+    primary_over_secondary_limit = _coerce_optional_float(
+        normalized_headers.get("x-codex-primary-over-secondary-limit-percent"),
+        "headers.primary_over_secondary_limit_percent",
+    )
+    if primary_over_secondary_limit is not None:
+        result["primary_over_secondary_limit_percent"] = primary_over_secondary_limit
+
+    has_credits = _coerce_optional_bool(
+        normalized_headers.get("x-codex-credits-has-credits"),
+        "headers.credits.has_credits",
+    )
+    if has_credits is not None:
+        result["has_credits"] = has_credits
+
+    credits_balance = _coerce_optional_float(
+        normalized_headers.get("x-codex-credits-balance"),
+        "headers.credits.balance",
+    )
+    if credits_balance is not None:
+        result["credits_balance"] = credits_balance
+
+    credits_unlimited = _coerce_optional_bool(
+        normalized_headers.get("x-codex-credits-unlimited"),
+        "headers.credits.unlimited",
+    )
+    if credits_unlimited is not None:
+        result["credits_unlimited"] = credits_unlimited
+
     if result:
         result["updated_at"] = int(time.time())
 
