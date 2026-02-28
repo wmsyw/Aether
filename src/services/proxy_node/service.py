@@ -339,10 +339,11 @@ class ProxyNodeService:
 
         now = datetime.now(timezone.utc)
         # 心跳通过 tunnel 连接传输，能收到心跳说明 tunnel 一定连通。
-        # 如果状态不是 ONLINE（例如 _update_tunnel_status 执行失败），修正状态。
-        if node.status != ProxyNodeStatus.ONLINE:
+        # 如果状态不是 ONLINE 或 tunnel_connected 不一致（例如并发写入覆盖），修正状态。
+        if node.status != ProxyNodeStatus.ONLINE or not node.tunnel_connected:
             node.status = ProxyNodeStatus.ONLINE
             node.tunnel_connected = True
+            node.tunnel_connected_at = now
             node.updated_at = now
         node.last_heartbeat_at = now
         if heartbeat_interval is not None:
@@ -567,7 +568,23 @@ class ProxyNodeService:
                     "exit_ip": None,
                     "error": "tunnel 未连接",
                 }
-            return await _test_tunnel_connectivity(node.id)
+            result = await _test_tunnel_connectivity(node.id)
+
+            # 连通性测试成功但 DB 状态不一致时，修正为 ONLINE
+            if result.get("success") and (
+                node.status != ProxyNodeStatus.ONLINE or not node.tunnel_connected
+            ):
+                node.status = ProxyNodeStatus.ONLINE
+                node.tunnel_connected = True
+                node.tunnel_connected_at = datetime.now(timezone.utc)
+                node.updated_at = node.tunnel_connected_at
+                db.commit()
+
+                from .resolver import invalidate_proxy_node_cache
+
+                invalidate_proxy_node_cache(node.id)
+
+            return result
 
         # 手动节点：通过代理 URL 测试
         try:

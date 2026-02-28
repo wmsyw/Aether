@@ -80,6 +80,53 @@ class ProxyConfig(BaseModel):
         return self
 
 
+class FailoverRuleItem(BaseModel):
+    """故障转移规则条目"""
+
+    pattern: str = Field(..., min_length=1, max_length=500, description="正则表达式")
+    description: str = Field("", max_length=200, description="规则描述")
+    status_codes: list[int] | None = Field(
+        default=None,
+        description="HTTP 状态码列表（可选，为空时匹配所有状态码）",
+    )
+
+    @field_validator("pattern")
+    @classmethod
+    def validate_pattern(cls, v: str) -> str:
+        """验证正则表达式语法"""
+        import re as _re
+
+        try:
+            _re.compile(v)
+        except _re.error as e:
+            raise ValueError(f"无效的正则表达式: {e}")
+        return v
+
+    @field_validator("status_codes")
+    @classmethod
+    def validate_status_codes(cls, v: list[int] | None) -> list[int] | None:
+        """验证 HTTP 状态码"""
+        if v is None:
+            return v
+        for code in v:
+            if not (100 <= code <= 599):
+                raise ValueError(f"无效的 HTTP 状态码: {code}")
+        return v
+
+
+class FailoverRulesConfig(BaseModel):
+    """故障转移规则配置"""
+
+    success_failover_patterns: list[FailoverRuleItem] = Field(
+        default_factory=list,
+        description="成功响应转移规则: HTTP 200 但响应体匹配正则时触发转移",
+    )
+    error_stop_patterns: list[FailoverRuleItem] = Field(
+        default_factory=list,
+        description="错误终止规则: HTTP 非 200 且响应体匹配正则时停止转移",
+    )
+
+
 class PoolAdvancedConfig(BaseModel):
     """通用号池配置（适用于所有 Provider 类型）。"""
 
@@ -247,6 +294,7 @@ class CreateProviderRequest(BaseModel):
     claude_code_advanced: ClaudeCodeAdvancedConfig | None = Field(
         None, description="Claude Code 特有配置"
     )
+    failover_rules: FailoverRulesConfig | None = Field(None, description="故障转移规则配置")
     config: dict[str, Any] | None = Field(None, description="其他配置")
 
     @field_validator("provider_type")
@@ -356,6 +404,7 @@ class UpdateProviderRequest(BaseModel):
     claude_code_advanced: ClaudeCodeAdvancedConfig | None = Field(
         None, description="Claude Code 特有配置"
     )
+    failover_rules: FailoverRulesConfig | None = Field(None, description="故障转移规则配置")
     config: dict[str, Any] | None = None
 
     # 复用相同的验证器

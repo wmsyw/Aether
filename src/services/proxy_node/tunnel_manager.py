@@ -278,8 +278,15 @@ class TunnelManager:
         return True
 
     def has_tunnel(self, node_id: str) -> bool:
-        conn = self.get_connection(node_id)
-        return conn is not None
+        """检查指定 node 是否有存活的 tunnel 连接（纯检查，无副作用）
+
+        与 get_connection 不同，此方法不会清理 dead 连接，
+        避免在 finally 块或 health_scheduler 中误清理刚注册的连接。
+        """
+        conns = self._connections.get(node_id)
+        if not conns:
+            return False
+        return any(c.is_alive for c in conns)
 
     def connection_count(self, node_id: str) -> int:
         """返回指定 node 当前存活的连接数"""

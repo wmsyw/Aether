@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
-import httpx
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -195,7 +195,32 @@ class FailoverEngine:
                         attempt_result = await self._probe_stream_first_chunk(
                             attempt_result=attempt_result,
                             record_id=record_id,
+                            candidate=candidate,
                         )
+
+                    # Sync: check success_failover_patterns on response body
+                    if attempt_result.kind == AttemptKind.SYNC_RESPONSE:
+                        body = getattr(attempt_result, "response_body", None)
+                        if body:
+                            if isinstance(body, bytes):
+                                body_text = body.decode("utf-8", errors="replace")
+                            elif isinstance(body, (dict, list)):
+                                body_text = json.dumps(body, ensure_ascii=False)
+                            else:
+                                body_text = str(body)
+                            rule_action = self._check_provider_failover_rules(
+                                candidate, is_success=True, response_text=body_text
+                            )
+                            if rule_action == FailoverAction.CONTINUE:
+                                self._record_attempt_failure(
+                                    record_id,
+                                    Exception("success_failover_pattern matched"),
+                                    200,
+                                )
+                                raise StreamProbeError(
+                                    "Success failover pattern matched",
+                                    http_status=200,
+                                )
 
                     self._record_attempt_success(record_id, attempt_result)
 
@@ -598,14 +623,6 @@ class FailoverEngine:
             value = int(retry_policy.max_retries or 1)
         return max(1, value)
 
-    def _should_stop_on_http_error(self, *, status_code: int, error_text: str) -> bool:
-        # follow CandidateService rules
-        if status_code in (401, 403, 429):
-            return False
-        if 400 <= status_code < 500:
-            return self._error_classifier.is_client_error(error_text)
-        return False
-
     async def _handle_error(
         self,
         error: Exception,
@@ -613,29 +630,139 @@ class FailoverEngine:
         candidate: ProviderCandidate,
         has_retry_left: bool,
     ) -> FailoverAction:
-        # Special: HTTP client errors should stop failover.
-        if isinstance(error, httpx.HTTPStatusError):
-            status_code = int(getattr(error.response, "status_code", 0) or 0)
-            try:
-                error_text = error.response.text or ""
-            except Exception:
-                error_text = ""
-            if self._should_stop_on_http_error(status_code=status_code, error_text=error_text):
-                return FailoverAction.STOP
+        # 检查提供商级别的错误终止规则
+        error_text = self._extract_error_text(error)
+        status_code = int(getattr(error, "status_code", 0) or 0) or int(
+            getattr(error, "http_status", 0) or 0
+        )
+        # ExecutionError wrapping: check cause for status_code
+        if not status_code:
+            cause = getattr(error, "cause", None)
+            if cause is not None:
+                status_code = int(getattr(cause, "status_code", 0) or 0) or int(
+                    getattr(cause, "http_status", 0) or 0
+                )
+        if error_text:
+            rule_action = self._check_provider_failover_rules(
+                candidate,
+                is_success=False,
+                response_text=error_text,
+                status_code=status_code or None,
+            )
+            if rule_action is not None:
+                return rule_action
 
-        # Default: reuse legacy ErrorClassifier decision and map to FailoverAction.
+        # 默认全部转移: ErrorClassifier 结果统一映射为 CONTINUE/RETRY，不再 STOP
         action = self._error_classifier.classify(error, has_retry_left=has_retry_left)
-        if action == ErrorAction.RAISE:
-            return FailoverAction.STOP
-        if action == ErrorAction.BREAK:
-            return FailoverAction.CONTINUE
-        return FailoverAction.RETRY
+        if action == ErrorAction.CONTINUE:
+            return FailoverAction.RETRY
+        return FailoverAction.CONTINUE
+
+    def _check_provider_failover_rules(
+        self,
+        candidate: ProviderCandidate,
+        *,
+        is_success: bool,
+        response_text: str,
+        status_code: int | None = None,
+    ) -> FailoverAction | None:
+        """检查提供商级别的故障转移规则。返回 None 表示无规则命中，使用默认行为。"""
+        config = getattr(candidate.provider, "config", None) or {}
+        rules = config.get("failover_rules")
+        if not rules or not isinstance(rules, dict):
+            return None
+
+        compiled = self._get_compiled_patterns(rules)
+
+        if is_success:
+            for regex, rule in compiled.get("success", []):
+                if regex.search(response_text):
+                    logger.info(
+                        "[FailoverEngine] 成功转移规则命中: pattern={}, provider={}",
+                        rule.get("pattern", ""),
+                        candidate.provider.name,
+                    )
+                    return FailoverAction.CONTINUE
+        else:
+            for regex, rule in compiled.get("error", []):
+                # 检查状态码过滤
+                rule_status_codes = rule.get("status_codes")
+                if rule_status_codes and status_code not in rule_status_codes:
+                    continue
+                if regex.search(response_text):
+                    logger.info(
+                        "[FailoverEngine] 错误终止规则命中: pattern={}, status_code={}, provider={}",
+                        rule.get("pattern", ""),
+                        status_code,
+                        candidate.provider.name,
+                    )
+                    return FailoverAction.STOP
+
+        return None
+
+    @staticmethod
+    def _get_compiled_patterns(
+        rules: dict[str, Any],
+    ) -> dict[str, list[tuple[re.Pattern[str], dict[str, Any]]]]:
+        """编译 failover_rules 中的正则模式。
+
+        编译结果缓存在 rules dict 的 _compiled 键上，避免每次请求都重复编译。
+        """
+        cached = rules.get("_compiled")
+        if cached is not None:
+            return cached
+
+        result: dict[str, list[tuple[re.Pattern[str], dict[str, Any]]]] = {
+            "success": [],
+            "error": [],
+        }
+        for rule in rules.get("success_failover_patterns", []):
+            pattern = rule.get("pattern", "")
+            if pattern:
+                try:
+                    result["success"].append((re.compile(pattern), rule))
+                except re.error:
+                    pass
+        for rule in rules.get("error_stop_patterns", []):
+            pattern = rule.get("pattern", "")
+            if pattern:
+                try:
+                    result["error"].append((re.compile(pattern), rule))
+                except re.error:
+                    pass
+        rules["_compiled"] = result
+        return result
+
+    @staticmethod
+    def _extract_error_text(error: Exception) -> str:
+        """从异常中提取错误响应文本。"""
+        # ExecutionError wrapping
+        cause = getattr(error, "cause", None)
+        if cause is not None:
+            error = cause
+
+        # httpx.HTTPStatusError
+        response = getattr(error, "response", None)
+        if response is not None:
+            try:
+                return response.text or ""
+            except Exception:
+                pass
+
+        # upstream_response / upstream_error attribute
+        for attr in ("upstream_response", "upstream_error", "error_message"):
+            val = getattr(error, attr, None)
+            if val:
+                return str(val)
+
+        return str(error)
 
     async def _probe_stream_first_chunk(
         self,
         *,
         attempt_result: AttemptResult,
         record_id: str | None,
+        candidate: ProviderCandidate | None = None,
     ) -> AttemptResult:
         """
         Probe first chunk for a streaming response.
@@ -671,6 +798,22 @@ class FailoverEngine:
                 http_status=attempt_result.http_status,
                 original_exception=exc,
             ) from exc
+
+        # Check success_failover_patterns on first chunk
+        if candidate is not None and first_chunk:
+            chunk_text = (
+                first_chunk.decode("utf-8", errors="replace")
+                if isinstance(first_chunk, bytes)
+                else str(first_chunk)
+            )
+            rule_action = self._check_provider_failover_rules(
+                candidate, is_success=True, response_text=chunk_text
+            )
+            if rule_action == FailoverAction.CONTINUE:
+                raise StreamProbeError(
+                    "Success failover pattern matched in first chunk",
+                    http_status=attempt_result.http_status,
+                )
 
         wrapped = self._wrap_stream_with_finalizer(
             first_chunk=first_chunk,

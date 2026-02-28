@@ -8,10 +8,12 @@ aether-proxy 通过此端点建立 tunnel 连接。
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.core.logger import logger
+from src.services.proxy_node.health_scheduler import heartbeat_is_stale
 from src.services.proxy_node.tunnel_manager import (
     TunnelConnection,
     get_tunnel_manager,
@@ -19,6 +21,18 @@ from src.services.proxy_node.tunnel_manager import (
 from src.services.proxy_node.tunnel_protocol import Frame, MsgType
 
 router = APIRouter()
+
+# Per-node 锁: 防止并发的 connect/disconnect 写入 DB 时出现竞态（后断连覆盖先连接）
+_node_status_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_node_lock(node_id: str) -> asyncio.Lock:
+    lock = _node_status_locks.get(node_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _node_status_locks[node_id] = lock
+    return lock
+
 
 # 单帧最大 64 MB -- AI API 请求体可能包含多张 base64 图片，需要足够余量
 _MAX_FRAME_SIZE = 64 * 1024 * 1024
@@ -111,10 +125,17 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
 
     manager = get_tunnel_manager()
     conn = TunnelConnection(node_id, node_name, ws, max_streams=max_streams)
+    node_lock = _get_node_lock(node_id)
+
     manager.register(conn)
 
-    # 更新 DB: tunnel_connected = True
-    await _update_tunnel_status(node_id, connected=True)
+    # 在 per-node 锁保护下更新 DB，防止并发的 connect/disconnect 写入竞态
+    async with node_lock:
+        await _update_tunnel_status(
+            node_id,
+            connected=True,
+            observed_at=datetime.now(timezone.utc),
+        )
 
     # 启动服务端 ping 任务，防止中间代理因空闲超时关闭连接
     ping_task = asyncio.create_task(_ping_loop(conn))
@@ -156,11 +177,20 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
         logger.error("tunnel WebSocket error for node_id={}: {}", node_id, e)
     finally:
         ping_task.cancel()
-        manager.unregister(conn)
-        if not manager.has_tunnel(node_id):
-            await _update_tunnel_status(node_id, connected=False, detail=disconnect_reason)
-        else:
-            logger.info("tunnel connection closed but pool still active: node_id={}", node_id)
+        # 在 per-node 锁保护下执行 unregister + 连接池计数检查 + DB 更新，
+        # 确保整个序列是原子的，避免"断连写 OFFLINE 覆盖新连接写 ONLINE"的竞态
+        async with node_lock:
+            manager.unregister(conn)
+            if manager.connection_count(node_id) == 0:
+                await _update_tunnel_status(
+                    node_id,
+                    connected=False,
+                    detail=disconnect_reason,
+                    observed_at=datetime.now(timezone.utc),
+                )
+                # 不清理锁: asyncio.Lock 极轻量，清理可能导致并发新连接拿到不同锁实例
+            else:
+                logger.info("tunnel connection closed but pool still active: node_id={}", node_id)
 
 
 async def _ping_loop(conn: TunnelConnection) -> None:
@@ -180,13 +210,15 @@ async def _ping_loop(conn: TunnelConnection) -> None:
 
 
 async def _update_tunnel_status(
-    node_id: str, *, connected: bool, detail: str | None = None
+    node_id: str,
+    *,
+    connected: bool,
+    detail: str | None = None,
+    observed_at: datetime | None = None,
 ) -> None:
     """更新 ProxyNode 的 tunnel 连接状态并记录事件（在线程池中执行）"""
 
     def _sync_update() -> None:
-        from datetime import datetime, timezone
-
         from src.database import create_session
         from src.models.database import ProxyNode, ProxyNodeEvent, ProxyNodeStatus
 
@@ -194,20 +226,47 @@ async def _update_tunnel_status(
         try:
             node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
             if node:
-                node.tunnel_connected = connected
-                now = datetime.now(timezone.utc)
+                event_time = observed_at or datetime.now(timezone.utc)
+                last_transition = node.tunnel_connected_at
+                if last_transition and last_transition.tzinfo is None:
+                    last_transition = last_transition.replace(tzinfo=timezone.utc)
+
+                # 忽略乱序的旧事件，避免快速重连时旧状态覆盖新状态
+                stale_event = bool(last_transition and event_time < last_transition)
+                if stale_event:
+                    detail_text = f"[stale_ignored] {detail}" if detail else "[stale_ignored]"
+                    db.add(
+                        ProxyNodeEvent(
+                            node_id=node_id,
+                            event_type="connected" if connected else "disconnected",
+                            detail=detail_text,
+                        )
+                    )
+                    db.commit()
+                    return
+
+                event_detail = detail
                 if connected:
-                    node.tunnel_connected_at = now
+                    node.tunnel_connected = True
+                    node.tunnel_connected_at = event_time
                     node.status = ProxyNodeStatus.ONLINE
                 else:
-                    node.tunnel_connected_at = now
-                    node.status = ProxyNodeStatus.OFFLINE
+                    # 断连不立即强制 OFFLINE。若心跳仍新鲜，可能仍有其他连接存活
+                    # （连接池或跨 worker），避免误判写回 OFFLINE。
+                    if heartbeat_is_stale(node, event_time):
+                        node.tunnel_connected = False
+                        node.tunnel_connected_at = event_time
+                        node.status = ProxyNodeStatus.OFFLINE
+                    else:
+                        event_detail = (
+                            f"[heartbeat_fresh] {detail}" if detail else "[heartbeat_fresh]"
+                        )
 
                 # 记录连接事件
                 event = ProxyNodeEvent(
                     node_id=node_id,
                     event_type="connected" if connected else "disconnected",
-                    detail=detail,
+                    detail=event_detail,
                 )
                 db.add(event)
                 db.commit()

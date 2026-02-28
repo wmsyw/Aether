@@ -384,6 +384,8 @@ class ErrorClassifier:
         """
         分类错误，返回处理动作
 
+        默认全部转移策略: 不再返回 RAISE，所有错误都允许故障转移
+
         Args:
             error: 异常对象
             has_retry_left: 当前候选是否还有重试次数
@@ -404,11 +406,8 @@ class ErrorClassifier:
         if isinstance(error, self.RETRIABLE_ERRORS):
             return ErrorAction.CONTINUE if has_retry_left else ErrorAction.BREAK
 
-        if isinstance(error, self.NON_RETRIABLE_ERRORS):
-            return ErrorAction.RAISE
-
-        # 未知错误，直接抛出
-        return ErrorAction.RAISE
+        # 所有其他错误: 不再 RAISE，改为 BREAK（跳到下一个候选继续转移）
+        return ErrorAction.BREAK
 
     async def handle_rate_limit(
         self,

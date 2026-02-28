@@ -26,8 +26,14 @@ def _make_candidate(
     skip_reason: str | None = None,
     needs_conversion: bool = False,
     provider_max_retries: int | None = None,
+    provider_config: dict[str, Any] | None = None,
 ) -> SimpleNamespace:
-    provider = SimpleNamespace(id=provider_id, name=provider_name, max_retries=provider_max_retries)
+    provider = SimpleNamespace(
+        id=provider_id,
+        name=provider_name,
+        max_retries=provider_max_retries,
+        config=provider_config,
+    )
     endpoint = SimpleNamespace(id=endpoint_id)
     key = SimpleNamespace(id=key_id, name=key_name, auth_type=auth_type, priority=priority)
     return SimpleNamespace(
@@ -156,7 +162,9 @@ async def test_failover_engine_retry_same_candidate_when_classifier_says_continu
 
 
 @pytest.mark.asyncio
-async def test_failover_engine_stop_when_classifier_raises() -> None:
+async def test_failover_engine_continues_when_classifier_raises() -> None:
+    """After the 'default failover' change, RAISE no longer stops failover.
+    All candidates should be attempted."""
     db = MagicMock()
     engine = FailoverEngine(db, error_classifier=_StubErrorClassifier(action=ErrorAction.RAISE))
 
@@ -172,10 +180,9 @@ async def test_failover_engine_stop_when_classifier_raises() -> None:
     )
 
     assert result.success is False
-    assert result.error_type == "RuntimeError"
-    assert result.attempt_count == 1
-    # should not try candidate 2
-    assert attempt.await_count == 1
+    assert result.error_type == "AllCandidatesFailed"
+    # both candidates should be tried
+    assert attempt.await_count == 2
 
 
 async def _stream_two_chunks() -> AsyncIterator[bytes]:
@@ -308,3 +315,144 @@ async def test_failover_engine_pre_expand_marks_unused_slots_on_success(
         if call.kwargs.get("status") == "unused"
     }
     assert unused_record_ids == {"r01", "r10"}
+
+
+# ========== error_stop_patterns with status_codes ==========
+
+
+class _HttpError(Exception):
+    """Stub exception with status_code and response text."""
+
+    def __init__(self, status_code: int, text: str) -> None:
+        super().__init__(text)
+        self.status_code = status_code
+
+
+@pytest.mark.asyncio
+async def test_error_stop_pattern_with_matching_status_code_stops_failover() -> None:
+    """When status_codes is set and matches, failover should stop."""
+    db = MagicMock()
+    engine = FailoverEngine(db, error_classifier=_StubErrorClassifier(action=ErrorAction.BREAK))
+
+    config = {
+        "failover_rules": {
+            "error_stop_patterns": [
+                {"pattern": "content_policy", "status_codes": [403]},
+            ],
+        },
+    }
+    candidates = [
+        _make_candidate(provider_id="p1", provider_config=config),
+        _make_candidate(provider_id="p2"),
+    ]
+
+    attempt = AsyncMock(
+        side_effect=[
+            _HttpError(403, "content_policy_violation"),
+            AttemptResult(
+                kind=AttemptKind.SYNC_RESPONSE,
+                http_status=200,
+                http_headers={},
+                response_body={"ok": True},
+            ),
+        ]
+    )
+
+    result = await engine.execute(
+        candidates=candidates,
+        attempt_func=attempt,
+        retry_policy=RetryPolicy(mode=RetryMode.DISABLED, max_retries=1),
+        skip_policy=SkipPolicy(),
+        request_id=None,
+    )
+
+    # Should stop at first candidate, not try second
+    assert result.success is False
+    assert attempt.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_error_stop_pattern_with_non_matching_status_code_continues() -> None:
+    """When status_codes is set but doesn't match, the rule is skipped and failover continues."""
+    db = MagicMock()
+    engine = FailoverEngine(db, error_classifier=_StubErrorClassifier(action=ErrorAction.BREAK))
+
+    config = {
+        "failover_rules": {
+            "error_stop_patterns": [
+                {"pattern": "content_policy", "status_codes": [403]},
+            ],
+        },
+    }
+    candidates = [
+        _make_candidate(provider_id="p1", provider_config=config),
+        _make_candidate(provider_id="p2"),
+    ]
+
+    attempt = AsyncMock(
+        side_effect=[
+            _HttpError(500, "content_policy_violation"),
+            AttemptResult(
+                kind=AttemptKind.SYNC_RESPONSE,
+                http_status=200,
+                http_headers={},
+                response_body={"ok": True},
+            ),
+        ]
+    )
+
+    result = await engine.execute(
+        candidates=candidates,
+        attempt_func=attempt,
+        retry_policy=RetryPolicy(mode=RetryMode.DISABLED, max_retries=1),
+        skip_policy=SkipPolicy(),
+        request_id=None,
+    )
+
+    # status_code 500 doesn't match [403], so rule is skipped; failover continues to p2
+    assert result.success is True
+    assert result.provider_id == "p2"
+    assert attempt.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_error_stop_pattern_without_status_codes_matches_any() -> None:
+    """When status_codes is not set, the rule matches any status code (existing behavior)."""
+    db = MagicMock()
+    engine = FailoverEngine(db, error_classifier=_StubErrorClassifier(action=ErrorAction.BREAK))
+
+    config = {
+        "failover_rules": {
+            "error_stop_patterns": [
+                {"pattern": "content_policy"},
+            ],
+        },
+    }
+    candidates = [
+        _make_candidate(provider_id="p1", provider_config=config),
+        _make_candidate(provider_id="p2"),
+    ]
+
+    attempt = AsyncMock(
+        side_effect=[
+            _HttpError(500, "content_policy_violation"),
+            AttemptResult(
+                kind=AttemptKind.SYNC_RESPONSE,
+                http_status=200,
+                http_headers={},
+                response_body={"ok": True},
+            ),
+        ]
+    )
+
+    result = await engine.execute(
+        candidates=candidates,
+        attempt_func=attempt,
+        retry_policy=RetryPolicy(mode=RetryMode.DISABLED, max_retries=1),
+        skip_policy=SkipPolicy(),
+        request_id=None,
+    )
+
+    # No status_codes filter, pattern matches -> stop
+    assert result.success is False
+    assert attempt.await_count == 1

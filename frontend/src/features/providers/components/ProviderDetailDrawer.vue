@@ -50,6 +50,16 @@
                       <Shuffle class="w-4 h-4" />
                     </Button>
                   </span>
+                  <span :title="hasFailoverRules ? '已配置故障转移规则（点击编辑）' : '配置故障转移规则'">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      :class="hasFailoverRules ? 'text-orange-500 dark:text-orange-400' : ''"
+                      @click="failoverRulesDialogOpen = true"
+                    >
+                      <GitBranch class="w-4 h-4" />
+                    </Button>
+                  </span>
                   <Popover
                     :open="providerProxyPopoverOpen"
                     @update:open="handleProviderProxyPopoverToggle"
@@ -1029,6 +1039,14 @@
     :key-id="antigravityQuotaDialogKey.id"
     @update:open="antigravityQuotaDialogOpen = $event"
   />
+
+  <!-- 故障转移规则弹窗 -->
+  <FailoverRulesDialog
+    :open="failoverRulesDialogOpen"
+    :provider="provider ?? null"
+    @update:open="failoverRulesDialogOpen = $event"
+    @saved="loadProvider()"
+  />
 </template>
 
 <script setup lang="ts">
@@ -1050,6 +1068,7 @@ import {
   BarChart3,
   ShieldX,
   Globe,
+  GitBranch,
 } from 'lucide-vue-next'
 import { parseApiError } from '@/utils/errorParser'
 import { useEscapeKey } from '@/composables/useEscapeKey'
@@ -1084,6 +1103,7 @@ import EndpointFormDialog from '@/features/providers/components/EndpointFormDial
 import ProviderModelFormDialog from '@/features/providers/components/ProviderModelFormDialog.vue'
 import AlertDialog from '@/components/common/AlertDialog.vue'
 import AntigravityQuotaDialog from '@/features/providers/components/AntigravityQuotaDialog.vue'
+import FailoverRulesDialog from '@/features/providers/components/FailoverRulesDialog.vue'
 import ProxyNodeSelect from '@/features/providers/components/ProxyNodeSelect.vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import {
@@ -1188,6 +1208,15 @@ const refreshingQuota = ref(false)
 // Antigravity 配额详情弹窗状态
 const antigravityQuotaDialogOpen = ref(false)
 const antigravityQuotaDialogKey = ref<EndpointAPIKey | null>(null)
+
+// 故障转移规则
+const failoverRulesDialogOpen = ref(false)
+const hasFailoverRules = computed(() => {
+  const rules = provider.value?.failover_rules
+  if (!rules) return false
+  return (rules.success_failover_patterns?.length || 0) > 0
+    || (rules.error_stop_patterns?.length || 0) > 0
+})
 
 // Provider 级别代理配置状态
 const proxyNodesStore = useProxyNodesStore()

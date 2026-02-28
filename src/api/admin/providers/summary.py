@@ -18,7 +18,11 @@ from src.core.enums import ProviderBillingType
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
 from src.database import get_db
-from src.models.admin_requests import ClaudeCodeAdvancedConfig, PoolAdvancedConfig
+from src.models.admin_requests import (
+    ClaudeCodeAdvancedConfig,
+    FailoverRulesConfig,
+    PoolAdvancedConfig,
+)
 from src.models.database import (
     Model,
     Provider,
@@ -282,6 +286,38 @@ def _extract_claude_code_advanced_from_config(
         return None
 
 
+def _extract_failover_rules_from_config(
+    provider_config: dict[str, Any] | None,
+    *,
+    provider_id: str,
+) -> FailoverRulesConfig | None:
+    """从 Provider.config 中安全提取故障转移规则配置。"""
+    raw = (provider_config or {}).get("failover_rules")
+    if raw is None:
+        return None
+
+    if isinstance(raw, FailoverRulesConfig):
+        return raw
+
+    if not isinstance(raw, dict):
+        logger.warning(
+            "Provider {} 的 failover_rules 类型无效: {}，已忽略",
+            provider_id,
+            type(raw).__name__,
+        )
+        return None
+
+    try:
+        return FailoverRulesConfig.model_validate(raw)
+    except Exception as exc:
+        logger.warning(
+            "Provider {} 的 failover_rules 配置无效，已忽略: {}",
+            provider_id,
+            str(exc),
+        )
+        return None
+
+
 def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndpointsSummary:
     endpoints = db.query(ProviderEndpoint).filter(ProviderEndpoint.provider_id == provider.id).all()
 
@@ -402,6 +438,10 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         provider_config,
         provider_id=str(provider.id),
     )
+    failover_rules = _extract_failover_rules_from_config(
+        provider_config,
+        provider_id=str(provider.id),
+    )
 
     return ProviderWithEndpointsSummary(
         id=provider.id,
@@ -425,6 +465,7 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         request_timeout=provider.request_timeout,
         claude_code_advanced=claude_code_advanced,
         pool_advanced=pool_advanced,
+        failover_rules=failover_rules,
         total_endpoints=total_endpoints,
         active_endpoints=active_endpoints,
         total_keys=total_keys,

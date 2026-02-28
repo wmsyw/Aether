@@ -211,13 +211,19 @@ class UsageQueueConsumer:
         await self._process_messages(redis_client, messages)
 
     async def _read_new(self, redis_client: Any) -> None:
-        result = await redis_client.xreadgroup(
-            groupname=self._stream_group,
-            consumername=self._consumer,
-            streams={self._stream_key: ">"},
-            count=self._batch_size,
-            block=self._block_ms,
-        )
+        try:
+            result = await redis_client.xreadgroup(
+                groupname=self._stream_group,
+                consumername=self._consumer,
+                streams={self._stream_key: ">"},
+                count=self._batch_size,
+                block=self._block_ms,
+            )
+        except ResponseError as exc:
+            if "NOGROUP" in str(exc):
+                await ensure_usage_stream_group()
+                return
+            raise
         if not result:
             return
         for _stream, messages in result:

@@ -138,7 +138,7 @@
                       v-model="device.start_url"
                       type="text"
                       placeholder="https://your-org.awsapps.com/start"
-                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
+                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
                       spellcheck="false"
                     >
                   </div>
@@ -154,7 +154,7 @@
                         <ComboboxInput
                           :display-value="() => device.region"
                           placeholder="输入或选择 Region"
-                          class="w-full h-8 px-2 pr-7 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                          class="w-full h-8 px-2 pr-7 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
                           spellcheck="false"
                           @input="(e: Event) => regionSearch = (e.target as HTMLInputElement).value"
                           @keydown.enter.prevent="onRegionEnter"
@@ -193,7 +193,7 @@
                       v-model="device.totp_secret"
                       type="text"
                       placeholder="Base32 secret, 如 JBSWY3DPEHPK3PXP"
-                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono"
+                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
                       spellcheck="false"
                     >
                   </div>

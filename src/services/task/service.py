@@ -898,7 +898,7 @@ class TaskService:
                 error_message=str(exec_err),
                 extra_data=_proxy_extra,
             )
-            return "raise"
+            return "break"
 
         provider = candidate.provider
         endpoint = candidate.endpoint
@@ -1034,15 +1034,9 @@ class TaskService:
             embedded_status = cause.error_code or 200
             if error_classifier.is_client_error(error_message):
                 logger.warning(
-                    "  [{}] 嵌入式客户端错误，停止重试: {}",
+                    "  [{}] 嵌入式客户端错误，继续转移: {}",
                     request_id,
                     error_message[:200],
-                )
-                client_error = UpstreamClientException(
-                    message=error_message or "请求无效",
-                    provider_name=str(provider.name),
-                    status_code=embedded_status,
-                    upstream_error=error_message,
                 )
                 RequestCandidateService.mark_candidate_failed(
                     db=self.db,
@@ -1054,14 +1048,7 @@ class TaskService:
                     concurrent_requests=captured_key_concurrent,
                     extra_data=_proxy_extra,
                 )
-                client_error.request_metadata = {
-                    "provider": provider.name,
-                    "provider_id": str(provider.id),
-                    "provider_endpoint_id": str(endpoint.id),
-                    "provider_api_key_id": str(key.id),
-                    "api_format": str(api_format),
-                }
-                raise client_error
+                return "break"
 
             logger.warning(
                 "  [{}] 嵌入式服务端错误，尝试重试: {}",
@@ -1124,7 +1111,7 @@ class TaskService:
 
             if isinstance(converted_error, UpstreamClientException):
                 logger.warning(
-                    "  [{}] 客户端请求错误，停止重试: {}",
+                    "  [{}] 客户端请求错误，继续转移: {}",
                     request_id,
                     str(converted_error.message),
                 )
@@ -1138,14 +1125,7 @@ class TaskService:
                     concurrent_requests=captured_key_concurrent,
                     extra_data=serializable_extra_data,
                 )
-                converted_error.request_metadata = {
-                    "provider": provider.name,
-                    "provider_id": str(provider.id),
-                    "provider_endpoint_id": str(endpoint.id),
-                    "provider_api_key_id": str(key.id),
-                    "api_format": str(api_format),
-                }
-                raise converted_error
+                return "break"
 
             RequestCandidateService.mark_candidate_failed(
                 db=self.db,
@@ -1207,7 +1187,7 @@ class TaskService:
             concurrent_requests=captured_key_concurrent,
             extra_data=_proxy_extra,
         )
-        return "raise"
+        return "break"
 
     async def submit_with_failover(
         self,

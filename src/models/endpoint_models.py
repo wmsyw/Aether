@@ -10,7 +10,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.models.admin_requests import ClaudeCodeAdvancedConfig, PoolAdvancedConfig, ProxyConfig
+from src.models.admin_requests import (
+    ClaudeCodeAdvancedConfig,
+    FailoverRulesConfig,
+    PoolAdvancedConfig,
+    ProxyConfig,
+)
 
 # ========== Header Rule 类型定义 ==========
 # 请求头规则支持三种操作：
@@ -938,6 +943,7 @@ class ProviderUpdateRequest(BaseModel):
         None, description="Claude Code 高级配置"
     )
     pool_advanced: PoolAdvancedConfig | None = Field(None, description="通用号池配置")
+    failover_rules: FailoverRulesConfig | None = Field(None, description="故障转移规则配置")
 
 
 class ProviderWithEndpointsSummary(BaseModel):
@@ -982,6 +988,7 @@ class ProviderWithEndpointsSummary(BaseModel):
         default=None, description="Claude Code 高级配置"
     )
     pool_advanced: PoolAdvancedConfig | None = Field(default=None, description="通用号池配置")
+    failover_rules: FailoverRulesConfig | None = Field(default=None, description="故障转移规则配置")
 
     # Endpoint 统计
     total_endpoints: int = Field(default=0, description="总 Endpoint 数量")

@@ -1,6 +1,7 @@
 import client from '../client'
 import type {
   ClaudeCodeAdvancedConfig,
+  FailoverRulesConfig,
   PoolAdvancedConfig,
   ProviderWithEndpointsSummary,
   ProxyConfig,
@@ -48,6 +49,7 @@ export async function updateProvider(
     is_active: boolean
     claude_code_advanced: ClaudeCodeAdvancedConfig | null
     pool_advanced: PoolAdvancedConfig | null
+    failover_rules: FailoverRulesConfig | null
   }>
 ): Promise<ProviderWithEndpointsSummary> {
   const response = await client.patch(`/api/admin/providers/${providerId}`, data)
@@ -77,6 +79,7 @@ export async function createProvider(
     proxy?: ProxyConfig | null
     claude_code_advanced?: ClaudeCodeAdvancedConfig | null
     pool_advanced?: PoolAdvancedConfig | null
+    failover_rules?: FailoverRulesConfig | null
   }
 ): Promise<{ id: string; name: string; message?: string }> {
   const response = await client.post('/api/admin/providers/', data)

@@ -82,6 +82,32 @@ def _merge_pool_advanced_config(
     return merged_config or None, config_changed
 
 
+def _merge_failover_rules_config(
+    *,
+    provider_config: dict[str, Any] | None,
+    failover_rules: dict[str, Any] | None,
+    failover_rules_in_payload: bool,
+) -> tuple[dict[str, Any] | None, bool]:
+    """合并 failover_rules 到 provider.config。"""
+    merged_config = dict(provider_config or {})
+    config_changed = False
+
+    if not failover_rules_in_payload:
+        return merged_config or None, config_changed
+
+    if failover_rules is None:
+        if "failover_rules" in merged_config:
+            merged_config.pop("failover_rules", None)
+            config_changed = True
+    else:
+        next_value = dict(failover_rules)
+        if merged_config.get("failover_rules") != next_value:
+            merged_config["failover_rules"] = next_value
+            config_changed = True
+
+    return merged_config or None, config_changed
+
+
 def _merge_claude_code_advanced_config(
     *,
     provider_type: str | None,
@@ -394,6 +420,15 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                 ),
                 pool_advanced_in_payload=validated_data.pool_advanced is not None,
             )
+            provider_config, _ = _merge_failover_rules_config(
+                provider_config=provider_config,
+                failover_rules=(
+                    validated_data.failover_rules.model_dump()
+                    if validated_data.failover_rules is not None
+                    else None
+                ),
+                failover_rules_in_payload=validated_data.failover_rules is not None,
+            )
 
             # 创建 Provider 对象
             provider = Provider(
@@ -509,6 +544,7 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
             config_in_payload = "config" in update_data
             claude_advanced_in_payload = "claude_code_advanced" in update_data
             pool_advanced_in_payload = "pool_advanced" in update_data
+            failover_rules_in_payload = "failover_rules" in update_data
             provider_config = (
                 dict(update_data.pop("config") or {})
                 if config_in_payload
@@ -518,6 +554,9 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
                 update_data.pop("claude_code_advanced") if claude_advanced_in_payload else None
             )
             pool_advanced = update_data.pop("pool_advanced") if pool_advanced_in_payload else None
+            failover_rules = (
+                update_data.pop("failover_rules") if failover_rules_in_payload else None
+            )
             target_provider_type = (
                 update_data.get("provider_type")
                 or getattr(provider, "provider_type", None)
@@ -535,6 +574,11 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
                 pool_advanced=pool_advanced,
                 pool_advanced_in_payload=pool_advanced_in_payload,
             )
+            provider_config, config_changed_by_failover = _merge_failover_rules_config(
+                provider_config=provider_config,
+                failover_rules=failover_rules,
+                failover_rules_in_payload=failover_rules_in_payload,
+            )
 
             config_touched = (
                 config_in_payload
@@ -542,6 +586,8 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
                 or config_changed_by_claude
                 or pool_advanced_in_payload
                 or config_changed_by_pool
+                or failover_rules_in_payload
+                or config_changed_by_failover
             )
             if config_touched:
                 update_data["config"] = provider_config

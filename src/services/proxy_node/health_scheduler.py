@@ -1,10 +1,9 @@
 """
 ProxyNode 心跳检测调度器
 
-定期检查 proxy_nodes 的 tunnel 连接状态，更新节点状态：
-- tunnel 实际连接中  -> ONLINE
-- tunnel 未连接      -> OFFLINE
-以 TunnelManager 内存中的实际连接状态为准。
+定期检查 proxy_nodes 的连接健康状态，更新节点状态：
+- 本地 TunnelManager 观测到连接 -> ONLINE（自愈）
+- 心跳超时（跨 worker 共享信号） -> OFFLINE
 """
 
 from __future__ import annotations
@@ -21,6 +20,28 @@ from src.services.system.scheduler import get_scheduler
 _EVENT_RETENTION_DAYS = 30
 # 每隔多少次心跳检测执行一次事件清理（15s * 240 = 1h）
 _EVENT_CLEANUP_INTERVAL = 240
+# 心跳超时判定：max(90s, heartbeat_interval * 3)
+HEARTBEAT_STALE_MIN_SECONDS = 90
+HEARTBEAT_STALE_MULTIPLIER = 3
+
+
+def heartbeat_is_stale(node: object, now: datetime) -> bool:
+    """根据 last_heartbeat_at 判定节点心跳是否超时。
+
+    接受任意具有 last_heartbeat_at / heartbeat_interval 属性的对象，
+    兼容 ProxyNode ORM 实例和在 asyncio.to_thread 中使用的场景。
+    """
+    last_heartbeat = getattr(node, "last_heartbeat_at", None)
+    if not last_heartbeat:
+        return True
+
+    # 兼容 DB 中可能出现的 naive datetime
+    if last_heartbeat.tzinfo is None:
+        last_heartbeat = last_heartbeat.replace(tzinfo=timezone.utc)
+
+    interval = max(int(getattr(node, "heartbeat_interval", None) or 30), 5)
+    stale_seconds = max(HEARTBEAT_STALE_MIN_SECONDS, interval * HEARTBEAT_STALE_MULTIPLIER)
+    return (now - last_heartbeat).total_seconds() > stale_seconds
 
 
 class ProxyNodeHealthScheduler:
@@ -83,27 +104,32 @@ class ProxyNodeHealthScheduler:
 
             changed = 0
             for node in nodes:
-                # 以 TunnelManager 内存中的实际连接状态为准，
-                # 而非仅依赖 DB 的 tunnel_connected 字段。
-                # 服务端重启后 DB 可能残留 tunnel_connected=True，
-                # 但 TunnelManager 内存中已无连接。
-                actually_connected = manager.has_tunnel(node.id)
+                # 注意：TunnelManager 仅是当前 worker 的进程内状态，跨 worker 不共享。
+                # 因此“本地无 tunnel”不能直接判定 OFFLINE（可能连接在其他 worker）。
+                # OFFLINE 统一由心跳超时判定，避免多进程误判。
+                actually_connected_local = manager.has_tunnel(node.id)
 
-                # 同步修正 DB 中不一致的 tunnel_connected 字段
-                if node.tunnel_connected != actually_connected:
-                    node.tunnel_connected = actually_connected
-                    if not actually_connected:
+                if actually_connected_local:
+                    if not node.tunnel_connected:
+                        node.tunnel_connected = True
                         node.tunnel_connected_at = now
-                    changed += 1
+                        changed += 1
+                    if node.status != ProxyNodeStatus.ONLINE:
+                        node.status = ProxyNodeStatus.ONLINE
+                        node.updated_at = now
+                        changed += 1
+                    continue
 
-                new_status = (
-                    ProxyNodeStatus.ONLINE if actually_connected else ProxyNodeStatus.OFFLINE
-                )
-
-                if node.status != new_status:
-                    node.status = new_status
-                    node.updated_at = now
-                    changed += 1
+                # 本地无 tunnel：仅在心跳超时时标记 OFFLINE
+                if heartbeat_is_stale(node, now):
+                    if node.tunnel_connected:
+                        node.tunnel_connected = False
+                        node.tunnel_connected_at = now
+                        changed += 1
+                    if node.status != ProxyNodeStatus.OFFLINE:
+                        node.status = ProxyNodeStatus.OFFLINE
+                        node.updated_at = now
+                        changed += 1
 
             if changed:
                 db.commit()

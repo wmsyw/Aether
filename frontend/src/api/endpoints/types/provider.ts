@@ -471,6 +471,17 @@ export interface PoolAdvancedConfig {
   unschedulable_rules?: Array<Record<string, unknown>> | null
 }
 
+export interface FailoverRuleItem {
+  pattern: string
+  description?: string
+  status_codes?: number[]
+}
+
+export interface FailoverRulesConfig {
+  success_failover_patterns: FailoverRuleItem[]
+  error_stop_patterns: FailoverRuleItem[]
+}
+
 export interface ProviderWithEndpointsSummary {
   id: string
   name: string
@@ -506,6 +517,7 @@ export interface ProviderWithEndpointsSummary {
   endpoint_health_details: EndpointHealthDetail[]
   claude_code_advanced?: ClaudeCodeAdvancedConfig | null
   pool_advanced?: PoolAdvancedConfig | null
+  failover_rules?: FailoverRulesConfig | null
   ops_configured: boolean  // 是否配置了扩展操作（余额监控等）
   ops_architecture_id?: string  // 扩展操作使用的架构 ID（如 cubence, anyrouter）
   created_at: string
