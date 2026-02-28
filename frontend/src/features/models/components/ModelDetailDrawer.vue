@@ -182,7 +182,7 @@
                     v-if="getFirst1hCachePrice(model.default_tiered_pricing) !== '-'"
                     class="flex items-center gap-3 p-3 rounded-lg border bg-muted/20"
                   >
-                    <Label class="text-xs text-muted-foreground whitespace-nowrap">1h 缓存创建</Label>
+                    <Label class="text-xs text-muted-foreground whitespace-nowrap">1h 缓存</Label>
                     <span class="text-sm font-mono">{{ getFirst1hCachePrice(model.default_tiered_pricing) }}</span>
                   </div>
                   <!-- 按次计费 -->

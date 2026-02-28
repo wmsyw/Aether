@@ -58,6 +58,9 @@ def node_to_dict(node: ProxyNode) -> dict[str, Any]:
         "active_connections": node.active_connections,
         "total_requests": node.total_requests,
         "avg_latency_ms": node.avg_latency_ms,
+        "failed_requests": node.failed_requests,
+        "dns_failures": node.dns_failures,
+        "stream_errors": node.stream_errors,
         "hardware_info": node.hardware_info,
         "estimated_max_concurrency": node.estimated_max_concurrency,
         "remote_config": node.remote_config,
@@ -283,7 +286,7 @@ class ProxyNodeService:
                 port=port,
                 region=region,
                 # 新节点：等 tunnel 连接后才上线
-                status=ProxyNodeStatus.UNHEALTHY,
+                status=ProxyNodeStatus.OFFLINE,
                 registered_by=registered_by,
                 last_heartbeat_at=now,
                 heartbeat_interval=heartbeat_interval,
@@ -311,8 +314,16 @@ class ProxyNodeService:
         active_connections: int | None = None,
         total_requests: int | None = None,
         avg_latency_ms: float | None = None,
+        failed_requests: int | None = None,
+        dns_failures: int | None = None,
+        stream_errors: int | None = None,
     ) -> ProxyNode:
-        """处理节点心跳（仅 tunnel 模式节点，更新指标并修正状态不一致）"""
+        """处理节点心跳（仅 tunnel 模式节点，更新指标并修正状态不一致）
+
+        注意: total_requests / failed_requests / dns_failures / stream_errors
+        来自 Rust 端的区间增量（swap(0) 后上报），需要累加到 DB 而非覆盖。
+        active_connections 和 avg_latency_ms 是实时快照，直接覆盖。
+        """
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
         if not node:
             raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
@@ -332,12 +343,22 @@ class ProxyNodeService:
         node.last_heartbeat_at = now
         if heartbeat_interval is not None:
             node.heartbeat_interval = heartbeat_interval
+
+        # 实时快照指标 -- 直接覆盖
         if active_connections is not None:
             node.active_connections = active_connections
-        if total_requests is not None:
-            node.total_requests = total_requests
         if avg_latency_ms is not None:
             node.avg_latency_ms = avg_latency_ms
+
+        # 区间增量指标 -- 累加到累计值
+        if total_requests is not None and total_requests > 0:
+            node.total_requests = (node.total_requests or 0) + total_requests
+        if failed_requests is not None and failed_requests > 0:
+            node.failed_requests = (node.failed_requests or 0) + failed_requests
+        if dns_failures is not None and dns_failures > 0:
+            node.dns_failures = (node.dns_failures or 0) + dns_failures
+        if stream_errors is not None and stream_errors > 0:
+            node.stream_errors = (node.stream_errors or 0) + stream_errors
 
         db.commit()
         db.refresh(node)
@@ -530,7 +551,12 @@ class ProxyNodeService:
 
         # tunnel 节点：通过 WebSocket tunnel 测试
         if not node.is_manual:
-            if not node.tunnel_connected:
+            # 以 TunnelManager 内存中的实际连接状态为准（与 health_scheduler 一致），
+            # 而非仅依赖 DB 的 tunnel_connected 字段，避免竞态导致误判。
+            from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+
+            manager = get_tunnel_manager()
+            if not manager.has_tunnel(node.id):
                 return {
                     "success": False,
                     "latency_ms": None,

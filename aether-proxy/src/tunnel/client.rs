@@ -1,6 +1,5 @@
 //! WebSocket tunnel client: connect, authenticate, and run the tunnel.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -226,20 +225,6 @@ pub fn build_tls_config() -> rustls::ClientConfig {
         .with_no_client_auth()
 }
 
-/// Calculate next reconnect delay with exponential backoff + jitter.
-pub fn next_reconnect_delay(state: &Arc<AppState>, reconnect_attempts: &AtomicU32) -> Duration {
-    let attempt = reconnect_attempts.fetch_add(1, Ordering::Relaxed);
-    let base_ms = state.config.tunnel_reconnect_base_ms;
-    let max_ms = state.config.tunnel_reconnect_max_ms;
-
-    let delay_ms = base_ms.saturating_mul(1u64 << attempt.min(10)).min(max_ms);
-
-    let jitter = (delay_ms / 4).max(1);
-    let jitter_ms = rand_u64() % jitter;
-
-    Duration::from_millis(delay_ms + jitter_ms)
-}
-
 fn build_tunnel_url(server: &ServerContext) -> String {
     let base = server.aether_url.trim_end_matches('/');
     let ws_base = if base.starts_with("https://") {
@@ -250,21 +235,4 @@ fn build_tunnel_url(server: &ServerContext) -> String {
         format!("wss://{}", base)
     };
     format!("{}/api/internal/proxy-tunnel", ws_base)
-}
-
-/// Simple pseudo-random u64 (no external crate needed).
-fn rand_u64() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let cnt = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut x = seed ^ cnt;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    x
 }

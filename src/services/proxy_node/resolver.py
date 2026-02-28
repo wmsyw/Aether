@@ -60,17 +60,39 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
     db = create_session()
     try:
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
-        if not node or node.status != ProxyNodeStatus.ONLINE:
+        if not node:
             _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS)
             return None
 
-        # tunnel 模式节点必须 tunnel 已连接才可用
-        if node.tunnel_mode and not node.tunnel_connected:
+        # tunnel 模式节点：以 TunnelManager 内存中的实际连接状态为准，
+        # 而非依赖 DB 的 status/tunnel_connected 字段（可能因竞态不同步）。
+        if node.tunnel_mode and not node.is_manual:
+            from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+
+            manager = get_tunnel_manager()
+            if not manager.has_tunnel(node_id):
+                _proxy_node_cache[node_id] = (
+                    None,
+                    now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS,
+                )
+                return None
+            value: dict[str, Any] = {
+                "name": node.name,
+                "ip": node.ip,
+                "port": node.port,
+                "tunnel_mode": True,
+                "tunnel_connected": True,
+            }
+            _proxy_node_cache[node_id] = (value, now + _PROXY_NODE_CACHE_TTL_SECONDS)
+            return value
+
+        # 手动节点 / 非 tunnel 节点：仍依赖 DB status
+        if node.status != ProxyNodeStatus.ONLINE:
             _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS)
             return None
 
         if node.is_manual:
-            value: dict[str, Any] = {
+            value = {
                 "is_manual": True,
                 "name": node.name,
                 "proxy_url": node.proxy_url,

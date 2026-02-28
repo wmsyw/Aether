@@ -245,18 +245,8 @@ const tieredPricingEditorRef = ref<InstanceType<typeof TieredPricingEditor> | nu
 
 const isEditing = computed(() => !!props.editingModel)
 
-// 计算是否显示 1h 缓存输入框
-const showCache1h = computed(() => {
-  if (isEditing.value) {
-    // 编辑模式：检查当前配置是否有 1h 缓存配置（从 tiered_pricing 或 effective_tiered_pricing 中检测）
-    const pricing = props.editingModel?.tiered_pricing || props.editingModel?.effective_tiered_pricing
-    return pricing?.tiers?.some(t => t.cache_ttl_pricing?.some(c => c.ttl_minutes === 60)) ?? false
-  } else {
-    // 添加模式：从选中的全局模型中读取 supported_capabilities
-    const selectedModel = availableGlobalModels.value.find(m => m.id === form.value.global_model_id)
-    return selectedModel?.supported_capabilities?.includes('cache_1h') ?? false
-  }
-})
+// 1h 缓存定价始终显示
+const showCache1h = true
 
 // 表单状态
 const submitting = ref(false)

@@ -202,19 +202,21 @@ pub struct Config {
     #[arg(long, env = "AETHER_PROXY_LOG_JSON", default_value_t = false)]
     pub log_json: bool,
 
-    /// WebSocket reconnect base delay in milliseconds
+    /// Deprecated: reconnect now uses a fixed 1s delay. Kept for config compatibility.
     #[arg(
         long,
         env = "AETHER_PROXY_TUNNEL_RECONNECT_BASE_MS",
-        default_value_t = 500
+        default_value_t = 500,
+        hide = true
     )]
     pub tunnel_reconnect_base_ms: u64,
 
-    /// WebSocket reconnect max delay in milliseconds
+    /// Deprecated: reconnect now uses a fixed 1s delay. Kept for config compatibility.
     #[arg(
         long,
         env = "AETHER_PROXY_TUNNEL_RECONNECT_MAX_MS",
-        default_value_t = 30000
+        default_value_t = 30000,
+        hide = true
     )]
     pub tunnel_reconnect_max_ms: u64,
 
@@ -287,13 +289,6 @@ impl Config {
         }
         if self.aether_retry_max_attempts == 0 {
             anyhow::bail!("aether_retry_max_attempts must be >= 1");
-        }
-        if self.tunnel_reconnect_base_ms > self.tunnel_reconnect_max_ms {
-            anyhow::bail!(
-                "tunnel_reconnect_base_ms ({}) must be <= tunnel_reconnect_max_ms ({})",
-                self.tunnel_reconnect_base_ms,
-                self.tunnel_reconnect_max_ms
-            );
         }
         if self.upstream_connect_timeout_secs == 0 {
             anyhow::bail!("upstream_connect_timeout_secs must be > 0");

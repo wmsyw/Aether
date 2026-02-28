@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -179,6 +179,21 @@ async def delete_global_model(
     adapter = AdminDeleteGlobalModelAdapter(global_model_id=global_model_id)
     await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return Response(status_code=204)
+
+
+@router.post("/batch-delete")
+async def batch_delete_global_models(
+    request: Request,
+    ids: list[str] = Body(..., embed=True, max_length=100),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    批量删除 GlobalModel
+
+    顺序删除多个 GlobalModel（每个独立提交），避免并行删除导致的锁竞争。
+    """
+    adapter = AdminBatchDeleteGlobalModelsAdapter(ids=ids)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post(
@@ -515,6 +530,50 @@ class AdminDeleteGlobalModelAdapter(AdminApiAdapter):
             await cache_service.on_global_model_changed(model_name, model_id)
 
         return None
+
+
+@dataclass
+class AdminBatchDeleteGlobalModelsAdapter(AdminApiAdapter):
+    """批量删除多个 GlobalModel（顺序执行，每个删除独立提交）"""
+
+    ids: list[str]
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        from src.core.exceptions import NotFoundException
+        from src.models.database import GlobalModel
+
+        success_count = 0
+        failed: list[dict] = []
+        deleted_names: list[tuple[str, str]] = []  # (name, id)
+
+        for gm_id in self.ids:
+            try:
+                gm = context.db.query(GlobalModel).filter(GlobalModel.id == gm_id).first()
+                if gm:
+                    name = gm.name
+                    mid = gm.id
+                    GlobalModelService.delete_global_model(context.db, gm_id)
+                    deleted_names.append((name, mid))
+                    success_count += 1
+                else:
+                    failed.append({"id": gm_id, "error": "not found"})
+            except NotFoundException:
+                failed.append({"id": gm_id, "error": "not found"})
+            except Exception as e:
+                context.db.rollback()
+                failed.append({"id": gm_id, "error": str(e)})
+
+        # 批量失效缓存
+        if deleted_names:
+            from src.services.cache.invalidation import get_cache_invalidation_service
+
+            cache_service = get_cache_invalidation_service()
+            for name, mid in deleted_names:
+                await cache_service.on_global_model_changed(name, mid)
+
+        logger.info("批量删除 GlobalModel: success={}, failed={}", success_count, len(failed))
+
+        return {"success_count": success_count, "failed": failed}
 
 
 @dataclass

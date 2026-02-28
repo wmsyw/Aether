@@ -48,9 +48,6 @@
                 <SelectItem value="online">
                   在线
                 </SelectItem>
-                <SelectItem value="unhealthy">
-                  异常
-                </SelectItem>
                 <SelectItem value="offline">
                   离线
                 </SelectItem>
@@ -85,9 +82,6 @@
                 </SelectItem>
                 <SelectItem value="online">
                   在线
-                </SelectItem>
-                <SelectItem value="unhealthy">
-                  异常
                 </SelectItem>
                 <SelectItem value="offline">
                   离线
@@ -236,6 +230,16 @@
                     @click="handleConfig(node)"
                   >
                     <Settings class="h-4 w-4" />
+                  </Button>
+                  <Button
+                    v-if="!node.is_manual"
+                    variant="ghost"
+                    size="icon"
+                    class="h-8 w-8"
+                    title="连接事件"
+                    @click="handleViewEvents(node)"
+                  >
+                    <History class="h-4 w-4" />
                   </Button>
                   <Button
                     variant="ghost"
@@ -548,6 +552,77 @@
         </Button>
       </template>
     </Dialog>
+
+    <!-- 连接事件对话框 -->
+    <Dialog
+      :open="showEventsDialog"
+      title="连接事件"
+      :description="eventsNode ? `${eventsNode.name} 的连接历史` : ''"
+      size="lg"
+      @update:open="(v: boolean) => { if (!v) { showEventsDialog = false; eventsNode = null; nodeEvents = [] } }"
+    >
+      <div class="space-y-3">
+        <!-- 可靠性指标摘要 -->
+        <div
+          v-if="eventsNode"
+          class="grid grid-cols-3 gap-3 text-sm"
+        >
+          <div class="bg-muted/40 rounded-lg px-3 py-2 text-center">
+            <span class="block text-foreground/60 text-xs">失败请求</span>
+            <span class="tabular-nums font-medium">{{ formatNumber(eventsNode.failed_requests || 0) }}</span>
+          </div>
+          <div class="bg-muted/40 rounded-lg px-3 py-2 text-center">
+            <span class="block text-foreground/60 text-xs">DNS 失败</span>
+            <span class="tabular-nums font-medium">{{ formatNumber(eventsNode.dns_failures || 0) }}</span>
+          </div>
+          <div class="bg-muted/40 rounded-lg px-3 py-2 text-center">
+            <span class="block text-foreground/60 text-xs">流错误</span>
+            <span class="tabular-nums font-medium">{{ formatNumber(eventsNode.stream_errors || 0) }}</span>
+          </div>
+        </div>
+
+        <!-- 事件列表 -->
+        <div
+          v-if="loadingEvents"
+          class="py-8 text-center text-muted-foreground text-sm"
+        >
+          加载中...
+        </div>
+        <div
+          v-else-if="nodeEvents.length === 0"
+          class="py-8 text-center text-muted-foreground text-sm"
+        >
+          暂无连接事件记录
+        </div>
+        <div
+          v-else
+          class="max-h-80 overflow-y-auto space-y-1.5"
+        >
+          <div
+            v-for="event in nodeEvents"
+            :key="event.id"
+            class="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 text-sm"
+          >
+            <Badge
+              :variant="eventTypeVariant(event.event_type)"
+              class="text-[10px] px-1.5 py-0 shrink-0"
+            >
+              {{ eventTypeLabel(event.event_type) }}
+            </Badge>
+            <span class="text-muted-foreground truncate flex-1">{{ event.detail || '-' }}</span>
+            <span class="text-xs text-muted-foreground/70 tabular-nums shrink-0">{{ formatTime(event.created_at) }}</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button
+          variant="outline"
+          @click="showEventsDialog = false; eventsNode = null; nodeEvents = []"
+        >
+          关闭
+        </Button>
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -556,7 +631,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
-import { proxyNodesApi, type ProxyNode, type ProxyNodeRemoteConfig } from '@/api/proxy-nodes'
+import { proxyNodesApi, type ProxyNode, type ProxyNodeRemoteConfig, type ProxyNodeEvent } from '@/api/proxy-nodes'
 
 import {
   Card,
@@ -580,7 +655,7 @@ import {
   Dialog,
 } from '@/components/ui'
 
-import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings } from 'lucide-vue-next'
+import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, History } from 'lucide-vue-next'
 import { parseApiError } from '@/utils/errorParser'
 import { formatRegion } from '@/utils/region'
 import HardwareTooltip from './components/HardwareTooltip.vue'
@@ -615,6 +690,12 @@ const configForm = ref({
   log_level: 'info',
   heartbeat_interval: '30',
 })
+
+// 连接事件对话框
+const showEventsDialog = ref(false)
+const eventsNode = ref<ProxyNode | null>(null)
+const nodeEvents = ref<ProxyNodeEvent[]>([])
+const loadingEvents = ref(false)
 
 // 测试连通性
 const testingNodes = ref(new Set<string>())
@@ -834,10 +915,41 @@ async function handleTest(node: ProxyNode) {
   }
 }
 
+async function handleViewEvents(node: ProxyNode) {
+  eventsNode.value = node
+  showEventsDialog.value = true
+  loadingEvents.value = true
+  try {
+    const res = await proxyNodesApi.listNodeEvents(node.id, 50)
+    nodeEvents.value = res.items
+  } catch (err: unknown) {
+    toastError(parseApiError(err, '加载事件失败'))
+  } finally {
+    loadingEvents.value = false
+  }
+}
+
+function eventTypeLabel(type: string) {
+  switch (type) {
+    case 'connected': return '连接'
+    case 'disconnected': return '断开'
+    case 'error': return '错误'
+    default: return type
+  }
+}
+
+function eventTypeVariant(type: string) {
+  switch (type) {
+    case 'connected': return 'success' as const
+    case 'disconnected': return 'destructive' as const
+    case 'error': return 'destructive' as const
+    default: return 'secondary' as const
+  }
+}
+
 function statusVariant(status: string) {
   switch (status) {
     case 'online': return 'success' as const
-    case 'unhealthy': return 'secondary' as const
     case 'offline': return 'destructive' as const
     default: return 'secondary' as const
   }
@@ -846,7 +958,6 @@ function statusVariant(status: string) {
 function statusLabel(status: string) {
   switch (status) {
     case 'online': return '在线'
-    case 'unhealthy': return '异常'
     case 'offline': return '离线'
     default: return status
   }

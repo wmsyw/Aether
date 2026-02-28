@@ -69,6 +69,16 @@ export async function deleteGlobalModel(
 }
 
 /**
+ * 批量删除 GlobalModel
+ */
+export async function batchDeleteGlobalModels(
+  ids: string[]
+): Promise<{ success_count: number; failed: Array<{ id: string; error: string }> }> {
+  const response = await client.post('/api/admin/models/global/batch-delete', { ids })
+  return response.data
+}
+
+/**
  * 批量为 GlobalModel 添加关联提供商
  */
 export async function batchAssignToProviders(

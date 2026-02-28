@@ -224,15 +224,32 @@ _VALID_CACHE_TTL_TARGETS = {"ephemeral", "1h"}
 
 
 def _override_cache_control_in_blocks(blocks: list[Any], target: str) -> int:
-    """Override cache_control in a list of content blocks. Returns count of overrides."""
+    """Override cache_control TTL in a list of content blocks. Returns count of overrides.
+
+    According to Anthropic API docs, cache_control format is:
+        {"type": "ephemeral", "ttl": "5m" | "1h"}
+    ``type`` is always "ephemeral"; the ``ttl`` field controls the actual duration.
+    When ttl is absent, the default is 5m (ephemeral).
+    """
     count = 0
     for block in blocks:
         if not isinstance(block, dict):
             continue
         cc = block.get("cache_control")
-        if isinstance(cc, dict):
-            if cc.get("type") != target:
-                cc["type"] = target
+        if not isinstance(cc, dict):
+            continue
+        # Ensure type is always "ephemeral"
+        if cc.get("type") != "ephemeral":
+            cc["type"] = "ephemeral"
+        if target == "ephemeral":
+            # Target is 5m (default) -- remove explicit ttl so it falls back to default
+            if "ttl" in cc:
+                del cc["ttl"]
+                count += 1
+        else:
+            # Target is "1h" -- set ttl explicitly
+            if cc.get("ttl") != target:
+                cc["ttl"] = target
                 count += 1
     return count
 

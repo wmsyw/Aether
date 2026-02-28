@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 def _reset_tunnel_connected_on_startup() -> None:
-    """服务端启动时将所有 tunnel_connected=True 的节点重置为 False/UNHEALTHY。
+    """服务端启动时将所有 tunnel_connected=True 的节点重置为 False/OFFLINE。
 
     服务端重启后 TunnelManager 内存状态丢失，但 DB 中可能残留
     tunnel_connected=True 的记录。如果不重置，health_scheduler 会错误地
@@ -48,7 +48,7 @@ def _reset_tunnel_connected_on_startup() -> None:
             for node in stale_nodes:
                 node.tunnel_connected = False
                 node.tunnel_connected_at = now
-                node.status = ProxyNodeStatus.UNHEALTHY
+                node.status = ProxyNodeStatus.OFFLINE
                 node.updated_at = now
             db.commit()
             logger.info(

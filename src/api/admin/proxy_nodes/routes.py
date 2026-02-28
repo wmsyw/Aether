@@ -221,6 +221,17 @@ async def update_proxy_node_config(
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.get("/{node_id}/events")
+async def list_proxy_node_events(
+    node_id: str,
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> Any:
+    adapter = AdminListProxyNodeEventsAdapter(node_id=node_id, limit=limit)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 # ---------------------------------------------------------------------------
 # 辅助函数
 # ---------------------------------------------------------------------------
@@ -517,3 +528,34 @@ class AdminTestProxyUrlAdapter(AdminApiAdapter):
             username=req.username,
             password=req.password,
         )
+
+
+@dataclass
+class AdminListProxyNodeEventsAdapter(AdminApiAdapter):
+    """查询代理节点连接事件（连接/断开/错误历史）"""
+
+    name: str = "admin_list_proxy_node_events"
+    node_id: str = ""
+    limit: int = 50
+
+    async def handle(self, context: ApiRequestContext) -> Any:
+        from src.models.database import ProxyNodeEvent
+
+        events = (
+            context.db.query(ProxyNodeEvent)
+            .filter(ProxyNodeEvent.node_id == self.node_id)
+            .order_by(ProxyNodeEvent.created_at.desc())
+            .limit(self.limit)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": e.id,
+                    "event_type": e.event_type,
+                    "detail": e.detail,
+                    "created_at": e.created_at,
+                }
+                for e in events
+            ],
+        }

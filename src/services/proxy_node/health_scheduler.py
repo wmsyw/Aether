@@ -2,9 +2,9 @@
 ProxyNode 心跳检测调度器
 
 定期检查 proxy_nodes 的 tunnel 连接状态，更新节点状态：
-- tunnel 实际连接中      -> ONLINE（包括从 OFFLINE 恢复的情况）
-- tunnel 刚断开 (<60s)   -> UNHEALTHY（缓冲期，避免正在进行的请求被立即切走）
-- tunnel 断开超过 60s    -> OFFLINE
+- tunnel 实际连接中  -> ONLINE
+- tunnel 未连接      -> OFFLINE
+以 TunnelManager 内存中的实际连接状态为准。
 """
 
 from __future__ import annotations
@@ -17,12 +17,18 @@ from src.database import create_session
 from src.models.database import ProxyNode, ProxyNodeStatus
 from src.services.system.scheduler import get_scheduler
 
+# 事件保留天数
+_EVENT_RETENTION_DAYS = 30
+# 每隔多少次心跳检测执行一次事件清理（15s * 240 = 1h）
+_EVENT_CLEANUP_INTERVAL = 240
+
 
 class ProxyNodeHealthScheduler:
     """代理节点心跳检测调度器"""
 
     def __init__(self) -> None:
         self.running = False
+        self._check_count = 0
 
     async def start(self) -> Any:
         if self.running:
@@ -51,6 +57,9 @@ class ProxyNodeHealthScheduler:
 
     async def _scheduled_check(self) -> None:
         await self._check_heartbeats()
+        self._check_count = (self._check_count + 1) % _EVENT_CLEANUP_INTERVAL
+        if self._check_count == 0:
+            await self._cleanup_old_events()
 
     async def _check_heartbeats(self) -> None:
         from src.services.proxy_node.tunnel_manager import get_tunnel_manager
@@ -87,16 +96,9 @@ class ProxyNodeHealthScheduler:
                         node.tunnel_connected_at = now
                     changed += 1
 
-                if actually_connected:
-                    new_status = ProxyNodeStatus.ONLINE
-                elif node.tunnel_connected_at:
-                    # tunnel 刚断开：给 60s 缓冲期标记为 UNHEALTHY
-                    elapsed = (now - node.tunnel_connected_at).total_seconds()
-                    new_status = (
-                        ProxyNodeStatus.UNHEALTHY if elapsed < 60 else ProxyNodeStatus.OFFLINE
-                    )
-                else:
-                    new_status = ProxyNodeStatus.OFFLINE
+                new_status = (
+                    ProxyNodeStatus.ONLINE if actually_connected else ProxyNodeStatus.OFFLINE
+                )
 
                 if node.status != new_status:
                     node.status = new_status
@@ -114,6 +116,42 @@ class ProxyNodeHealthScheduler:
             logger.exception("ProxyNode 心跳检测失败: {}", e)
         finally:
             db.close()
+
+    async def _cleanup_old_events(self) -> None:
+        """清理超过保留期的连接事件记录（在线程池中执行，避免阻塞事件循环）"""
+        import asyncio
+
+        def _sync_cleanup() -> None:
+            from datetime import timedelta
+
+            from src.models.database import ProxyNodeEvent
+
+            db = create_session()
+            try:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=_EVENT_RETENTION_DAYS)
+                deleted = (
+                    db.query(ProxyNodeEvent)
+                    .filter(ProxyNodeEvent.created_at < cutoff)
+                    .delete(synchronize_session=False)
+                )
+                if deleted:
+                    db.commit()
+                    logger.info(
+                        "清理 {} 条过期代理节点事件 (>{} 天)", deleted, _EVENT_RETENTION_DAYS
+                    )
+            except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.warning("清理代理节点事件失败: {}", e)
+            finally:
+                db.close()
+
+        try:
+            await asyncio.to_thread(_sync_cleanup)
+        except Exception as e:
+            logger.warning("清理代理节点事件线程执行失败: {}", e)
 
 
 _proxy_node_health_scheduler: ProxyNodeHealthScheduler | None = None

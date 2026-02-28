@@ -402,6 +402,9 @@ class TunnelManager:
                     active_connections=data.get("active_connections"),
                     total_requests=data.get("total_requests"),
                     avg_latency_ms=data.get("avg_latency_ms"),
+                    failed_requests=data.get("failed_requests"),
+                    dns_failures=data.get("dns_failures"),
+                    stream_errors=data.get("stream_errors"),
                 )
                 result: dict[str, Any] = {}
                 if node.remote_config:

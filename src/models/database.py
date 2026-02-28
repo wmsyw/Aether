@@ -874,7 +874,6 @@ class ProxyNodeStatus(PyEnum):
     """代理节点状态"""
 
     ONLINE = "online"
-    UNHEALTHY = "unhealthy"
     OFFLINE = "offline"
 
 
@@ -919,6 +918,9 @@ class ProxyNode(Base):
     active_connections = Column(Integer, default=0, nullable=False)
     total_requests = Column(BigInteger, default=0, nullable=False)
     avg_latency_ms = Column(Float, nullable=True)
+    failed_requests = Column(BigInteger, default=0, nullable=False, comment="累计失败请求数")
+    dns_failures = Column(BigInteger, default=0, nullable=False, comment="累计 DNS 失败数")
+    stream_errors = Column(BigInteger, default=0, nullable=False, comment="累计流错误数")
 
     # 硬件信息（注册时上报，JSON 可扩展）
     hardware_info = Column(
@@ -960,6 +962,33 @@ class ProxyNode(Base):
     )
 
     __table_args__ = (UniqueConstraint("ip", "port", name="uq_proxy_node_ip_port"),)
+
+
+class ProxyNodeEvent(Base):
+    """代理节点连接事件表 -- 记录 tunnel 连接/断开/错误事件，用于连接稳定性分析"""
+
+    __tablename__ = "proxy_node_events"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    node_id = Column(
+        String(36),
+        ForeignKey("proxy_nodes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type = Column(
+        String(20),
+        nullable=False,
+        comment="事件类型: connected, disconnected, error",
+    )
+    detail = Column(String(500), nullable=True, comment="事件详情（如断开原因）")
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (Index("idx_proxy_node_events_node_created", "node_id", "created_at"),)
 
 
 class GlobalModel(ExportMixin, Base):

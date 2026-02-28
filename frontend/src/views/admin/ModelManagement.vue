@@ -656,6 +656,7 @@ import {
   getGlobalModel,
   updateGlobalModel,
   deleteGlobalModel,
+  batchDeleteGlobalModels,
   batchAssignToProviders,
   getGlobalModelProviders,
   type GlobalModelResponse,
@@ -1276,15 +1277,13 @@ async function confirmBatchDeleteModels() {
   submittingBatchManage.value = true
   try {
     const ids = Array.from(selectedBatchManageModelIds.value)
-    const results = await Promise.allSettled(ids.map(id => deleteGlobalModel(id)))
-    const successCount = results.filter(r => r.status === 'fulfilled').length
-    const failCount = results.filter(r => r.status === 'rejected').length
+    const result = await batchDeleteGlobalModels(ids)
 
-    if (successCount > 0) {
-      success(`成功删除 ${successCount} 个模型`)
+    if (result.success_count > 0) {
+      success(`成功删除 ${result.success_count} 个模型`)
     }
-    if (failCount > 0) {
-      showError(`${failCount} 个模型删除失败`, '部分失败')
+    if (result.failed.length > 0) {
+      showError(`${result.failed.length} 个模型删除失败`, '部分失败')
     }
 
     // 清除选中的已删除模型

@@ -179,31 +179,6 @@
             </div>
           </section>
 
-          <!-- Key 能力配置 -->
-          <section
-            v-if="availableCapabilities.length > 0"
-            class="space-y-2"
-          >
-            <h4 class="font-medium text-sm">
-              模型偏好
-            </h4>
-            <div class="flex flex-wrap gap-2">
-              <label
-                v-for="cap in availableCapabilities"
-                :key="cap.name"
-                class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm"
-              >
-                <input
-                  type="checkbox"
-                  :checked="form.supported_capabilities?.includes(cap.name)"
-                  class="rounded"
-                  @change="toggleCapability(cap.name)"
-                >
-                <span>{{ cap.display_name }}</span>
-              </label>
-            </div>
-          </section>
-
           <!-- 价格配置 -->
           <section class="space-y-3">
             <h4 class="font-medium text-sm">
@@ -212,7 +187,7 @@
             <TieredPricingEditor
               ref="tieredPricingEditorRef"
               v-model="tieredPricing"
-              :show-cache1h="form.supported_capabilities?.includes('cache_1h')"
+              :show-cache1h="true"
             />
             <div class="flex items-center gap-3 pt-2 border-t">
               <Label class="text-xs whitespace-nowrap">按次计费</Label>
@@ -353,7 +328,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   Loader2, Layers, SquarePen,
   Search, ChevronRight, Plus, Trash2
@@ -378,7 +353,6 @@ import {
   type GlobalModelUpdate,
 } from '@/api/global-models'
 import type { TieredPricingConfig } from '@/api/endpoints/types'
-import { getAllCapabilities, type CapabilityDefinition } from '@/api/endpoints'
 
 const props = defineProps<{
   open: boolean
@@ -665,34 +639,6 @@ function fillVideoResolutionPricePreset(preset: 'common' | 'sora' | 'veo') {
   }))
 }
 
-// Key 能力选项
-const availableCapabilities = ref<CapabilityDefinition[]>([])
-
-// 加载可用能力列表
-async function loadCapabilities() {
-  try {
-    availableCapabilities.value = await getAllCapabilities()
-  } catch (err) {
-    log.error('Failed to load capabilities:', err)
-  }
-}
-
-// 切换能力
-function toggleCapability(capName: string) {
-  if (!form.value.supported_capabilities) {
-    form.value.supported_capabilities = []
-  }
-  const index = form.value.supported_capabilities.indexOf(capName)
-  if (index >= 0) {
-    form.value.supported_capabilities.splice(index, 1)
-  } else {
-    form.value.supported_capabilities.push(capName)
-  }
-}
-
-onMounted(() => {
-  loadCapabilities()
-})
 
 // 加载模型列表
 async function loadModels() {
@@ -828,6 +774,19 @@ async function handleSubmit() {
 
   // Apply billing (video) pricing into config before cleaning/submitting.
   applyVideoPricingToConfig()
+
+  // Auto-infer supported_capabilities from tiered pricing config
+  const caps = new Set(form.value.supported_capabilities || [])
+  const has1hPricing = finalTieredPricing?.tiers?.some(
+    (t: Record<string, unknown>) => Array.isArray(t.cache_ttl_pricing)
+      && (t.cache_ttl_pricing as Array<Record<string, unknown>>).some(c => c.ttl_minutes === 60)
+  )
+  if (has1hPricing) {
+    caps.add('cache_1h')
+  } else {
+    caps.delete('cache_1h')
+  }
+  form.value.supported_capabilities = caps.size > 0 ? [...caps] : []
 
   // 清理空的 config
   const cleanConfig = form.value.config && Object.keys(form.value.config).length > 0

@@ -112,7 +112,7 @@
           v-if="showCache1h"
           class="space-y-1"
         >
-          <Label class="text-xs text-muted-foreground">1h 缓存创建</Label>
+          <Label class="text-xs text-muted-foreground">1h 缓存</Label>
           <Input
             :model-value="getCache1hDisplay(index)"
             type="number"
@@ -207,26 +207,6 @@ watch(
     }
   },
   { immediate: true }
-)
-
-// 监听 showCache1h 变化
-watch(
-  () => props.showCache1h,
-  (newValue, oldValue) => {
-    if (oldValue === true && newValue === false) {
-      // 取消勾选时，清除本地的 1h 缓存数据和手动设置标记
-      localTiers.value.forEach((tier, i) => {
-        tier.cache_ttl_pricing = undefined
-        if (cacheManuallySet[i]) {
-          cacheManuallySet[i].cache1h = false
-        }
-      })
-      syncToParent()
-    } else if (oldValue === false && newValue === true) {
-      // 勾选时，同步自动计算的价格到父组件
-      syncToParent()
-    }
-  }
 )
 
 // 验证错误

@@ -13,7 +13,7 @@ export interface ProxyNode {
   ip: string
   port: number
   region: string | null
-  status: 'online' | 'unhealthy' | 'offline'
+  status: 'online' | 'offline'
   is_manual: boolean
   tunnel_mode: boolean
   tunnel_connected: boolean
@@ -34,8 +34,18 @@ export interface ProxyNode {
   active_connections: number
   total_requests: number
   avg_latency_ms: number | null
+  failed_requests: number
+  dns_failures: number
+  stream_errors: number
   created_at: string
   updated_at: string
+}
+
+export interface ProxyNodeEvent {
+  id: number
+  event_type: 'connected' | 'disconnected' | 'error'
+  detail: string | null
+  created_at: string
 }
 
 export interface ProxyNodeListResponse {
@@ -101,6 +111,11 @@ export const proxyNodesApi = {
 
   async testProxyUrl(data: { proxy_url: string; username?: string; password?: string }): Promise<ProxyNodeTestResult> {
     const response = await apiClient.post<ProxyNodeTestResult>('/api/admin/proxy-nodes/test-url', data)
+    return response.data
+  },
+
+  async listNodeEvents(nodeId: string, limit = 50): Promise<{ items: ProxyNodeEvent[] }> {
+    const response = await apiClient.get<{ items: ProxyNodeEvent[] }>(`/api/admin/proxy-nodes/${nodeId}/events`, { params: { limit } })
     return response.data
   },
 }

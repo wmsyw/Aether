@@ -119,6 +119,7 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
     # 启动服务端 ping 任务，防止中间代理因空闲超时关闭连接
     ping_task = asyncio.create_task(_ping_loop(conn))
 
+    disconnect_reason: str | None = None
     try:
         oversized_count = 0
         while True:
@@ -126,6 +127,7 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
                 data = await asyncio.wait_for(ws.receive_bytes(), timeout=_IDLE_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning("tunnel idle timeout for node_id={}", node_id)
+                disconnect_reason = "idle timeout"
                 await ws.close(code=4004, reason="idle timeout")
                 break
             if len(data) > _MAX_FRAME_SIZE:
@@ -133,6 +135,7 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
                 logger.warning("tunnel frame too large from {}: {} bytes", node_id, len(data))
                 if oversized_count >= 5:
                     logger.warning("too many oversized frames from {}, closing", node_id)
+                    disconnect_reason = "too many oversized frames"
                     await ws.close(code=4003, reason="too many oversized frames")
                     break
                 continue
@@ -146,14 +149,16 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
             await manager.handle_incoming_frame(conn, frame)
 
     except WebSocketDisconnect:
+        disconnect_reason = "WebSocket disconnected"
         logger.info("tunnel WebSocket disconnected: node_id={}", node_id)
     except Exception as e:
+        disconnect_reason = f"error: {e}"
         logger.error("tunnel WebSocket error for node_id={}: {}", node_id, e)
     finally:
         ping_task.cancel()
         manager.unregister(conn)
         if not manager.has_tunnel(node_id):
-            await _update_tunnel_status(node_id, connected=False)
+            await _update_tunnel_status(node_id, connected=False, detail=disconnect_reason)
         else:
             logger.info("tunnel connection closed but pool still active: node_id={}", node_id)
 
@@ -174,14 +179,16 @@ async def _ping_loop(conn: TunnelConnection) -> None:
         pass
 
 
-async def _update_tunnel_status(node_id: str, *, connected: bool) -> None:
-    """更新 ProxyNode 的 tunnel 连接状态（在线程池中执行，避免阻塞 event loop）"""
+async def _update_tunnel_status(
+    node_id: str, *, connected: bool, detail: str | None = None
+) -> None:
+    """更新 ProxyNode 的 tunnel 连接状态并记录事件（在线程池中执行）"""
 
     def _sync_update() -> None:
         from datetime import datetime, timezone
 
         from src.database import create_session
-        from src.models.database import ProxyNode, ProxyNodeStatus
+        from src.models.database import ProxyNode, ProxyNodeEvent, ProxyNodeStatus
 
         db = create_session()
         try:
@@ -193,9 +200,16 @@ async def _update_tunnel_status(node_id: str, *, connected: bool) -> None:
                     node.tunnel_connected_at = now
                     node.status = ProxyNodeStatus.ONLINE
                 else:
-                    # 记录断开时刻，供 health_scheduler 计算 UNHEALTHY 缓冲期
                     node.tunnel_connected_at = now
-                    node.status = ProxyNodeStatus.UNHEALTHY
+                    node.status = ProxyNodeStatus.OFFLINE
+
+                # 记录连接事件
+                event = ProxyNodeEvent(
+                    node_id=node_id,
+                    event_type="connected" if connected else "disconnected",
+                    detail=detail,
+                )
+                db.add(event)
                 db.commit()
         finally:
             db.close()
