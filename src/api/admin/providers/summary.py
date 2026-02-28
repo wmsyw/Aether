@@ -319,7 +319,6 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         .filter(
             Model.provider_id == provider.id,
             Model.is_active == True,
-            Model.global_model_id.isnot(None),
         )
         .distinct()
         .all()

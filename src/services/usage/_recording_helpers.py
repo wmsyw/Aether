@@ -55,6 +55,8 @@ def build_usage_params(
     output_tokens: int,
     cache_creation_input_tokens: int,
     cache_read_input_tokens: int,
+    cache_creation_input_tokens_5m: int = 0,
+    cache_creation_input_tokens_1h: int = 0,
     request_type: str,
     api_format: str | None,
     api_family: str | None = None,
@@ -201,6 +203,8 @@ def build_usage_params(
         "total_tokens": input_tokens + output_tokens,
         "cache_creation_input_tokens": cache_creation_input_tokens,
         "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens_5m": cache_creation_input_tokens_5m,
+        "cache_creation_input_tokens_1h": cache_creation_input_tokens_1h,
         "input_cost_usd": input_cost,
         "output_cost_usd": output_cost,
         "cache_cost_usd": cache_cost,
@@ -292,6 +296,12 @@ def update_existing_usage(
     existing_usage.total_tokens = usage_params["total_tokens"]
     existing_usage.cache_creation_input_tokens = usage_params["cache_creation_input_tokens"]
     existing_usage.cache_read_input_tokens = usage_params["cache_read_input_tokens"]
+    existing_usage.cache_creation_input_tokens_5m = usage_params.get(
+        "cache_creation_input_tokens_5m", 0
+    )
+    existing_usage.cache_creation_input_tokens_1h = usage_params.get(
+        "cache_creation_input_tokens_1h", 0
+    )
     existing_usage.input_cost_usd = usage_params["input_cost_usd"]
     existing_usage.output_cost_usd = usage_params["output_cost_usd"]
     existing_usage.cache_cost_usd = usage_params["cache_cost_usd"]

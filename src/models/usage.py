@@ -71,6 +71,8 @@ class Usage(Base):
     # 缓存相关 tokens (for Claude models)
     cache_creation_input_tokens = Column(Integer, default=0)
     cache_read_input_tokens = Column(Integer, default=0)
+    cache_creation_input_tokens_5m = Column(Integer, default=0)  # 5min TTL 缓存创建
+    cache_creation_input_tokens_1h = Column(Integer, default=0)  # 1h TTL 缓存创建
 
     # 成本计算
     input_cost_usd = Column(Float, default=0.0)

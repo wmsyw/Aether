@@ -26,7 +26,7 @@ export interface TieredPricingConfig {
 export interface Model {
   id: string
   provider_id: string
-  global_model_id?: string  // 关联的 GlobalModel ID
+  global_model_id: string  // 关联的 GlobalModel ID
   provider_model_name: string  // Provider 侧的主模型名称
   provider_model_mappings?: ProviderModelMapping[] | null  // 模型名称映射列表（带优先级）
   config?: Record<string, unknown> | null  // 额外配置（如 billing/video 等）
@@ -251,8 +251,8 @@ export interface UpstreamModel {
 export interface ImportFromUpstreamSuccessItem {
   model_id: string
   provider_model_id: string
-  global_model_id?: string  // 可选，未关联时为空字符串
-  global_model_name?: string  // 可选，未关联时为空字符串
+  global_model_id: string
+  global_model_name: string
   created_global_model: boolean  // 始终为 false（不再自动创建 GlobalModel）
 }
 

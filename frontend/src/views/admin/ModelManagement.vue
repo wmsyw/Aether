@@ -59,9 +59,6 @@
               <TableHead class="w-[240px]">
                 模型名称
               </TableHead>
-              <TableHead class="w-[140px]">
-                模型偏好
-              </TableHead>
               <TableHead class="w-[160px] text-center">
                 价格 ($/M)
               </TableHead>
@@ -82,7 +79,7 @@
           <TableBody>
             <TableRow v-if="loading">
               <TableCell
-                colspan="7"
+                colspan="6"
                 class="text-center py-8"
               >
                 <Loader2 class="w-6 h-6 animate-spin mx-auto" />
@@ -90,7 +87,7 @@
             </TableRow>
             <TableRow v-else-if="filteredGlobalModels.length === 0">
               <TableCell
-                colspan="7"
+                colspan="6"
                 class="text-center py-8 text-muted-foreground"
               >
                 没有找到匹配的模型
@@ -119,22 +116,6 @@
                         <Copy class="w-3 h-3" />
                       </button>
                     </div>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div class="flex flex-wrap gap-0.5">
-                    <template v-if="model.supported_capabilities?.length">
-                      <span
-                        v-for="capName in model.supported_capabilities"
-                        :key="capName"
-                        class="text-[11px] px-1 py-0.5 rounded bg-muted/60 text-muted-foreground"
-                        :title="getCapabilityDisplayName(capName)"
-                      >{{ getCapabilityShortName(capName) }}</span>
-                    </template>
-                    <span
-                      v-else
-                      class="text-muted-foreground text-xs"
-                    >-</span>
                   </div>
                 </TableCell>
                 <TableCell class="text-center">
@@ -297,19 +278,7 @@
               </div>
             </div>
 
-            <!-- 第二行：模型偏好 -->
-            <div
-              v-if="model.supported_capabilities?.length"
-              class="flex flex-wrap gap-0.5"
-            >
-              <span
-                v-for="capName in model.supported_capabilities"
-                :key="capName"
-                class="text-[11px] px-1 py-0.5 rounded bg-muted/60 text-muted-foreground"
-              >{{ getCapabilityShortName(capName) }}</span>
-            </div>
-
-            <!-- 第三行：统计信息 -->
+            <!-- 第二行：统计信息 -->
             <div class="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <span>提供商 {{ model.active_provider_count || 0 }}/{{ model.provider_count || 0 }}</span>
               <span>调用 {{ formatUsageCount(model.usage_count || 0) }}</span>
@@ -350,7 +319,6 @@
       :model="selectedModel"
       :open="!!selectedModel"
       :has-blocking-dialog-open="hasBlockingDialogOpen"
-      :capabilities="capabilities"
       @update:open="handleDrawerOpenChange"
       @edit-model="editModel"
       @toggle-model-status="toggleModelStatus"
@@ -693,8 +661,8 @@ import {
   type GlobalModelResponse,
 } from '@/api/global-models'
 import { log } from '@/utils/logger'
+import { formatUsageCount } from '@/utils/format'
 import { getProvidersSummary, type ProviderWithEndpointsSummary } from '@/api/endpoints/providers'
-import { getAllCapabilities, type CapabilityDefinition } from '@/api/endpoints'
 
 
 interface ModelProviderDisplay {
@@ -733,7 +701,6 @@ const editingModel = ref<GlobalModelResponse | null>(null)
 // 数据
 const globalModels = ref<GlobalModelResponse[]>([])
 const providers = ref<ProviderWithEndpointsSummary[]>([])
-const capabilities = ref<CapabilityDefinition[]>([])
 
 // 模型目录分页
 const catalogCurrentPage = ref(1)
@@ -789,16 +756,6 @@ const editingProviderModel = computed<Model | null>(() => {
 
 // 使用全局确认对话框
 const { confirmDanger } = useConfirm()
-
-// 格式化调用次数（大数字简化显示）
-function formatUsageCount(count: number): string {
-  if (count >= 1000000) {
-    return `${(count / 1000000).toFixed(1)  }M`
-  } else if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)  }K`
-  }
-  return count.toString()
-}
 
 // 从 GlobalModel 的 default_tiered_pricing 获取第一阶梯价格
 function getFirstTierPrice(model: GlobalModelResponse, type: 'input' | 'output'): number | null {
@@ -1489,31 +1446,10 @@ async function loadProviders() {
   }
 }
 
-async function loadCapabilities() {
-  try {
-    capabilities.value = await getAllCapabilities()
-  } catch (err) {
-    log.error('Failed to load capabilities:', err)
-  }
-}
-
-// 获取 capability 的显示名称
-function getCapabilityDisplayName(capName: string): string {
-  const cap = capabilities.value.find(c => c.name === capName)
-  return cap?.display_name || capName
-}
-
-// 获取 capability 的短名称（用于表格展示）
-function getCapabilityShortName(capName: string): string {
-  const cap = capabilities.value.find(c => c.name === capName)
-  return cap?.short_name || cap?.display_name || capName
-}
-
 onMounted(async () => {
   await Promise.all([
     refreshData(),
     loadProviders(),
-    loadCapabilities(),
   ])
 })
 </script>

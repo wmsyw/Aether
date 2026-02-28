@@ -13,7 +13,7 @@ from fastapi import Request
 
 from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_adapter
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
-from src.api.handlers.gemini.adapter import GeminiChatAdapter
+from src.api.handlers.gemini.adapter import GeminiCapabilityDetector, GeminiChatAdapter
 from src.config.settings import config
 from src.core.api_format import ApiFamily, get_auth_handler
 from src.core.api_format.enums import AuthMethod
@@ -52,6 +52,14 @@ class GeminiCliAdapter(CliAdapterBase):
         """
         handler = get_auth_handler(AuthMethod.GOOG_API_KEY)
         return handler.extract_credentials(request)
+
+    def detect_capability_requirements(
+        self,
+        headers: dict[str, str],
+        request_body: dict[str, Any] | None = None,
+    ) -> dict[str, bool]:
+        """从请求体检测 Gemini 能力需求（fileData.fileUri -> gemini_files）"""
+        return GeminiCapabilityDetector.detect_from_request(headers, request_body)
 
     def _merge_path_params(
         self, original_request_body: dict[str, Any], path_params: dict[str, Any]  # noqa: ARG002

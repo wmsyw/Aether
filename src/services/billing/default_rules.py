@@ -231,7 +231,14 @@ class DefaultBillingRuleGenerator:
                 "source": "tiered",
                 "tier_key": tier_key,
                 "allow_zero": True,
-                "tiers": _tiers_for("cache_creation_price_per_1m", default_multiplier=1.25),
+                # TTL override supported when dims include cache_ttl_minutes
+                "ttl_key": "cache_ttl_minutes",
+                "ttl_value_key": "cache_creation_price_per_1m",
+                "tiers": _tiers_for(
+                    "cache_creation_price_per_1m",
+                    default_multiplier=1.25,
+                    include_cache_ttl_pricing=True,
+                ),
                 "default": base_cache_creation_price,
             }
             dimension_mappings["cache_read_price_per_1m"] = {

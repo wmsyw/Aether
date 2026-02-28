@@ -40,11 +40,11 @@
               <TableHead class="w-[140px] h-12 font-semibold">
                 模型名称
               </TableHead>
-              <TableHead class="w-[120px] h-12 font-semibold">
-                模型偏好
-              </TableHead>
               <TableHead class="w-[140px] h-12 font-semibold text-center">
                 价格 ($/M)
+              </TableHead>
+              <TableHead class="w-[80px] h-12 font-semibold text-center">
+                调用次数
               </TableHead>
               <TableHead class="w-[70px] h-12 font-semibold text-center">
                 状态
@@ -93,38 +93,6 @@
                     </div>
                   </div>
                 </TableCell>
-                <TableCell class="py-4">
-                  <div class="flex gap-1.5 flex-wrap items-center">
-                    <template v-if="getModelSupportedCapabilities(model).length > 0">
-                      <button
-                        v-for="cap in getModelSupportedCapabilitiesDetails(model)"
-                        :key="cap.name"
-                        class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all"
-                        :class="[
-                          isCapabilityEnabled(model.name, cap.name)
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-transparent text-muted-foreground border border-dashed border-muted-foreground/50 hover:border-primary/50 hover:text-foreground'
-                        ]"
-                        :title="cap.description"
-                        @click.stop="toggleCapability(model.name, cap.name)"
-                      >
-                        <Check
-                          v-if="isCapabilityEnabled(model.name, cap.name)"
-                          class="w-3 h-3"
-                        />
-                        <Plus
-                          v-else
-                          class="w-3 h-3"
-                        />
-                        {{ cap.short_name || cap.display_name }}
-                      </button>
-                    </template>
-                    <span
-                      v-else
-                      class="text-muted-foreground text-xs"
-                    >-</span>
-                  </div>
-                </TableCell>
                 <TableCell class="py-4 text-center">
                   <div class="text-xs space-y-0.5">
                     <!-- 按 Token 计费 -->
@@ -153,6 +121,9 @@
                       -
                     </div>
                   </div>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <span class="text-sm font-mono">{{ formatUsageCount(model.usage_count || 0) }}</span>
                 </TableCell>
                 <TableCell class="py-4 text-center">
                   <Badge :variant="model.is_active ? 'success' : 'secondary'">
@@ -194,41 +165,15 @@
               </Badge>
             </div>
 
-            <!-- 第二行：价格 -->
-            <div
-              v-if="getFirstTierPrice(model, 'input') || getFirstTierPrice(model, 'output')"
-              class="text-xs text-muted-foreground font-mono"
-            >
-              In: ${{ getFirstTierPrice(model, 'input')?.toFixed(2) || '-' }} / Out: ${{ getFirstTierPrice(model, 'output')?.toFixed(2) || '-' }}
-            </div>
-
-            <!-- 第四行：模型偏好按钮 -->
-            <div
-              v-if="getModelSupportedCapabilities(model).length > 0"
-              class="flex gap-1.5 flex-wrap"
-              @click.stop
-            >
-              <button
-                v-for="cap in getModelSupportedCapabilitiesDetails(model)"
-                :key="cap.name"
-                class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all"
-                :class="[
-                  isCapabilityEnabled(model.name, cap.name)
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-transparent text-muted-foreground border border-dashed border-muted-foreground/50'
-                ]"
-                @click="toggleCapability(model.name, cap.name)"
+            <!-- 第二行：价格 + 调用次数 -->
+            <div class="flex items-center gap-3 text-xs text-muted-foreground">
+              <span
+                v-if="getFirstTierPrice(model, 'input') || getFirstTierPrice(model, 'output')"
+                class="font-mono"
               >
-                <Check
-                  v-if="isCapabilityEnabled(model.name, cap.name)"
-                  class="w-3 h-3"
-                />
-                <Plus
-                  v-else
-                  class="w-3 h-3"
-                />
-                {{ cap.short_name || cap.display_name }}
-              </button>
+                In: ${{ getFirstTierPrice(model, 'input')?.toFixed(2) || '-' }} / Out: ${{ getFirstTierPrice(model, 'output')?.toFixed(2) || '-' }}
+              </span>
+              <span class="font-mono">{{ formatUsageCount(model.usage_count || 0) }} 次</span>
             </div>
           </div>
         </div>
@@ -250,10 +195,6 @@
     <UserModelDetailDrawer
       v-model:open="drawerOpen"
       :model="selectedModel"
-      :capabilities="allCapabilities"
-      :user-configurable-capabilities="userConfigurableCapabilities"
-      :model-capability-settings="modelCapabilitySettings"
-      @toggle-capability="toggleCapability"
     />
   </div>
 </template>
@@ -264,8 +205,6 @@ import {
   Loader2,
   Search,
   Copy,
-  Check,
-  Plus,
 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
@@ -283,12 +222,8 @@ import {
   RefreshButton,
 } from '@/components/ui'
 import { type PublicGlobalModel } from '@/api/public-models'
+import { formatUsageCount } from '@/utils/format'
 import { meApi } from '@/api/me'
-import {
-  getUserConfigurableCapabilities,
-  getAllCapabilities,
-  type CapabilityDefinition
-} from '@/api/endpoints'
 import UserModelDetailDrawer from './components/UserModelDetailDrawer.vue'
 import { useRowClick } from '@/composables/useRowClick'
 import { log } from '@/utils/logger'
@@ -319,83 +254,6 @@ function openModelDetail(model: PublicGlobalModel, event: MouseEvent) {
 const currentPage = ref(1)
 const pageSize = ref(20)
 
-// 能力筛选
-const capabilityFilters = ref({
-  vision: false,
-  toolUse: false,
-  extendedThinking: false,
-})
-
-// 能力配置相关
-const availableCapabilities = ref<CapabilityDefinition[]>([])
-const allCapabilities = ref<CapabilityDefinition[]>([])
-const userConfigurableCapabilities = computed(() =>
-  availableCapabilities.value.filter(cap => cap.config_mode === 'user_configurable')
-)
-const modelCapabilitySettings = ref<Record<string, Record<string, boolean>>>({})
-const savingCapability = ref<string | null>(null) // 正在保存的能力标识 "modelName:capName"
-
-// 获取模型支持的可配置能力名称列表（从 supported_capabilities 字段读取）
-function getModelSupportedCapabilities(model: PublicGlobalModel): string[] {
-  if (!model.supported_capabilities) return []
-  // 只返回用户可配置的能力
-  return model.supported_capabilities.filter(capName =>
-    userConfigurableCapabilities.value.some(cap => cap.name === capName)
-  )
-}
-
-// 获取模型支持的可配置能力详情列表
-function getModelSupportedCapabilitiesDetails(model: PublicGlobalModel): CapabilityDefinition[] {
-  const supportedNames = getModelSupportedCapabilities(model)
-  return userConfigurableCapabilities.value.filter(cap => supportedNames.includes(cap.name))
-}
-
-// 检查某个能力是否已启用
-function isCapabilityEnabled(modelName: string, capName: string): boolean {
-  return modelCapabilitySettings.value[modelName]?.[capName] || false
-}
-
-// 切换能力配置
-async function toggleCapability(modelName: string, capName: string) {
-  const capKey = `${modelName}:${capName}`
-  if (savingCapability.value === capKey) return // 防止重复点击
-
-  savingCapability.value = capKey
-  try {
-    const currentEnabled = isCapabilityEnabled(modelName, capName)
-    const newEnabled = !currentEnabled
-
-    // 更新本地状态
-    const newSettings = { ...modelCapabilitySettings.value }
-    if (!newSettings[modelName]) {
-      newSettings[modelName] = {}
-    }
-
-    if (newEnabled) {
-      newSettings[modelName][capName] = true
-    } else {
-      delete newSettings[modelName][capName]
-      // 如果该模型没有任何能力配置了，删除整个模型条目
-      if (Object.keys(newSettings[modelName]).length === 0) {
-        delete newSettings[modelName]
-      }
-    }
-
-    // 调用 API 保存
-    await meApi.updateModelCapabilitySettings({
-      model_capability_settings: Object.keys(newSettings).length > 0 ? newSettings : null
-    })
-
-    // 更新本地状态
-    modelCapabilitySettings.value = newSettings
-  } catch (err) {
-    log.error('保存能力配置失败:', err)
-    showError('保存失败，请重试')
-  } finally {
-    savingCapability.value = null
-  }
-}
-
 // 筛选后的模型列表
 const filteredModels = computed(() => {
   let result = models.value
@@ -409,17 +267,6 @@ const filteredModels = computed(() => {
     })
   }
 
-  // 能力筛选
-  if (capabilityFilters.value.vision) {
-    result = result.filter(m => m.config?.vision === true)
-  }
-  if (capabilityFilters.value.toolUse) {
-    result = result.filter(m => m.config?.function_calling === true)
-  }
-  if (capabilityFilters.value.extendedThinking) {
-    result = result.filter(m => m.config?.extended_thinking === true)
-  }
-
   return result
 })
 
@@ -430,10 +277,10 @@ const paginatedModels = computed(() => {
   return filteredModels.value.slice(start, end)
 })
 
-// 搜索或筛选变化时重置到第一页
-watch([searchQuery, capabilityFilters], () => {
+// 搜索变化时重置到第一页
+watch(searchQuery, () => {
   currentPage.value = 1
-}, { deep: true })
+})
 
 async function loadModels() {
   loading.value = true
@@ -449,30 +296,8 @@ async function loadModels() {
   }
 }
 
-async function loadCapabilities() {
-  try {
-    const [userCaps, allCaps] = await Promise.all([
-      getUserConfigurableCapabilities(),
-      getAllCapabilities()
-    ])
-    availableCapabilities.value = userCaps
-    allCapabilities.value = allCaps
-  } catch (err) {
-    log.error('Failed to load capabilities:', err)
-  }
-}
-
-async function loadModelCapabilitySettings() {
-  try {
-    const response = await meApi.getModelCapabilitySettings()
-    modelCapabilitySettings.value = response.model_capability_settings || {}
-  } catch (err) {
-    log.error('Failed to load model capability settings:', err)
-  }
-}
-
 async function refreshData() {
-  await Promise.all([loadModels(), loadCapabilities(), loadModelCapabilitySettings()])
+  await loadModels()
 }
 
 // 从 PublicGlobalModel 的 default_tiered_pricing 获取第一阶梯价格

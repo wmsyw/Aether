@@ -8,7 +8,7 @@ Claude Chat Handler - 基于通用 Chat Handler 基类的简化实现
 from typing import Any
 
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
-from src.api.handlers.base.utils import extract_cache_creation_tokens
+from src.api.handlers.base.utils import extract_cache_creation_tokens_detail
 from src.core.api_format import ApiFamily, EndpointKind
 
 
@@ -103,12 +103,15 @@ class ClaudeChatHandler(ChatHandlerBase):
         - 新格式：claude_cache_creation_5_m_tokens / claude_cache_creation_1_h_tokens
         """
         usage = response.get("usage", {})
+        total, t5m, t1h = extract_cache_creation_tokens_detail(usage)
 
         return {
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
-            "cache_creation_input_tokens": extract_cache_creation_tokens(usage),
+            "cache_creation_input_tokens": total,
             "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+            "cache_creation_input_tokens_5m": t5m,
+            "cache_creation_input_tokens_1h": t1h,
         }
 
     def _normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:

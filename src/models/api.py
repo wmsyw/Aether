@@ -577,7 +577,7 @@ class ModelResponse(BaseModel):
 
     id: str
     provider_id: str
-    global_model_id: str | None
+    global_model_id: str
     provider_model_name: str
     provider_model_mappings: list[dict] | None = None
 
@@ -612,7 +612,7 @@ class ModelResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    # 关联的 GlobalModel 信息（如果有）
+    # 关联的 GlobalModel 信息
     global_model_name: str | None = None
     global_model_display_name: str | None = None
 
@@ -744,6 +744,8 @@ class PublicGlobalModelResponse(BaseModel):
     supported_capabilities: list[str] | None = None
     # 模型配置（JSON）
     config: dict | None = None
+    # 调用次数
+    usage_count: int = 0
 
 
 class PublicGlobalModelListResponse(BaseModel):

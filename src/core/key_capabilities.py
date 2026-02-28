@@ -100,17 +100,15 @@ def check_capability_match(
 
     匹配逻辑：
     1. EXCLUSIVE（互斥）能力：
-       - 请求需要且 Key 有 → 通过
-       - 请求需要但 Key 没有 → 拒绝
-       - 请求不需要但 Key 有 → 拒绝（避免浪费高价资源）
-       - 请求不需要且 Key 没有 → 通过
-       - 请求未声明但 Key 有 → 拒绝（关键：未声明等同于不需要）
+       - 请求需要且 Key 有 -> 通过
+       - 请求需要但 Key 没有 -> 拒绝
+       - 请求不需要但 Key 有 -> 拒绝（避免浪费高价资源）
+       - 请求不需要且 Key 没有 -> 通过
+       - 请求未声明但 Key 有 -> 拒绝（关键：未声明等同于不需要）
 
     2. COMPATIBLE（兼容）能力：
-       - 请求需要且 Key 有 → 通过
-       - 请求需要但 Key 没有 → 拒绝
-       - 请求不需要/未声明且 Key 有 → 通过（无额外成本，不浪费）
-       - 请求不需要/未声明且 Key 没有 → 通过
+       - 不做硬过滤，交由排序阶段通过 compute_capability_score() 处理
+       - 有能力的 Key 优先排序，没有的也不被排除
 
     Args:
         key_capabilities: Key 拥有的能力 {"cache_1h": True, ...}
@@ -136,9 +134,7 @@ def check_capability_match(
             if not is_required and key_has_cap:
                 return False, f"不需要{cap_def.display_name}(避免浪费高价资源)"
 
-        elif cap_def.match_mode == CapabilityMatchMode.COMPATIBLE:
-            if is_required and not key_has_cap:
-                return False, f"需要{cap_def.display_name}但 Key 不支持"
+        # COMPATIBLE: 不做硬过滤
 
     # 第二步：检查 Key 拥有的 EXCLUSIVE 能力是否被请求需要
     # 如果 Key 有某个 EXCLUSIVE 能力，但请求没有声明需要，应该跳过这个 Key
@@ -156,6 +152,40 @@ def check_capability_match(
                 return False, f"不需要{cap_def.display_name}(避免浪费高价资源)"
 
     return True, None
+
+
+def compute_capability_score(
+    key_capabilities: dict[str, bool] | None,
+    requirements: dict[str, bool] | None,
+) -> int:
+    """
+    计算 COMPATIBLE 能力不匹配数量
+
+    返回 0 表示完全匹配（或无 COMPATIBLE 需求），正数表示有 N 个 COMPATIBLE 能力不满足。
+    用于候选排序：得分越低越优先。
+
+    Args:
+        key_capabilities: Key 拥有的能力
+        requirements: 请求需要的能力
+
+    Returns:
+        不满足的 COMPATIBLE 能力数量
+    """
+    key_caps = key_capabilities or {}
+    reqs = requirements or {}
+    miss_count = 0
+
+    for cap_name, is_required in reqs.items():
+        if not is_required:
+            continue
+        cap_def = _capabilities.get(cap_name)
+        if not cap_def:
+            continue
+        if cap_def.match_mode == CapabilityMatchMode.COMPATIBLE:
+            if not key_caps.get(cap_name, False):
+                miss_count += 1
+
+    return miss_count
 
 
 def _match_error_patterns(error_msg: str, patterns: list[str]) -> bool:
@@ -220,20 +250,14 @@ class _CapabilityDefinitionsProxy:
 
 CAPABILITY_DEFINITIONS = _CapabilityDefinitionsProxy()
 
-
-# ============ 兼容旧的插件基类（逐步废弃） ============
-
-CapabilityPlugin = CapabilityDefinition  # 类型别名，兼容旧代码
-
-
 # ============ 注册内置能力 ============
 
 register_capability(
     name="cache_1h",
     display_name="1 小时缓存",
     description="使用 1 小时缓存 TTL（价格更高，适合长对话）",
-    match_mode=CapabilityMatchMode.EXCLUSIVE,
-    config_mode=CapabilityConfigMode.USER_CONFIGURABLE,
+    match_mode=CapabilityMatchMode.COMPATIBLE,
+    config_mode=CapabilityConfigMode.REQUEST_PARAM,
     short_name="1h缓存",
 )
 
@@ -251,7 +275,7 @@ register_capability(
     name="gemini_files",
     display_name="Gemini 文件 API",
     description="支持 Gemini Files API（文件上传/管理），仅 Google 官方 API 支持",
-    match_mode=CapabilityMatchMode.COMPATIBLE,
-    config_mode=CapabilityConfigMode.USER_CONFIGURABLE,
+    match_mode=CapabilityMatchMode.EXCLUSIVE,
+    config_mode=CapabilityConfigMode.REQUEST_PARAM,
     short_name="文件API",
 )

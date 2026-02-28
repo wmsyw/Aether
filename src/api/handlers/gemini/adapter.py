@@ -19,7 +19,28 @@ from src.core.api_format.enums import AuthMethod
 from src.core.api_format.headers import BROWSER_FINGERPRINT_HEADERS
 from src.core.logger import logger
 from src.models.gemini import GeminiRequest
+from src.services.gemini_files_mapping import extract_file_names_from_request
 from src.services.provider.transport import redact_url_for_log
+
+
+class GeminiCapabilityDetector:
+    """Gemini API 能力检测器"""
+
+    @staticmethod
+    def detect_from_request(
+        headers: dict[str, str],  # noqa: ARG004 - 预留
+        request_body: dict[str, Any] | None = None,
+    ) -> dict[str, bool]:
+        """
+        从请求体检测 Gemini 能力需求
+
+        检测规则:
+        - fileData.fileUri -> gemini_files: True
+        """
+        requirements: dict[str, bool] = {}
+        if request_body and extract_file_names_from_request(request_body):
+            requirements["gemini_files"] = True
+        return requirements
 
 
 @register_adapter
@@ -62,11 +83,11 @@ class GeminiChatAdapter(ChatAdapterBase):
 
     def detect_capability_requirements(
         self,
-        headers: dict[str, str],  # noqa: ARG002 - 预留
-        request_body: dict[str, Any] | None = None,  # noqa: ARG002 - 预留
+        headers: dict[str, str],
+        request_body: dict[str, Any] | None = None,
     ) -> dict[str, bool]:
-        """Gemini API 无特殊能力要求"""
-        return {}
+        """从请求体检测 Gemini 能力需求（fileData.fileUri -> gemini_files）"""
+        return GeminiCapabilityDetector.detect_from_request(headers, request_body)
 
     def _merge_path_params(
         self, original_request_body: dict[str, Any], path_params: dict[str, Any]  # noqa: ARG002

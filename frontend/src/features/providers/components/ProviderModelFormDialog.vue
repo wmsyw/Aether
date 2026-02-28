@@ -541,7 +541,7 @@ async function loadAvailableGlobalModels() {
 
     // 获取当前 provider 已添加的模型的 global_model_id 列表
     const existingGlobalModelIds = new Set(
-      existingModels.map((m: Model) => m.global_model_id).filter(Boolean)
+      existingModels.map((m: Model) => m.global_model_id)
     )
 
     // 过滤掉已添加的模型

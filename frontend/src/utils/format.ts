@@ -133,6 +133,16 @@ export function formatCost(cost: number | null | undefined): string {
   return `$${cost.toFixed(4)}`
 }
 
+// Usage count formatting (compact display for large numbers)
+export function formatUsageCount(count: number): string {
+  if (count >= 1000000) {
+    return `${(count / 1000000).toFixed(1)}M`
+  } else if (count >= 1000) {
+    return `${(count / 1000).toFixed(1)}K`
+  }
+  return count.toString()
+}
+
 // Format remaining time from unix timestamp
 export function formatRemainingTime(expireAt: number | undefined, currentTime: number): string {
   if (!expireAt) return '未知'

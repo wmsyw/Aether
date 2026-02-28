@@ -46,7 +46,7 @@ class ClaudeCliAdapter(CliAdapterBase):
         request_body: dict[str, Any] | None = None,
     ) -> dict[str, bool]:
         """检测 Claude CLI 请求中隐含的能力需求"""
-        return ClaudeCapabilityDetector.detect_from_headers(headers)
+        return ClaudeCapabilityDetector.detect_from_headers(headers, request_body)
 
     # =========================================================================
     # Claude CLI 特定的计费逻辑

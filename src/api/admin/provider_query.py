@@ -30,6 +30,7 @@ from src.services.model.fetch_scheduler import (
 from src.services.model.upstream_fetcher import (
     EndpointFetchConfig,
     UpstreamModelsFetchContext,
+    UpstreamModelsFetcherRegistry,
     build_format_to_config,
     fetch_models_for_key,
     get_adapter_for_format,
@@ -235,7 +236,15 @@ async def query_available_models(
     # 构建 api_format -> EndpointFetchConfig 映射（纯数据，不依赖 ORM session）
     format_to_endpoint = build_format_to_config(provider.endpoints)
 
-    if not format_to_endpoint:
+    # 检查是否有注册自定义 fetcher（如预设模型），有则不依赖活跃 endpoint
+    provider_type = str(getattr(provider, "provider_type", "") or "").lower()
+    # 延迟导入避免循环依赖（与 upstream_fetcher.fetch_models_for_key 保持一致）
+    from src.services.provider.envelope import ensure_providers_bootstrapped
+
+    ensure_providers_bootstrapped()
+    has_custom_fetcher = UpstreamModelsFetcherRegistry.get(provider_type) is not None
+
+    if not format_to_endpoint and not has_custom_fetcher:
         raise HTTPException(status_code=400, detail="No active endpoints found for this provider")
 
     # 如果指定了 api_key_id，只获取该 Key 的模型
@@ -253,7 +262,6 @@ async def query_available_models(
         raise HTTPException(status_code=400, detail="No active API Key found for this provider")
 
     # Antigravity: 按 tier/可用性排序后逐个尝试，成功即停止
-    provider_type = str(getattr(provider, "provider_type", "") or "").lower()
     if provider_type == ProviderType.ANTIGRAVITY:
         return await _fetch_models_antigravity_ordered(
             provider=provider,
@@ -610,12 +618,12 @@ async def test_model(
         raise HTTPException(status_code=404, detail="Provider not found")
 
     # 构建 api_format -> endpoint 映射 和 id -> endpoint 映射
+    # 测试不依赖端点启用状态，禁用的端点也可以用于测试连通性
     format_to_endpoint: dict[str, ProviderEndpoint] = {}
     id_to_endpoint: dict[str, ProviderEndpoint] = {}
     for ep in provider.endpoints:
-        if ep.is_active:
-            format_to_endpoint[ep.api_format] = ep
-            id_to_endpoint[ep.id] = ep
+        format_to_endpoint[ep.api_format] = ep
+        id_to_endpoint[ep.id] = ep
 
     # 找到合适的端点和 API Key
     endpoint = None
@@ -628,7 +636,7 @@ async def test_model(
         if not endpoint:
             raise HTTPException(
                 status_code=404,
-                detail=f"No active endpoint found for API format: {request.api_format}",
+                detail=f"No endpoint found for API format: {request.api_format}",
             )
 
         if request.api_key_id:
@@ -657,7 +665,7 @@ async def test_model(
         # 使用指定的端点
         endpoint = id_to_endpoint.get(request.endpoint_id)
         if not endpoint:
-            raise HTTPException(status_code=404, detail="Endpoint not found or not active")
+            raise HTTPException(status_code=404, detail="Endpoint not found")
 
         if request.api_key_id:
             # 同时指定了 Key，需要校验是否支持该端点格式

@@ -312,18 +312,13 @@ class PublicProvidersAdapter(PublicApiAdapter):
         providers = query.offset(self.skip).limit(self.limit).all()
         result = []
         for provider in providers:
-            models_count = (
-                db.query(Model)
-                .filter(Model.provider_id == provider.id, Model.global_model_id.isnot(None))
-                .count()
-            )
+            models_count = db.query(Model).filter(Model.provider_id == provider.id).count()
             active_models_count = (
                 db.query(Model)
                 .filter(
                     and_(
                         Model.provider_id == provider.id,
                         Model.is_active.is_(True),
-                        Model.global_model_id.isnot(None),
                     )
                 )
                 .count()
@@ -367,7 +362,6 @@ class PublicModelsAdapter(PublicApiAdapter):
                 and_(
                     Model.is_active.is_(True),
                     Provider.is_active.is_(True),
-                    Model.global_model_id.isnot(None),
                 )
             )
         )
@@ -424,7 +418,6 @@ class PublicStatsAdapter(PublicApiAdapter):
                 and_(
                     Model.is_active.is_(True),
                     Provider.is_active.is_(True),
-                    Model.global_model_id.isnot(None),
                 )
             )
             .count()
@@ -462,7 +455,6 @@ class PublicSearchModelsAdapter(PublicApiAdapter):
                 and_(
                     Model.is_active.is_(True),
                     Provider.is_active.is_(True),
-                    Model.global_model_id.isnot(None),
                 )
             )
         )

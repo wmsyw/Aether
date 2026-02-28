@@ -10,7 +10,7 @@ from src.api.handlers.base.cli_handler_base import (
     CliMessageHandlerBase,
     StreamContext,
 )
-from src.api.handlers.base.utils import extract_cache_creation_tokens
+from src.api.handlers.base.utils import extract_cache_creation_tokens_detail
 from src.core.api_format import ApiFamily, EndpointKind
 
 
@@ -114,9 +114,11 @@ class ClaudeCliMessageHandler(CliMessageHandlerBase):
                 if cache_read:
                     ctx.cached_tokens = cache_read
 
-                cache_creation = extract_cache_creation_tokens(usage)
-                if cache_creation:
-                    ctx.cache_creation_tokens = cache_creation
+                total, t5m, t1h = extract_cache_creation_tokens_detail(usage)
+                if total:
+                    ctx.cache_creation_tokens = total
+                    ctx.cache_creation_tokens_5m = t5m
+                    ctx.cache_creation_tokens_1h = t1h
 
         # 处理文本增量
         elif event_type == "content_block_delta":
@@ -140,9 +142,11 @@ class ClaudeCliMessageHandler(CliMessageHandlerBase):
                     ctx.cached_tokens = usage["cache_read_input_tokens"]
 
                 # 更新缓存创建 tokens
-                cache_creation = extract_cache_creation_tokens(usage)
-                if cache_creation > 0:
-                    ctx.cache_creation_tokens = cache_creation
+                total, t5m, t1h = extract_cache_creation_tokens_detail(usage)
+                if total > 0:
+                    ctx.cache_creation_tokens = total
+                    ctx.cache_creation_tokens_5m = t5m
+                    ctx.cache_creation_tokens_1h = t1h
 
             # 检查是否结束
             delta = data.get("delta", {})

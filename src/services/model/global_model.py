@@ -545,8 +545,8 @@ class GlobalModelService:
         models_to_delete: list[Model] = []
 
         for model in models:
-            # 跳过没有关联 GlobalModel 的
-            if not model.global_model_id or not model.global_model:
+            # 跳过 global_model 关系未加载的
+            if not model.global_model:
                 continue
 
             global_model = cast(GlobalModel, model.global_model)

@@ -150,51 +150,6 @@
               </div>
             </div>
 
-            <!-- 模型偏好 -->
-            <div
-              v-if="getModelUserConfigurableCapabilities().length > 0"
-              class="space-y-3"
-            >
-              <h4 class="font-semibold text-sm">
-                模型偏好
-              </h4>
-              <div class="space-y-2">
-                <div
-                  v-for="cap in getModelUserConfigurableCapabilities()"
-                  :key="cap.name"
-                  class="flex items-center justify-between p-3 rounded-lg border"
-                >
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium">
-                      {{ cap.display_name }}
-                    </p>
-                    <p
-                      v-if="cap.description"
-                      class="text-xs text-muted-foreground truncate"
-                    >
-                      {{ cap.description }}
-                    </p>
-                  </div>
-                  <button
-                    class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    :class="[
-                      isCapabilityEnabled(cap.name) ? 'bg-primary' : 'bg-muted'
-                    ]"
-                    role="switch"
-                    :aria-checked="isCapabilityEnabled(cap.name)"
-                    @click="handleToggleCapability(cap.name)"
-                  >
-                    <span
-                      class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out"
-                      :class="[
-                        isCapabilityEnabled(cap.name) ? 'translate-x-4' : 'translate-x-0'
-                      ]"
-                    />
-                  </button>
-                </div>
-              </div>
-            </div>
-
             <!-- 定价信息 -->
             <div class="space-y-3">
               <h4 class="font-semibold text-sm">
@@ -365,13 +320,11 @@ import TableCell from '@/components/ui/table-cell.vue'
 
 import type { PublicGlobalModel } from '@/api/public-models'
 import type { TieredPricingConfig, PricingTier } from '@/api/endpoints/types'
-import type { CapabilityDefinition } from '@/api/endpoints'
 
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  'toggleCapability': [modelName: string, capName: string]
 }>()
 
 const { copyToClipboard } = useClipboard()
@@ -379,29 +332,6 @@ const { copyToClipboard } = useClipboard()
 interface Props {
   model: PublicGlobalModel | null
   open: boolean
-  capabilities?: CapabilityDefinition[]
-  userConfigurableCapabilities?: CapabilityDefinition[]
-  modelCapabilitySettings?: Record<string, Record<string, boolean>>
-}
-
-// 获取模型支持的用户可配置能力
-function getModelUserConfigurableCapabilities(): CapabilityDefinition[] {
-  if (!props.model?.supported_capabilities || !props.userConfigurableCapabilities) return []
-  return props.userConfigurableCapabilities.filter(cap =>
-    props.model?.supported_capabilities?.includes(cap.name)
-  )
-}
-
-// 检查能力是否已启用
-function isCapabilityEnabled(capName: string): boolean {
-  if (!props.model) return false
-  return props.modelCapabilitySettings?.[props.model.name]?.[capName] || false
-}
-
-// 切换能力
-function handleToggleCapability(capName: string) {
-  if (!props.model) return
-  emit('toggleCapability', props.model.name, capName)
 }
 
 function handleClose() {

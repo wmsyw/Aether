@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
-from src.models.database import ApiKey, Provider, Usage, User
+from src.models.database import ApiKey, Provider, Usage, User, UserModelUsageCount
 from src.services.usage._billing_integration import UsageBillingIntegrationMixin
 from src.services.usage._recording_helpers import (
     METADATA_KEEP_KEYS,
@@ -44,6 +44,31 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
         """更新已存在的 Usage 记录（委托到模块级函数）"""
         update_existing_usage(existing_usage, usage_params, target_model)
 
+    @staticmethod
+    def _increment_user_model_usage(
+        db: Session, user: User | None, model: str, count: int = 1
+    ) -> None:
+        """原子递增用户-模型调用次数计数器"""
+        if user is None:
+            return
+        from sqlalchemy import func as sa_func
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(UserModelUsageCount).values(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            model=model,
+            usage_count=count,
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_user_model_usage_count",
+            set_={
+                "usage_count": UserModelUsageCount.usage_count + count,
+                "updated_at": sa_func.now(),
+            },
+        )
+        db.execute(stmt)
+
     @classmethod
     def _sanitize_request_metadata(cls, metadata: dict[str, Any]) -> dict[str, Any]:
         """元数据清理（委托到模块级函数）"""
@@ -65,6 +90,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
         output_tokens: int,
         cache_creation_input_tokens: int = 0,
         cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens_5m: int = 0,
+        cache_creation_input_tokens_1h: int = 0,
         request_type: str = "chat",
         api_format: str | None = None,
         api_family: str | None = None,
@@ -116,6 +143,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens_5m=cache_creation_input_tokens_5m,
+            cache_creation_input_tokens_1h=cache_creation_input_tokens_1h,
             request_type=request_type,
             api_format=api_format,
             api_family=api_family,
@@ -162,6 +191,9 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             .values(usage_count=GlobalModel.usage_count + 1)
         )
 
+        # 更新用户-模型调用次数计数器
+        cls._increment_user_model_usage(db, user, model)
+
         # 更新 Provider 月度使用量（原子操作）
         if provider_id:
             actual_total_cost = usage_params["actual_total_cost_usd"]
@@ -191,6 +223,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
         output_tokens: int,
         cache_creation_input_tokens: int = 0,
         cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens_5m: int = 0,
+        cache_creation_input_tokens_1h: int = 0,
         request_type: str = "chat",
         api_format: str | None = None,
         api_family: str | None = None,
@@ -244,6 +278,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens_5m=cache_creation_input_tokens_5m,
+            cache_creation_input_tokens_1h=cache_creation_input_tokens_1h,
             request_type=request_type,
             api_format=api_format,
             api_family=api_family,
@@ -347,6 +383,9 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             .values(usage_count=GlobalModel.usage_count + 1)
         )
 
+        # 更新用户-模型调用次数计数器
+        cls._increment_user_model_usage(db, user, model)
+
         # 更新 Provider 月度使用量
         if provider_id:
             actual_total_cost = usage_params["actual_total_cost_usd"]
@@ -387,6 +426,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
         output_tokens: int = 0,
         cache_creation_input_tokens: int = 0,
         cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens_5m: int = 0,
+        cache_creation_input_tokens_1h: int = 0,
         api_format: str | None = None,
         api_family: str | None = None,
         endpoint_kind: str | None = None,
@@ -451,6 +492,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens_5m=cache_creation_input_tokens_5m,
+            cache_creation_input_tokens_1h=cache_creation_input_tokens_1h,
             request_type=request_type,
             api_format=api_format,
             api_family=api_family,
@@ -588,6 +631,9 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             .values(usage_count=GlobalModel.usage_count + 1)
         )
 
+        # 更新用户-模型调用次数计数器
+        cls._increment_user_model_usage(db, user, model)
+
         # 更新 Provider 月度使用量（使用 actual_total_cost）
         if provider_id:
             actual_total_cost = usage_params["actual_total_cost_usd"]
@@ -714,6 +760,9 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
             lambda: {"requests": 0, "cost": 0.0, "is_standalone": False}
         )
         model_counts: dict[str, int] = defaultdict(int)  # model -> count
+        user_model_counts: dict[tuple[str, str], int] = defaultdict(
+            int
+        )  # (user_id, model) -> count
         provider_costs: dict[str, float] = defaultdict(float)  # provider_id -> cost
 
         # 合并所有需要处理的记录（用于预取 user/api_key）
@@ -754,6 +803,12 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                 output_tokens=int(record.get("output_tokens") or 0),
                 cache_creation_input_tokens=int(record.get("cache_creation_input_tokens") or 0),
                 cache_read_input_tokens=int(record.get("cache_read_input_tokens") or 0),
+                cache_creation_input_tokens_5m=int(
+                    record.get("cache_creation_input_tokens_5m") or 0
+                ),
+                cache_creation_input_tokens_1h=int(
+                    record.get("cache_creation_input_tokens_1h") or 0
+                ),
                 request_type=record.get("request_type") or "chat",
                 api_format=record.get("api_format"),
                 api_family=record.get("api_family"),
@@ -850,6 +905,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                 # 聚合统计
                 model_name = record.get("model") or "unknown"
                 model_counts[model_name] += 1
+                if user:
+                    user_model_counts[(str(user.id), model_name)] += 1
 
                 provider_id = record.get("provider_id")
                 if provider_id:
@@ -898,6 +955,8 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                 # 聚合统计
                 model_name = record.get("model") or "unknown"
                 model_counts[model_name] += 1
+                if user:
+                    user_model_counts[(str(user.id), model_name)] += 1
 
                 provider_id = record.get("provider_id")
                 if provider_id:
@@ -959,6 +1018,30 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                 .values(usage_count=GlobalModel.usage_count + count)
             )
 
+        # 批量更新用户-模型调用次数计数器
+        from sqlalchemy import func as sql_func
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        if user_model_counts:
+            rows = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "user_id": uid,
+                    "model": model_name,
+                    "usage_count": count,
+                }
+                for (uid, model_name), count in user_model_counts.items()
+            ]
+            stmt = pg_insert(UserModelUsageCount).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_user_model_usage_count",
+                set_={
+                    "usage_count": UserModelUsageCount.usage_count + stmt.excluded.usage_count,
+                    "updated_at": sql_func.now(),
+                },
+            )
+            db.execute(stmt)
+
         # 批量更新 Provider 月度使用量
         for provider_id, cost in provider_costs.items():
             if cost > 0:
@@ -969,8 +1052,6 @@ class UsageRecordingMixin(UsageBillingIntegrationMixin):
                 )
 
         # 批量更新用户使用量
-        from sqlalchemy import func as sql_func
-
         for user_id, cost in user_costs.items():
             if cost > 0:
                 db.execute(

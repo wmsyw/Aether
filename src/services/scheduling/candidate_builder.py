@@ -19,7 +19,12 @@ from sqlalchemy.orm import Session, selectinload
 from src.core.api_format.conversion.compatibility import is_format_compatible
 from src.core.api_format.enums import EndpointKind
 from src.core.api_format.signature import make_signature_key, parse_signature_key
-from src.core.key_capabilities import check_capability_match
+from src.core.key_capabilities import (
+    CapabilityMatchMode,
+    check_capability_match,
+    compute_capability_score,
+    get_capability,
+)
 from src.core.logger import logger
 from src.core.model_permissions import check_model_allowed_with_mappings
 from src.models.database import (
@@ -219,9 +224,13 @@ class CandidateBuilder:
                 # 检查模型是否支持所需的能力（在 Provider 级别检查，而不是 Key 级别）
                 # 只有当 model_supported_capabilities 非空时才进行检查
                 # 空列表意味着模型没有配置能力限制，默认支持所有能力
+                # COMPATIBLE 能力跳过模型级硬过滤（交由排序阶段处理）
                 if capability_requirements and model_supported_capabilities:
                     for cap_name, is_required in capability_requirements.items():
                         if is_required and cap_name not in model_supported_capabilities:
+                            cap_def = get_capability(cap_name)
+                            if cap_def and cap_def.match_mode == CapabilityMatchMode.COMPATIBLE:
+                                continue
                             return (
                                 False,
                                 f"模型 {model_name} 不支持能力: {cap_name}",
@@ -617,6 +626,15 @@ class CandidateBuilder:
                         needs_conversion=needs_conversion,
                         provider_api_format=str(endpoint_format_str or ""),
                         output_limit=output_limit,
+                        # is_skipped 候选不参与排序，miss_count 无意义，置 0 避免干扰
+                        capability_miss_count=(
+                            compute_capability_score(
+                                key.capabilities or {},
+                                capability_requirements,
+                            )
+                            if is_available
+                            else 0
+                        ),
                     )
 
                     if needs_conversion:

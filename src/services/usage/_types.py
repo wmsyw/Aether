@@ -49,6 +49,8 @@ class UsageRecordParams:
     cache_ttl_minutes: int | None
     use_tiered_pricing: bool
     target_model: str | None
+    cache_creation_input_tokens_5m: int = 0
+    cache_creation_input_tokens_1h: int = 0
 
     def __post_init__(self) -> None:
         """验证关键字段，确保数据完整性"""

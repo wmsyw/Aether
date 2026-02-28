@@ -65,15 +65,14 @@ class ModelService:
             db.commit()
             db.refresh(model)
             # 显式加载 global_model 关系
-            if model.global_model_id:
-                from sqlalchemy.orm import joinedload
+            from sqlalchemy.orm import joinedload
 
-                model = (
-                    db.query(Model)
-                    .options(joinedload(Model.global_model))
-                    .filter(Model.id == model.id)
-                    .first()
-                )
+            model = (
+                db.query(Model)
+                .options(joinedload(Model.global_model))
+                .filter(Model.id == model.id)
+                .first()
+            )
 
             logger.info(
                 f"创建模型成功: provider={provider.name}, model={model.provider_model_name}, global_model_id={model.global_model_id}"
@@ -226,7 +225,7 @@ class ModelService:
                 )
 
             # 清除内存缓存（ModelMapperMiddleware 实例）
-            if model.provider_id and model.global_model_id:
+            if model.provider_id:
                 cache_service = get_cache_invalidation_service()
                 cache_service.on_model_changed(model.provider_id, model.global_model_id)
 
@@ -297,7 +296,7 @@ class ModelService:
             )
 
             # 清除内存缓存
-            if cache_info["provider_id"] and cache_info["global_model_id"]:
+            if cache_info["provider_id"]:
                 cache_service = get_cache_invalidation_service()
                 cache_service.on_model_changed(
                     cache_info["provider_id"], cache_info["global_model_id"]
@@ -338,7 +337,7 @@ class ModelService:
         )
 
         # 清除内存缓存（ModelMapperMiddleware 实例）
-        if model.provider_id and model.global_model_id:
+        if model.provider_id:
             cache_service = get_cache_invalidation_service()
             cache_service.on_model_changed(model.provider_id, model.global_model_id)
 

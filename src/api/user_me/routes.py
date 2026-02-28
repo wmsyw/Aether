@@ -32,7 +32,15 @@ from src.models.api import (
     UpdatePreferencesRequest,
     UpdateProfileRequest,
 )
-from src.models.database import ApiKey, GlobalModel, Model, Provider, Usage, User
+from src.models.database import (
+    ApiKey,
+    GlobalModel,
+    Model,
+    Provider,
+    Usage,
+    User,
+    UserModelUsageCount,
+)
 from src.services.system.time_range import TimeRangeParams
 from src.services.usage.service import UsageService
 from src.services.user.apikey import ApiKeyService
@@ -1203,6 +1211,14 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
             .all()
         )
 
+        # 查询当前用户的每模型调用次数
+        user_usage_rows = (
+            db.query(UserModelUsageCount.model, UserModelUsageCount.usage_count)
+            .filter(UserModelUsageCount.user_id == user.id)
+            .all()
+        )
+        user_usage_map: dict[str, int] = {row.model: row.usage_count for row in user_usage_rows}
+
         # 转换为响应格式（复用 PublicGlobalModelResponse schema）
         model_responses = [
             PublicGlobalModelResponse(
@@ -1214,6 +1230,7 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
                 default_tiered_pricing=gm.default_tiered_pricing,
                 supported_capabilities=gm.supported_capabilities,
                 config=gm.config,
+                usage_count=user_usage_map.get(gm.name, 0),
             )
             for gm in models
         ]

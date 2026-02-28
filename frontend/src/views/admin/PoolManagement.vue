@@ -652,7 +652,7 @@ async function loadOverview() {
   overviewLoading.value = true
   try {
     const res = await getPoolOverview()
-    poolProviders.value = res.items
+    poolProviders.value = res.items.filter(item => item.pool_enabled)
     // Auto-select first provider if none selected
     if (!selectedProviderId.value && res.items.length > 0) {
       await selectProvider(res.items[0].provider_id)

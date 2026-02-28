@@ -31,14 +31,15 @@ class ClaudeCapabilityDetector:
         request_body: dict[str, Any] | None = None,
     ) -> dict[str, bool]:
         """
-        从 Claude 请求头检测能力需求
+        从 Claude 请求头和请求体检测能力需求
 
         检测规则:
         - anthropic-beta: context-1m-xxx -> context_1m: True
+        - 请求体中 cache_control.ttl = "1h" -> cache_1h: True
 
         Args:
             headers: 请求头字典
-            request_body: 请求体（Claude 不使用，保留用于接口统一）
+            request_body: 请求体（用于检测 cache_control.ttl）
         """
         requirements: dict[str, bool] = {}
 
@@ -47,7 +48,57 @@ class ClaudeCapabilityDetector:
         if beta_header and "context-1m" in beta_header.lower():
             requirements["context_1m"] = True
 
+        # 从请求体检测 cache_1h
+        if request_body and _detect_cache_1h_in_body(request_body):
+            requirements["cache_1h"] = True
+
         return requirements
+
+
+def _has_cache_1h_ttl(block: dict[str, Any]) -> bool:
+    """检查单个内容块是否包含 cache_control.ttl = '1h'"""
+    cache_control = block.get("cache_control")
+    if isinstance(cache_control, dict):
+        return cache_control.get("ttl") == "1h"
+    return False
+
+
+def _detect_cache_1h_in_body(body: dict[str, Any]) -> bool:
+    """
+    扫描 Claude 请求体，检测是否包含 cache_control.ttl = "1h"
+
+    检查位置：
+    - system[].cache_control.ttl
+    - messages[].content[].cache_control.ttl
+    - tools[].cache_control.ttl
+    """
+    # 检查 system（数组格式）
+    system = body.get("system")
+    if isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict) and _has_cache_1h_ttl(block):
+                return True
+
+    # 检查 messages
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and _has_cache_1h_ttl(block):
+                        return True
+
+    # 检查 tools
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict) and _has_cache_1h_ttl(tool):
+                return True
+
+    return False
 
 
 @register_adapter

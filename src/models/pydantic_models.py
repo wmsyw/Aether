@@ -19,6 +19,9 @@ class CacheTTLPricing(BaseModel):
     cache_creation_price_per_1m: float = Field(
         ..., ge=0, description="该时长的缓存创建价格/M tokens"
     )
+    cache_read_price_per_1m: float | None = Field(
+        None, ge=0, description="该时长的缓存读取价格/M tokens"
+    )
 
 
 class PricingTier(BaseModel):
@@ -313,8 +316,8 @@ class ImportFromUpstreamSuccessItem(BaseModel):
 
     model_id: str = Field(..., description="上游模型 ID")
     provider_model_id: str = Field(..., description="Provider Model ID")
-    global_model_id: str | None = Field("", description="GlobalModel ID（如果已关联）")
-    global_model_name: str | None = Field("", description="GlobalModel 名称（如果已关联）")
+    global_model_id: str = Field(..., description="GlobalModel ID")
+    global_model_name: str = Field(..., description="GlobalModel 名称")
     created_global_model: bool = Field(
         False, description="是否新创建了 GlobalModel（始终为 false）"
     )

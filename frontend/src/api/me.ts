@@ -257,6 +257,7 @@ export const meApi = {
       default_tiered_pricing: TieredPricingConfig | null
       supported_capabilities: string[] | null
       config: Record<string, unknown> | null
+      usage_count: number
     }>
     total: number
   }> {

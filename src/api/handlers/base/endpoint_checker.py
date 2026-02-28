@@ -171,7 +171,7 @@ async def _calculate_and_record_usage(
         provider = db.query(Provider).filter(Provider.id == provider_api_key.provider_id).first()
         if provider:
             for ep in provider.endpoints:
-                if ep.api_format == api_format and ep.is_active:
+                if ep.api_format == api_format:
                     provider_endpoint = ep
                     break
 

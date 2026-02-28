@@ -17,6 +17,8 @@ export interface PublicGlobalModel {
   supported_capabilities: string[] | null
   // 模型配置（JSON）
   config: Record<string, unknown> | null
+  // 调用次数
+  usage_count: number
 }
 
 export interface PublicGlobalModelListResponse {

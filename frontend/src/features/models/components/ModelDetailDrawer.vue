@@ -139,26 +139,6 @@
                 </div>
               </div>
 
-              <!-- 模型偏好 -->
-              <div
-                v-if="model.supported_capabilities && model.supported_capabilities.length > 0"
-                class="space-y-3"
-              >
-                <h4 class="font-semibold text-sm">
-                  模型偏好
-                </h4>
-                <div class="flex flex-wrap gap-2">
-                  <Badge
-                    v-for="cap in model.supported_capabilities"
-                    :key="cap"
-                    variant="outline"
-                    class="text-xs"
-                  >
-                    {{ getCapabilityDisplayName(cap) }}
-                  </Badge>
-                </div>
-              </div>
-
               <!-- 默认定价 -->
               <div class="space-y-3">
                 <h4 class="font-semibold text-sm">
@@ -475,12 +455,10 @@ import { getGlobalModelRoutingPreview } from '@/api/global-models'
 // 使用外部类型定义
 import type { GlobalModelResponse } from '@/api/global-models'
 import type { TieredPricingConfig, PricingTier, ModelRoutingPreviewResponse } from '@/api/endpoints/types'
-import type { CapabilityDefinition } from '@/api/endpoints'
 import type { RoutingProviderInfo } from '@/api/global-models'
 
 const props = withDefaults(defineProps<Props>(), {
   hasBlockingDialogOpen: false,
-  capabilities: () => [],
 })
 const emit = defineEmits<{
   'update:open': [value: boolean]
@@ -500,7 +478,6 @@ interface Props {
   model: GlobalModelResponse | null
   open: boolean
   hasBlockingDialogOpen?: boolean
-  capabilities?: CapabilityDefinition[]
 }
 
 // RoutingTab 引用
@@ -570,12 +547,6 @@ function handleMappingsUpdate(_mappings: string[]) {
 defineExpose({
   refreshRoutingData
 })
-
-// 根据能力名称获取显示名称
-function getCapabilityDisplayName(capName: string): string {
-  const cap = props.capabilities?.find(c => c.name === capName)
-  return cap?.display_name || capName
-}
 
 // 检测是否有视频分辨率计费配置
 const hasVideoPricing = computed(() => {

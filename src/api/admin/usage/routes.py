@@ -1259,6 +1259,8 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             },
             "cache_creation_input_tokens": usage_record.cache_creation_input_tokens,
             "cache_read_input_tokens": usage_record.cache_read_input_tokens,
+            "cache_creation_input_tokens_5m": usage_record.cache_creation_input_tokens_5m or 0,
+            "cache_creation_input_tokens_1h": usage_record.cache_creation_input_tokens_1h or 0,
             "cache_creation_cost": getattr(usage_record, "cache_creation_cost_usd", 0.0),
             "cache_read_cost": getattr(usage_record, "cache_read_cost_usd", 0.0),
             "request_cost": getattr(usage_record, "request_cost_usd", 0.0),

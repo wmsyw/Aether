@@ -94,6 +94,34 @@ def extract_cache_creation_tokens(usage: dict[str, Any]) -> int:
     return old_format
 
 
+def extract_cache_creation_tokens_detail(usage: dict[str, Any]) -> tuple[int, int, int]:
+    """
+    提取缓存创建 tokens 细分（区分 5m 和 1h）
+
+    返回 (total, tokens_5m, tokens_1h) 三元组。
+    当无法区分时，tokens_5m 和 tokens_1h 均为 0，total 为合计值。
+    """
+    # 1. 嵌套格式
+    cache_creation = usage.get("cache_creation")
+    if isinstance(cache_creation, dict) and (
+        "ephemeral_5m_input_tokens" in cache_creation
+        or "ephemeral_1h_input_tokens" in cache_creation
+    ):
+        t5m = int(cache_creation.get("ephemeral_5m_input_tokens", 0))
+        t1h = int(cache_creation.get("ephemeral_1h_input_tokens", 0))
+        return t5m + t1h, t5m, t1h
+
+    # 2. 扁平新格式
+    if "claude_cache_creation_5_m_tokens" in usage or "claude_cache_creation_1_h_tokens" in usage:
+        t5m = int(usage.get("claude_cache_creation_5_m_tokens", 0))
+        t1h = int(usage.get("claude_cache_creation_1_h_tokens", 0))
+        return t5m + t1h, t5m, t1h
+
+    # 3. 旧格式：无法区分
+    old = int(usage.get("cache_creation_input_tokens", 0))
+    return old, 0, 0
+
+
 def build_sse_headers(extra_headers: dict[str, str] | None = None) -> dict[str, str]:
     """
     构建 SSE（text/event-stream）推荐响应头，用于减少代理缓冲带来的卡顿/成段输出。

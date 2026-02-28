@@ -29,6 +29,7 @@ class ProviderCandidate:
     needs_conversion: bool = False  # 是否需要格式转换
     provider_api_format: str = ""  # Provider 端点实际格式（用于健康度/熔断 bucket）
     output_limit: int | None = None  # GlobalModel 配置的模型输出上限
+    capability_miss_count: int = 0  # COMPATIBLE 能力不匹配数（0=完全匹配，用于排序）
 
     def _stable_order_key(self) -> tuple[int, int, str, str, str]:
         """

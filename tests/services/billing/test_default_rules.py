@@ -142,6 +142,76 @@ class TestDefaultBillingRuleGenerator:
         assert result.status == "complete"
         assert abs(float(result.cost) - 0.0005) < 1e-9
 
+    def test_default_rule_cache_ttl_pricing_overrides_cache_creation_price(self) -> None:
+        global_model = GlobalModel(
+            name="ttl-creation-model",
+            display_name="TTL Creation Model",
+            is_active=True,
+            default_price_per_request=0.0,
+            default_tiered_pricing={
+                "tiers": [
+                    {
+                        "up_to": None,
+                        "input_price_per_1m": 3.0,
+                        "output_price_per_1m": 15.0,
+                        "cache_creation_price_per_1m": 3.75,
+                        "cache_ttl_pricing": [
+                            {"ttl_minutes": 5, "cache_creation_price_per_1m": 3.75},
+                            {"ttl_minutes": 60, "cache_creation_price_per_1m": 6.0},
+                        ],
+                    }
+                ]
+            },
+        )
+
+        rule = DefaultBillingRuleGenerator.generate_for_model(
+            global_model=global_model,
+            model=None,
+            task_type="chat",
+        )
+
+        engine = FormulaEngine()
+
+        # TTL=5: cache_creation_price_per_1m=3.75
+        # 1_000_000 * 3.75 / 1M = 3.75
+        result_5m = engine.evaluate(
+            expression=rule.expression,
+            variables=rule.variables,
+            dimensions={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_tokens": 1_000_000,
+                "cache_read_tokens": 0,
+                "cache_ttl_minutes": 5,
+                "request_count": 1,
+                "total_input_context": 0,
+            },
+            dimension_mappings=rule.dimension_mappings,
+            strict_mode=True,
+        )
+        assert result_5m.status == "complete"
+        assert abs(float(result_5m.cost) - 3.75) < 1e-9
+
+        # TTL=60: cache_creation_price_per_1m=6.0
+        # 1_000_000 * 6.0 / 1M = 6.0
+        result_1h = engine.evaluate(
+            expression=rule.expression,
+            variables=rule.variables,
+            dimensions={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_tokens": 1_000_000,
+                "cache_read_tokens": 0,
+                "cache_ttl_minutes": 60,
+                "request_count": 1,
+                "total_input_context": 0,
+            },
+            dimension_mappings=rule.dimension_mappings,
+            strict_mode=True,
+        )
+        assert result_1h.status == "complete"
+        assert abs(float(result_1h.cost) - 6.0) < 1e-9
+
 
 class TestBillingRuleServiceDefaultFallback:
     def test_find_rule_returns_default_for_chat_when_no_db_rule(self) -> None:

@@ -176,7 +176,7 @@
               任务
             </TableHead>
             <TableHead class="w-[15%]">
-              用户/Provider
+              {{ isAdmin ? '用户/Provider' : 'Provider' }}
             </TableHead>
             <TableHead class="w-[12%]">
               状态
@@ -220,7 +220,10 @@
             <!-- 用户/Provider -->
             <TableCell>
               <div class="space-y-0.5 text-sm">
-                <div class="flex items-center gap-1.5">
+                <div
+                  v-if="isAdmin"
+                  class="flex items-center gap-1.5"
+                >
                   <User class="w-3 h-3 text-muted-foreground" />
                   <span class="truncate max-w-[100px]">{{ task.username }}</span>
                 </div>
@@ -367,7 +370,10 @@
 
           <!-- 信息网格 -->
           <div class="grid grid-cols-2 gap-2 text-xs">
-            <div class="flex items-center gap-1.5 text-muted-foreground">
+            <div
+              v-if="isAdmin"
+              class="flex items-center gap-1.5 text-muted-foreground"
+            >
               <User class="w-3 h-3" />
               <span class="truncate">{{ task.username }}</span>
             </div>
@@ -492,8 +498,10 @@
                 </span>
                 <span class="opacity-40">|</span>
                 <span>{{ formatDateFull(selectedTask.created_at) }}</span>
-                <span class="opacity-40">|</span>
-                <span>用户: {{ selectedTask.username }}</span>
+                <template v-if="isAdmin">
+                  <span class="opacity-40">|</span>
+                  <span>用户: {{ selectedTask.username }}</span>
+                </template>
                 <span class="opacity-40">|</span>
                 <span>Provider: {{ selectedTask.provider_name }}</span>
               </div>
@@ -882,8 +890,11 @@ import {
   ExternalLink,
   Copy,
 } from 'lucide-vue-next'
+import { useAuthStore } from '@/stores/auth'
 import { log } from '@/utils/logger'
 
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.user?.role === 'admin')
 const { toast } = useToast()
 const { copyToClipboard } = useClipboard()
 

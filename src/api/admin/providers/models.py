@@ -715,6 +715,7 @@ class AdminImportFromUpstreamAdapter(AdminApiAdapter):
                     # 1. 检查是否已存在同名的 ProviderModel
                     existing = (
                         db.query(Model)
+                        .options(joinedload(Model.global_model))
                         .filter(
                             Model.provider_id == self.provider_id,
                             Model.provider_model_name == model_id,
@@ -727,10 +728,8 @@ class AdminImportFromUpstreamAdapter(AdminApiAdapter):
                         success.append(
                             ImportFromUpstreamSuccessItem(
                                 model_id=model_id,
-                                global_model_id=existing.global_model_id or "",
-                                global_model_name=(
-                                    existing.global_model.name if existing.global_model else ""
-                                ),
+                                global_model_id=existing.global_model_id,
+                                global_model_name=existing.global_model.name,
                                 provider_model_id=existing.id,
                                 created_global_model=False,
                             )

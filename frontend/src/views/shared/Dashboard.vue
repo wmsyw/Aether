@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-6 px-4 sm:px-6 lg:px-0">
     <!-- 页面头部：统计卡片 + 公告 -->
-    <div class="flex flex-col sm:flex-row gap-6 sm:items-start">
+    <div class="flex flex-col lg:flex-row gap-6 lg:items-start">
       <!-- 左侧统计区域 -->
       <div
         ref="statsPanelRef"
@@ -215,12 +215,7 @@
               Monthly
             </Badge>
           </div>
-          <div
-            class="grid gap-2 sm:gap-3"
-            :class="[
-              hasCacheData ? 'grid-cols-2 xl:grid-cols-4' : 'grid-cols-1 max-w-xs'
-            ]"
-          >
+          <div class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             <Card
               v-if="cacheStats"
               class="relative p-3 sm:p-4 border-book-cloth/30"
@@ -284,7 +279,7 @@
       <!-- 右侧系统公告 -->
       <div
         id="announcements-section"
-        class="w-full sm:w-[260px] md:w-[300px] lg:w-[320px] flex-shrink-0 flex flex-col min-h-0"
+        class="w-full lg:w-[300px] xl:w-[320px] flex-shrink-0 flex flex-col min-h-0"
         :style="announcementsContainerStyle"
       >
         <div class="mb-3 flex items-center justify-between flex-shrink-0">
@@ -299,7 +294,7 @@
           </Badge>
         </div>
 
-        <Card class="overflow-hidden p-4 flex flex-col flex-1 min-h-0 h-full max-h-[280px] sm:max-h-none">
+        <Card class="overflow-hidden p-4 flex flex-col flex-1 min-h-0 h-full max-h-[280px] lg:max-h-none">
           <div
             v-if="loadingAnnouncements"
             class="flex-1 flex items-center justify-center"
@@ -856,7 +851,7 @@ const announcementsContainerStyle = computed(() => {
 
 function checkScreenSize() {
   if (typeof window !== 'undefined') {
-    isLargeScreen.value = window.innerWidth >= 640 // sm breakpoint
+    isLargeScreen.value = window.innerWidth >= 1024 // lg breakpoint
   }
 }
 

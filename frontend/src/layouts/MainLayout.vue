@@ -502,6 +502,7 @@ const navigation = computed(() => {
       title: '账户',
       items: [
          { name: '使用统计', href: '/dashboard/usage', icon: BarChart3 },
+         { name: '异步任务', href: '/dashboard/async-tasks', icon: Zap },
       ]
     }
   ]

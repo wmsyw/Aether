@@ -126,6 +126,11 @@ const routes: RouteRecordRaw[] = [
         path: 'models',
         name: 'ModelCatalog',
         component: () => importWithRetry(() => import('@/views/user/ModelCatalog.vue'))
+      },
+      {
+        path: 'async-tasks',
+        name: 'UserAsyncTasks',
+        component: () => importWithRetry(() => import('@/views/admin/AsyncTasks.vue'))
       }
     ]
   },

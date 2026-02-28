@@ -2556,16 +2556,18 @@ def _purge_stats_and_reset_counters(db: Session) -> None:
 class AdminPurgeUsageAdapter(AdminApiAdapter):
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """清空全部使用记录及相关统计数据"""
-        from src.models.database import RequestCandidate
+        from src.models.database import RequestCandidate, UserModelUsageCount
 
         db = context.db
 
         usage_count = db.query(Usage).count()
         candidates_count = db.query(RequestCandidate).count()
+        usage_counts_count = db.query(UserModelUsageCount).count()
 
         # 清空使用记录
         db.query(RequestCandidate).delete()
         db.query(Usage).delete()
+        db.query(UserModelUsageCount).delete()
 
         _purge_stats_and_reset_counters(db)
         db.commit()
@@ -2575,6 +2577,7 @@ class AdminPurgeUsageAdapter(AdminApiAdapter):
             "deleted": {
                 "usage_records": usage_count,
                 "request_candidates": candidates_count,
+                "user_model_usage_counts": usage_counts_count,
             },
         }
 

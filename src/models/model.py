@@ -69,8 +69,8 @@ class GlobalModel(ExportMixin, Base):
     #             "cache_creation_price_per_1m": 3.75,  # 可选
     #             "cache_read_price_per_1m": 0.30,      # 可选
     #             "cache_ttl_pricing": [                 # 可选：按缓存时长分价格
-    #                 {"ttl_minutes": 5, "cache_read_price_per_1m": 0.30},
-    #                 {"ttl_minutes": 60, "cache_read_price_per_1m": 0.50}
+    #                 {"ttl_minutes": 5, "cache_creation_price_per_1m": 3.75, "cache_read_price_per_1m": 0.30},
+    #                 {"ttl_minutes": 60, "cache_creation_price_per_1m": 6.00, "cache_read_price_per_1m": 0.50}
     #             ]
     #         },
     #         {"up_to": null, "input_price_per_1m": 1.25, ...}
@@ -132,9 +132,7 @@ class Model(ExportMixin, Base):
 
     设计原则:
     - Model 表示 Provider 对某个模型的具体实现
-    - global_model_id 可为空：
-      - 为空时：模型尚未关联到 GlobalModel，不参与路由
-      - 不为空时：模型已关联 GlobalModel，参与路由
+    - global_model_id 必填，必须关联到一个 GlobalModel
     - provider_model_name 是 Provider 侧的实际模型名称 (可能与 GlobalModel.name 不同)
     - 价格和能力配置可为空，为空时使用 GlobalModel 的默认值
     """
@@ -154,8 +152,8 @@ class Model(ExportMixin, Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     provider_id = Column(String(36), ForeignKey("providers.id"), nullable=False)
-    # 可为空：NULL 表示未关联，不参与路由；非 NULL 表示已关联，参与路由
-    global_model_id = Column(String(36), ForeignKey("global_models.id"), nullable=True, index=True)
+    # 必须关联一个 GlobalModel
+    global_model_id = Column(String(36), ForeignKey("global_models.id"), nullable=False, index=True)
 
     # Provider 映射配置
     provider_model_name = Column(String(200), nullable=False)  # Provider 侧的主模型名称

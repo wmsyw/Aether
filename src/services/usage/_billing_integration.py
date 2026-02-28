@@ -133,6 +133,8 @@ class UsageBillingIntegrationMixin:
             output_tokens=params.output_tokens,
             cache_creation_input_tokens=params.cache_creation_input_tokens,
             cache_read_input_tokens=params.cache_read_input_tokens,
+            cache_creation_input_tokens_5m=params.cache_creation_input_tokens_5m,
+            cache_creation_input_tokens_1h=params.cache_creation_input_tokens_1h,
             request_type=params.request_type,
             api_format=params.api_format,
             api_family=params.api_family,

@@ -86,6 +86,8 @@ class StreamContext:
     output_tokens: int = 0
     cached_tokens: int = 0
     cache_creation_tokens: int = 0
+    cache_creation_tokens_5m: int = 0  # 5min TTL 缓存创建
+    cache_creation_tokens_1h: int = 0  # 1h TTL 缓存创建
 
     # 响应内容
     _collected_text_parts: list[str] = field(default_factory=list, repr=False)
@@ -159,6 +161,8 @@ class StreamContext:
         self.output_tokens = 0
         self.cached_tokens = 0
         self.cache_creation_tokens = 0
+        self.cache_creation_tokens_5m = 0
+        self.cache_creation_tokens_1h = 0
         self.error_message = None
         self.upstream_response = None
         self.status_code = 200

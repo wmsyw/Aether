@@ -184,6 +184,8 @@ class ChatSyncExecutor:
             output_tokens = usage_info.get("output_tokens", 0)
             cache_creation_tokens = usage_info.get("cache_creation_input_tokens", 0)
             cached_tokens = usage_info.get("cache_read_input_tokens", 0)
+            cache_creation_tokens_5m = usage_info.get("cache_creation_input_tokens_5m", 0)
+            cache_creation_tokens_1h = usage_info.get("cache_creation_input_tokens_1h", 0)
 
             # 非流式成功时，返回给客户端的是提供商响应头（透传）
             # JSONResponse 会自动设置 content-type，但我们记录实际返回的完整头
@@ -211,6 +213,8 @@ class ChatSyncExecutor:
                 provider_request_body=ctx.provider_request_body,
                 cache_creation_tokens=cache_creation_tokens,
                 cache_read_tokens=cached_tokens,
+                cache_creation_tokens_5m=cache_creation_tokens_5m,
+                cache_creation_tokens_1h=cache_creation_tokens_1h,
                 is_stream=False,
                 provider_request_headers=ctx.provider_request_headers,
                 api_format=api_format,

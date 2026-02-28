@@ -179,7 +179,6 @@ const searchQuery = ref('')
 const existingGlobalModelIds = computed(() => {
   return new Set(
     existingModels.value
-      .filter(m => m.global_model_id)
       .map(m => m.global_model_id)
   )
 })

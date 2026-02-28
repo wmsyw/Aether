@@ -281,6 +281,14 @@
                             <span class="text-xs font-mono">${{ (detail.cache_read_cost || 0).toFixed(6) }}</span>
                           </div>
                         </div>
+                        <!-- 缓存创建 5m/1h 细分 -->
+                        <div
+                          v-if="(detail.cache_creation_input_tokens_5m || 0) > 0 || (detail.cache_creation_input_tokens_1h || 0) > 0"
+                          class="flex items-center pl-[56px]"
+                        >
+                          <span class="text-xs text-muted-foreground/50">5min: {{ detail.cache_creation_input_tokens_5m || 0 }}</span>
+                          <span class="text-xs text-muted-foreground/50 ml-4">1h: {{ detail.cache_creation_input_tokens_1h || 0 }}</span>
+                        </div>
                       </template>
                     </div>
                   </div>

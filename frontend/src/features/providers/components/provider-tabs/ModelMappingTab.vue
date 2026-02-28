@@ -325,6 +325,7 @@
     :models="models"
     :editing-group="editingGroup"
     :preselected-model-id="preselectedModelId"
+    :has-auto-fetch-key="hasAutoFetchKey"
     @saved="onDialogSaved"
   />
 
@@ -419,6 +420,11 @@ const models = computed(() => props.models ?? [])
 const aliasMappingPreview = computed(() => props.mappingPreview ?? null)
 const providerEndpoints = computed(() => props.endpoints ?? [])
 const providerKeysState = computed(() => props.providerKeys ?? [])
+
+// 是否有 key 配置了自动获取上游模型
+const hasAutoFetchKey = computed(() => {
+  return providerKeysState.value.some(k => k.auto_fetch_models)
+})
 
 // 展开状态
 const expandedItems = ref<Set<string>>(new Set())
@@ -641,18 +647,17 @@ async function onDialogSaved() {
   emit('refresh')
 }
 
-// 获取可用的 API 格式（有活跃端点，去重）
+// 获取可用的 API 格式（所有端点，去重；测试只关注 Key 是否支持，不依赖端点启用状态）
 const availableApiFormats = computed(() => {
   const formats = new Set(
     providerEndpoints.value
-      .filter(ep => ep.is_active)
       .map(ep => ep.api_format)
   )
   return [...formats]
 })
 
 // 获取映射项支持的 API 格式
-// 逻辑：找到支持该映射格式的所有活跃 Key，获取这些 Key 支持的所有格式，与活跃端点格式取交集
+// 逻辑：找到支持该映射格式的所有活跃 Key，获取这些 Key 支持的所有格式，与端点格式取交集
 function getItemAvailableFormats(item: CombinedMapping): string[] {
   // 精确映射：基于 group.apiFormats 筛选
   if (item.type === 'exact' && item.group?.apiFormats && item.group.apiFormats.length > 0) {
@@ -677,7 +682,7 @@ function getItemAvailableFormats(item: CombinedMapping): string[] {
       }
     }
 
-    // 与活跃端点格式取交集
+    // 与端点格式取交集
     return availableApiFormats.value.filter(fmt => keyFormats.has(fmt))
   }
 

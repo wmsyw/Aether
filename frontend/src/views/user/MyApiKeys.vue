@@ -76,9 +76,6 @@
               <TableHead class="min-w-[200px] h-12 font-semibold">
                 密钥名称
               </TableHead>
-              <TableHead class="min-w-[80px] h-12 font-semibold">
-                能力
-              </TableHead>
               <TableHead class="min-w-[160px] h-12 font-semibold">
                 密钥
               </TableHead>
@@ -117,42 +114,6 @@
                   <div class="text-xs text-muted-foreground mt-0.5">
                     创建于 {{ formatDate(apiKey.created_at) }}
                   </div>
-                </div>
-              </TableCell>
-
-              <!-- 能力 -->
-              <TableCell class="py-4">
-                <div class="flex gap-1.5 flex-wrap items-center">
-                  <template v-if="userConfigurableCapabilities.length > 0">
-                    <button
-                      v-for="cap in userConfigurableCapabilities"
-                      :key="cap.name"
-                      class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all"
-                      :class="[
-                        apiKey.is_locked ? 'opacity-50 cursor-not-allowed' : '',
-                        isCapabilityEnabled(apiKey, cap.name)
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-transparent text-muted-foreground border border-dashed border-muted-foreground/50 hover:border-primary/50 hover:text-foreground'
-                      ]"
-                      :title="apiKey.is_locked ? '已锁定' : getCapabilityTooltip(cap, isCapabilityEnabled(apiKey, cap.name))"
-                      :disabled="apiKey.is_locked"
-                      @click.stop="!apiKey.is_locked && toggleCapability(apiKey, cap.name)"
-                    >
-                      <Check
-                        v-if="isCapabilityEnabled(apiKey, cap.name)"
-                        class="w-3 h-3"
-                      />
-                      <Plus
-                        v-else
-                        class="w-3 h-3"
-                      />
-                      {{ cap.short_name || cap.display_name }}
-                    </button>
-                  </template>
-                  <span
-                    v-else
-                    class="text-muted-foreground text-xs"
-                  >-</span>
                 </div>
               </TableCell>
 
@@ -478,7 +439,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { meApi, type ApiKey } from '@/api/me'
-import { getAllCapabilities, type CapabilityDefinition } from '@/api/endpoints'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
@@ -495,7 +455,7 @@ import {
   TableRow
 } from '@/components/ui'
 import RefreshButton from '@/components/ui/refresh-button.vue'
-import { Plus, Key, Copy, Trash2, Loader2, Activity, CheckCircle, Power, Check } from 'lucide-vue-next'
+import { Plus, Key, Copy, Trash2, Loader2, Activity, CheckCircle, Power } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
 import { parseApiError } from '@/utils/errorParser'
@@ -526,25 +486,9 @@ const newKeyName = ref('')
 const newKeyValue = ref('')
 const keyToDelete = ref<ApiKey | null>(null)
 
-// 能力配置相关
-const availableCapabilities = ref<CapabilityDefinition[]>([])
-const userConfigurableCapabilities = computed(() =>
-  availableCapabilities.value.filter(cap => cap.config_mode === 'user_configurable')
-)
-const savingCapability = ref<string | null>(null) // 正在保存的能力标识 "keyId:capName"
-
 onMounted(() => {
   loadApiKeys()
-  loadCapabilities()
 })
-
-async function loadCapabilities() {
-  try {
-    availableCapabilities.value = await getAllCapabilities()
-  } catch (error) {
-    log.error('Failed to load capabilities:', error)
-  }
-}
 
 async function loadApiKeys() {
   loading.value = true
@@ -625,50 +569,6 @@ async function toggleApiKey(apiKey: ApiKey) {
   }
 }
 
-// 检查某个能力是否已启用
-function isCapabilityEnabled(apiKey: ApiKey, capName: string): boolean {
-  return apiKey.force_capabilities?.[capName] || false
-}
-
-// 切换能力配置
-async function toggleCapability(apiKey: ApiKey, capName: string) {
-  const capKey = `${apiKey.id}:${capName}`
-  if (savingCapability.value === capKey) return // 防止重复点击
-
-  savingCapability.value = capKey
-  try {
-    const currentEnabled = isCapabilityEnabled(apiKey, capName)
-    const newEnabled = !currentEnabled
-
-    // 构建新的能力配置
-    const newCapabilities: Record<string, boolean> = { ...(apiKey.force_capabilities || {}) }
-
-    if (newEnabled) {
-      newCapabilities[capName] = true
-    } else {
-      delete newCapabilities[capName]
-    }
-
-    const capabilitiesData = Object.keys(newCapabilities).length > 0 ? newCapabilities : null
-
-    // 调用 API 保存
-    await meApi.updateApiKeyCapabilities(apiKey.id, {
-      force_capabilities: capabilitiesData
-    })
-
-    // 更新本地数据
-    const index = apiKeys.value.findIndex(k => k.id === apiKey.id)
-    if (index !== -1) {
-      apiKeys.value[index].force_capabilities = capabilitiesData
-    }
-  } catch (err) {
-    log.error('保存能力配置失败:', err)
-    showError('保存失败，请重试')
-  } finally {
-    savingCapability.value = null
-  }
-}
-
 async function copyApiKey(apiKey: ApiKey) {
   try {
     // 调用后端 API 获取完整密钥
@@ -743,14 +643,6 @@ function formatRelativeTime(dateString: string): string {
   if (diffDays < 7) return `${diffDays}天前`
 
   return formatDate(dateString)
-}
-
-// 获取能力按钮的提示文字
-function getCapabilityTooltip(cap: CapabilityDefinition, isEnabled: boolean): string {
-  if (isEnabled) {
-    return `[已启用] 此密钥只能访问支持${cap.display_name}的模型`
-  }
-  return `${cap.description}`
 }
 
 </script>

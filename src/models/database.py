@@ -1001,8 +1001,8 @@ class GlobalModel(ExportMixin, Base):
     #             "cache_creation_price_per_1m": 3.75,  # 可选
     #             "cache_read_price_per_1m": 0.30,      # 可选
     #             "cache_ttl_pricing": [                 # 可选：按缓存时长分价格
-    #                 {"ttl_minutes": 5, "cache_read_price_per_1m": 0.30},
-    #                 {"ttl_minutes": 60, "cache_read_price_per_1m": 0.50}
+    #                 {"ttl_minutes": 5, "cache_creation_price_per_1m": 3.75, "cache_read_price_per_1m": 0.30},
+    #                 {"ttl_minutes": 60, "cache_creation_price_per_1m": 6.00, "cache_read_price_per_1m": 0.50}
     #             ]
     #         },
     #         {"up_to": null, "input_price_per_1m": 1.25, ...}
@@ -2697,6 +2697,37 @@ class GeminiFileMapping(Base):
     __table_args__ = (
         Index("idx_gemini_file_mappings_expires", "expires_at"),
         Index("idx_gemini_file_mappings_source_hash", "source_hash"),
+    )
+
+
+class UserModelUsageCount(Base):
+    """用户-模型维度调用次数计数器
+
+    每个用户对每个模型维护一个原子递增的计数器，
+    避免从 Usage 表聚合查询，查询性能 O(N) 其中 N 是用户使用过的模型数。
+    """
+
+    __tablename__ = "user_model_usage_counts"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    model = Column(String(100), nullable=False)
+    usage_count = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "model", name="uq_user_model_usage_count"),
+        Index("idx_user_model_usage_user", "user_id"),
+        Index("idx_user_model_usage_model", "model"),
     )
 
 

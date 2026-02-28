@@ -100,6 +100,8 @@ class StreamUsageTracker:
         self.output_tokens = 0
         self.cache_creation_input_tokens = 0
         self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens_5m = 0
+        self.cache_creation_input_tokens_1h = 0
         self.accumulated_content = ""
 
         # 完整响应跟踪（仅用于内部统计，不记录到数据库）
@@ -477,6 +479,8 @@ class StreamUsageTracker:
         """
         import time
 
+        from src.api.handlers.base.utils import extract_cache_creation_tokens_detail
+
         self.start_time = time.time()
         self.request_data = request_data  # 保存请求数据
 
@@ -545,21 +549,17 @@ class StreamUsageTracker:
                     # 如果响应中包含准确的usage信息，使用它
                     self.input_tokens = usage.get("input_tokens", self.input_tokens)
                     self.output_tokens = usage.get("output_tokens", self.output_tokens)
-                    self.cache_creation_input_tokens = usage.get(
-                        "cache_creation_input_tokens", self.cache_creation_input_tokens
-                    )
                     self.cache_read_input_tokens = usage.get(
                         "cache_read_input_tokens", self.cache_read_input_tokens
                     )
 
-                    # 处理新的cache_creation格式
-                    if "cache_creation" in usage:
-                        cache_creation_data = usage.get("cache_creation", {})
-                        # 如果没有cache_creation_input_tokens，尝试从cache_creation中获取
-                        if not self.cache_creation_input_tokens:
-                            self.cache_creation_input_tokens = cache_creation_data.get(
-                                "ephemeral_5m_input_tokens", 0
-                            ) + cache_creation_data.get("ephemeral_1h_input_tokens", 0)
+                    # 统一提取 cache_creation tokens（新格式优先于旧格式）
+                    total, t5m, t1h = extract_cache_creation_tokens_detail(usage)
+                    if total:
+                        self.cache_creation_input_tokens = total
+                    if t5m or t1h:
+                        self.cache_creation_input_tokens_5m = t5m
+                        self.cache_creation_input_tokens_1h = t1h
 
         finally:
             # 流结束后记录使用量
@@ -768,6 +768,8 @@ class StreamUsageTracker:
                 output_tokens=self.output_tokens,
                 cache_creation_input_tokens=self.cache_creation_input_tokens,
                 cache_read_input_tokens=self.cache_read_input_tokens,
+                cache_creation_input_tokens_5m=self.cache_creation_input_tokens_5m,
+                cache_creation_input_tokens_1h=self.cache_creation_input_tokens_1h,
                 request_type="chat",
                 api_format=self.api_format,
                 api_family=self.api_family,

@@ -18,6 +18,8 @@ from src.services.scheduling.utils import affinity_hash
 from src.services.system.config import SystemConfigService
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.orm import Session
 
     from src.models.database import ProviderAPIKey
@@ -30,6 +32,28 @@ class CandidateSorter:
     def __init__(self, config: SchedulingConfig) -> None:
         self._config = config
 
+    @staticmethod
+    def _split_by_capability_match(
+        candidates: list[ProviderCandidate],
+    ) -> tuple[list[ProviderCandidate], list[ProviderCandidate]]:
+        """按 capability_miss_count 分组：完全匹配(0)在前，部分匹配(>0)在后"""
+        full_match = [c for c in candidates if c.capability_miss_count == 0]
+        partial_match = [c for c in candidates if c.capability_miss_count > 0]
+        return full_match, partial_match
+
+    def _with_capability_split(
+        self,
+        candidates: list[ProviderCandidate],
+        sort_fn: Callable[..., list[ProviderCandidate]],
+        *args: object,
+        **kwargs: object,
+    ) -> list[ProviderCandidate]:
+        """通用包装：先按 capability_miss_count 分组，再分别排序后合并"""
+        if not candidates:
+            return candidates
+        full_match, partial_match = self._split_by_capability_match(candidates)
+        return sort_fn(full_match, *args, **kwargs) + sort_fn(partial_match, *args, **kwargs)
+
     def _apply_priority_mode_sort(
         self,
         candidates: list[ProviderCandidate],
@@ -40,7 +64,8 @@ class CandidateSorter:
         """
         根据优先级模式对候选列表排序（数字越小越优先）
 
-        排序规则（受 keep_priority_on_conversion 配置影响）：
+        排序规则：
+        0. 按 capability_miss_count 分组：完全匹配(0)在前，部分匹配(>0)在后
         1. 如果全局配置 keep_priority_on_conversion=True，所有候选保持原优先级
         2. 否则，按 needs_conversion 和 provider.keep_priority_on_conversion 分组：
            - 保持优先级的候选（exact 或 provider.keep_priority_on_conversion=True）按原优先级排序
@@ -49,6 +74,21 @@ class CandidateSorter:
            - provider: 按 Provider.provider_priority -> Key.internal_priority 排序
            - global_key: 按 Key.global_priority_by_format 排序
         """
+        if not candidates:
+            return candidates
+
+        return self._with_capability_split(
+            candidates, self._apply_priority_mode_sort_inner, db, affinity_key, api_format
+        )
+
+    def _apply_priority_mode_sort_inner(
+        self,
+        candidates: list[ProviderCandidate],
+        db: Session,
+        affinity_key: str | None = None,
+        api_format: str | None = None,
+    ) -> list[ProviderCandidate]:
+        """优先级模式排序的内部实现（不含 capability_miss_count 分组）"""
         if not candidates:
             return candidates
 
@@ -159,10 +199,20 @@ class CandidateSorter:
         负载均衡模式：同优先级内随机轮换
 
         排序逻辑：
+        0. 按 capability_miss_count 分组：完全匹配(0)在前，部分匹配(>0)在后
         1. 按优先级分组（provider_priority, internal_priority 或 global_priority_by_format）
         2. 同优先级组内随机打乱
         3. 不考虑缓存亲和性
         """
+        if not candidates:
+            return candidates
+
+        return self._with_capability_split(candidates, self._apply_load_balance_inner, api_format)
+
+    def _apply_load_balance_inner(
+        self, candidates: list[ProviderCandidate], api_format: str | None = None
+    ) -> list[ProviderCandidate]:
+        """负载均衡排序的内部实现（不含 capability_miss_count 分组）"""
         if not candidates:
             return candidates
 
