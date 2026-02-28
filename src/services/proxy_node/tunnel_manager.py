@@ -201,6 +201,7 @@ class TunnelManager:
     def __init__(self) -> None:
         self._connections: dict[str, list[TunnelConnection]] = {}  # node_id -> [conn, ...]
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._draining: bool = False
 
     def _background(self, coro: Any) -> None:  # noqa: ANN401
         """启动 fire-and-forget task，通过 set 持有引用防止 GC 回收，完成后自动清理"""
@@ -277,6 +278,56 @@ class TunnelManager:
         )
         return True
 
+    async def shutdown_all(self, drain_timeout: float = 60.0) -> None:
+        """优雅关闭所有 tunnel 连接：drain 飞行中请求 -> GoAway -> 关闭 WebSocket。
+
+        在 worker 即将退出时调用。先标记 draining 阻止新请求进入，
+        等待飞行中的 stream 完成（最多 drain_timeout 秒），
+        然后发送 GoAway 让 proxy 端重连到其他 worker。
+        """
+        all_conns = [c for conns in self._connections.values() for c in conns]
+        if not all_conns:
+            return
+
+        # 标记 draining，send_request 将拒绝新请求
+        self._draining = True
+
+        total_streams = sum(c.stream_count for c in all_conns)
+        if total_streams > 0:
+            logger.info(
+                "draining {} in-flight streams on {} connections (timeout={}s)",
+                total_streams,
+                len(all_conns),
+                drain_timeout,
+            )
+            try:
+                await asyncio.wait_for(self._wait_streams_drain(all_conns), timeout=drain_timeout)
+            except asyncio.TimeoutError:
+                remaining = sum(c.stream_count for c in all_conns)
+                logger.warning("drain timeout, {} streams still in-flight", remaining)
+
+        logger.info("sending GoAway to {} tunnel connections", len(all_conns))
+
+        async def _close_conn(conn: TunnelConnection) -> None:
+            try:
+                await asyncio.wait_for(
+                    conn.send_frame(Frame(0, MsgType.GOAWAY, 0, b"")),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
+            try:
+                await conn.ws.close(code=1001, reason="server shutting down")
+            except Exception:
+                pass
+
+        await asyncio.gather(*(_close_conn(c) for c in all_conns), return_exceptions=True)
+
+    async def _wait_streams_drain(self, conns: list[TunnelConnection]) -> None:
+        """轮询等待所有连接的 pending_streams 清空"""
+        while any(c.stream_count > 0 for c in conns):
+            await asyncio.sleep(0.5)
+
     def has_tunnel(self, node_id: str) -> bool:
         """检查指定 node 是否有存活的 tunnel 连接（纯检查，无副作用）
 
@@ -308,6 +359,9 @@ class TunnelManager:
         """
         通过 tunnel 发送 HTTP 请求，返回 StreamState 用于读取响应。
         """
+        if self._draining:
+            raise TunnelStreamError("tunnel manager is draining, rejecting new requests")
+
         conn = self.get_connection(node_id)
         if not conn:
             raise TunnelStreamError(f"tunnel not connected for node {node_id}")

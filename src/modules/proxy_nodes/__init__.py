@@ -101,13 +101,18 @@ async def _on_startup() -> None:
 
 
 async def _on_shutdown() -> None:
-    """停止心跳检测调度器"""
+    """优雅关闭 tunnel 连接并停止心跳检测调度器"""
     import logging
 
     from src.services.proxy_node.health_scheduler import get_proxy_node_health_scheduler
+    from src.services.proxy_node.tunnel_manager import get_tunnel_manager
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     logger = logging.getLogger("aether.modules.proxy_nodes")
+
+    # 先向所有 tunnel 连接发送 GoAway，让 proxy 端立即重连到其他 worker
+    manager = get_tunnel_manager()
+    await manager.shutdown_all()
 
     from src.clients import get_redis_client
 
