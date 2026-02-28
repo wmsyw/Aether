@@ -392,13 +392,13 @@ class ProxyNodeService:
         query = db.query(ProxyNode)
         if status:
             normalized = status.strip().lower()
-            allowed = {"online", "unhealthy", "offline"}
+            allowed = {"online", "offline"}
             if normalized not in allowed:
                 raise InvalidRequestException(f"status 必须是以下之一: {sorted(allowed)}", "status")
             query = query.filter(ProxyNode.status == ProxyNodeStatus(normalized))
 
         total = query.count()
-        nodes = query.order_by(ProxyNode.updated_at.desc()).offset(skip).limit(limit).all()
+        nodes = query.order_by(ProxyNode.name.asc()).offset(skip).limit(limit).all()
         return nodes, total
 
     @staticmethod

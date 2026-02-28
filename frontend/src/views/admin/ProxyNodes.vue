@@ -124,10 +124,10 @@
                 状态
               </TableHead>
               <TableHead class="w-[100px] h-12 font-semibold text-center">
-                连接数
+                总请求
               </TableHead>
               <TableHead class="w-[100px] h-12 font-semibold text-center">
-                总请求
+                失败率
               </TableHead>
               <TableHead class="w-[100px] h-12 font-semibold text-center">
                 延迟
@@ -181,10 +181,13 @@
                 </Badge>
               </TableCell>
               <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ node.active_connections }}</span>
+                <span class="text-sm tabular-nums">{{ formatNumber(node.total_requests) }}</span>
               </TableCell>
               <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ formatNumber(node.total_requests) }}</span>
+                <span
+                  class="text-sm tabular-nums"
+                  :class="failureRate(node) > 5 ? 'text-destructive font-medium' : ''"
+                >{{ formatFailureRate(node) }}</span>
               </TableCell>
               <TableCell class="py-4 text-center">
                 <span class="text-sm tabular-nums">{{ node.avg_latency_ms != null ? `${node.avg_latency_ms.toFixed(0)}ms` : '-' }}</span>
@@ -301,14 +304,21 @@
               {{ statusLabel(node.status) }}
             </Badge>
           </div>
-          <div class="grid grid-cols-3 gap-2 text-xs text-muted-foreground mb-3">
+          <div class="grid grid-cols-4 gap-2 text-xs text-muted-foreground mb-3">
             <div>
               <span class="block text-foreground/60">区域</span>
               <span>{{ formatRegion(node.region) }}</span>
             </div>
             <div>
-              <span class="block text-foreground/60">连接</span>
-              <span class="tabular-nums">{{ node.active_connections }}</span>
+              <span class="block text-foreground/60">总请求</span>
+              <span class="tabular-nums">{{ formatNumber(node.total_requests) }}</span>
+            </div>
+            <div>
+              <span class="block text-foreground/60">失败率</span>
+              <span
+                class="tabular-nums"
+                :class="failureRate(node) > 5 ? 'text-destructive font-medium' : ''"
+              >{{ formatFailureRate(node) }}</span>
             </div>
             <div>
               <span class="block text-foreground/60">延迟</span>
@@ -978,6 +988,20 @@ function formatTime(iso: string | null) {
   if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
   return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function failureRate(node: ProxyNode) {
+  if (!node.total_requests) return 0
+  const failed = (node.failed_requests || 0) + (node.dns_failures || 0) + (node.stream_errors || 0)
+  return (failed / node.total_requests) * 100
+}
+
+function formatFailureRate(node: ProxyNode) {
+  if (!node.total_requests) return '-'
+  const rate = failureRate(node)
+  if (rate === 0) return '0%'
+  if (rate < 0.1) return '<0.1%'
+  return `${rate.toFixed(1)}%`
 }
 
 function nodeAddress(node: ProxyNode) {

@@ -224,7 +224,6 @@ class ProxyNodeStatus(PyEnum):
     """代理节点状态"""
 
     ONLINE = "online"
-    UNHEALTHY = "unhealthy"
     OFFLINE = "offline"
 
 

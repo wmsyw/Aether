@@ -21,7 +21,7 @@ pub fn install_service(config_path: &Path) -> anyhow::Result<()> {
         anyhow::bail!("systemd not available");
     }
     if !is_root() {
-        anyhow::bail!("root required, use: sudo aether-proxy setup");
+        anyhow::bail!("root required, use: sudo ./aether-proxy setup");
     }
 
     let exe_path = std::env::current_exe()?.canonicalize()?;
@@ -94,11 +94,11 @@ pub fn install_service(config_path: &Path) -> anyhow::Result<()> {
 
     eprintln!();
     eprintln!("  Commands:");
-    eprintln!("    aether-proxy status          # service status");
-    eprintln!("    aether-proxy logs            # tail logs");
-    eprintln!("    sudo aether-proxy restart    # restart");
-    eprintln!("    sudo aether-proxy stop       # stop");
-    eprintln!("    sudo aether-proxy uninstall  # remove service");
+    eprintln!("    ./aether-proxy status          # service status");
+    eprintln!("    ./aether-proxy logs            # tail logs");
+    eprintln!("    sudo ./aether-proxy restart    # restart");
+    eprintln!("    sudo ./aether-proxy stop       # stop");
+    eprintln!("    sudo ./aether-proxy uninstall  # remove service");
     eprintln!();
 
     Ok(())
@@ -166,7 +166,7 @@ pub fn is_service_active() -> bool {
 
 fn ensure_service_installed() -> anyhow::Result<()> {
     if !std::path::Path::new(UNIT_PATH).exists() {
-        anyhow::bail!("service not installed, run `sudo aether-proxy setup` first");
+        anyhow::bail!("service not installed, run `sudo ./aether-proxy setup` first");
     }
     Ok(())
 }
@@ -174,7 +174,7 @@ fn ensure_service_installed() -> anyhow::Result<()> {
 fn ensure_root_and_service() -> anyhow::Result<()> {
     ensure_service_installed()?;
     if !is_root() {
-        anyhow::bail!("root required, use: sudo aether-proxy <command>");
+        anyhow::bail!("root required, use: sudo ./aether-proxy <command>");
     }
     Ok(())
 }

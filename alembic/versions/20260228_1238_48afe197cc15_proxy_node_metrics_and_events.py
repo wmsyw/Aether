@@ -31,7 +31,31 @@ def _table_exists(table_name: str) -> bool:
     return table_name in insp.get_table_names()
 
 
+def _enum_has_value(enum_name: str, value: str) -> bool:
+    """检查 PostgreSQL 枚举类型是否包含指定值"""
+    bind = op.get_bind()
+    result = bind.execute(
+        sa.text(
+            "SELECT 1 FROM pg_enum e JOIN pg_type t ON e.enumtypid = t.oid"
+            " WHERE t.typname = :enum_name AND e.enumlabel = :value"
+        ),
+        {"enum_name": enum_name, "value": value},
+    )
+    return result.fetchone() is not None
+
+
 def upgrade() -> None:
+    # proxy_nodes: 将已废弃的 unhealthy 状态迁移为 offline，然后从枚举中移除
+    if _enum_has_value("proxynodestatus", "unhealthy"):
+        op.execute("UPDATE proxy_nodes SET status = 'offline' WHERE status = 'unhealthy'")
+        op.execute("ALTER TYPE proxynodestatus RENAME TO proxynodestatus_old")
+        op.execute("CREATE TYPE proxynodestatus AS ENUM ('online', 'offline')")
+        op.execute(
+            "ALTER TABLE proxy_nodes ALTER COLUMN status TYPE proxynodestatus"
+            " USING status::text::proxynodestatus"
+        )
+        op.execute("DROP TYPE proxynodestatus_old")
+
     # proxy_nodes: 新增错误指标字段
     if not _column_exists("proxy_nodes", "failed_requests"):
         op.add_column(
@@ -102,6 +126,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 恢复 proxynodestatus 枚举，加回 unhealthy
+    if not _enum_has_value("proxynodestatus", "unhealthy"):
+        op.execute("ALTER TYPE proxynodestatus RENAME TO proxynodestatus_old")
+        op.execute("CREATE TYPE proxynodestatus AS ENUM ('online', 'unhealthy', 'offline')")
+        op.execute(
+            "ALTER TABLE proxy_nodes ALTER COLUMN status TYPE proxynodestatus"
+            " USING status::text::proxynodestatus"
+        )
+        op.execute("DROP TYPE proxynodestatus_old")
+
     if _table_exists("proxy_node_events"):
         op.drop_index(op.f("ix_proxy_node_events_node_id"), table_name="proxy_node_events")
         op.drop_index("idx_proxy_node_events_node_created", table_name="proxy_node_events")
