@@ -25,7 +25,6 @@ _COMPARE_IGNORE_FIELDS = frozenset(
         "updated_at",
         "primary_reset_seconds",
         "secondary_reset_seconds",
-        "code_review_reset_seconds",
     }
 )
 _CACHE_TTL_SECONDS = 30.0

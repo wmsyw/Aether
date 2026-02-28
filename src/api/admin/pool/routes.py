@@ -109,6 +109,144 @@ async def batch_import_keys(
 ALLOWED_ACTIONS = {"enable", "disable", "delete", "clear_cooldown", "reset_cost"}
 
 
+def _to_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_percent(value: float) -> str:
+    clamped = max(0.0, min(value, 100.0))
+    return f"{clamped:.1f}%"
+
+
+def _format_quota_value(value: float) -> str:
+    rounded = round(value)
+    if abs(value - rounded) < 1e-6:
+        return str(rounded)
+    return f"{value:.1f}"
+
+
+def _build_codex_account_quota(upstream_metadata: dict[str, Any]) -> str | None:
+    codex = upstream_metadata.get("codex")
+    if not isinstance(codex, dict):
+        return None
+
+    parts: list[str] = []
+
+    primary_used = _to_float(codex.get("primary_used_percent"))
+    if primary_used is not None:
+        parts.append(f"周剩余 {_format_percent(100.0 - primary_used)}")
+
+    secondary_used = _to_float(codex.get("secondary_used_percent"))
+    if secondary_used is not None:
+        parts.append(f"5H剩余 {_format_percent(100.0 - secondary_used)}")
+
+    if parts:
+        return " | ".join(parts)
+
+    has_credits = codex.get("has_credits")
+    credits_balance = _to_float(codex.get("credits_balance"))
+    if has_credits is True and credits_balance is not None:
+        return f"积分 {credits_balance:.2f}"
+    if has_credits is True:
+        return "有积分"
+    return None
+
+
+def _build_kiro_account_quota(upstream_metadata: dict[str, Any]) -> str | None:
+    kiro = upstream_metadata.get("kiro")
+    if not isinstance(kiro, dict):
+        return None
+
+    if kiro.get("is_banned") is True:
+        return "账号已封禁"
+
+    usage_percentage = _to_float(kiro.get("usage_percentage"))
+    if usage_percentage is not None:
+        remaining = 100.0 - usage_percentage
+        current_usage = _to_float(kiro.get("current_usage"))
+        usage_limit = _to_float(kiro.get("usage_limit"))
+        if (
+            current_usage is not None
+            and usage_limit is not None
+            and usage_limit > 0
+        ):
+            return (
+                f"剩余 {_format_percent(remaining)} "
+                f"({_format_quota_value(current_usage)}/{_format_quota_value(usage_limit)})"
+            )
+        return f"剩余 {_format_percent(remaining)}"
+
+    remaining = _to_float(kiro.get("remaining"))
+    usage_limit = _to_float(kiro.get("usage_limit"))
+    if remaining is not None and usage_limit is not None and usage_limit > 0:
+        return f"剩余 {_format_quota_value(remaining)}/{_format_quota_value(usage_limit)}"
+    return None
+
+
+def _build_antigravity_account_quota(upstream_metadata: dict[str, Any]) -> str | None:
+    antigravity = upstream_metadata.get("antigravity")
+    if not isinstance(antigravity, dict):
+        return None
+
+    if antigravity.get("is_forbidden") is True:
+        return "访问受限"
+
+    quota_by_model = antigravity.get("quota_by_model")
+    if not isinstance(quota_by_model, dict) or not quota_by_model:
+        return None
+
+    remaining_list: list[float] = []
+    for raw_info in quota_by_model.values():
+        if not isinstance(raw_info, dict):
+            continue
+
+        used_percent = _to_float(raw_info.get("used_percent"))
+        if used_percent is None:
+            remaining_fraction = _to_float(raw_info.get("remaining_fraction"))
+            if remaining_fraction is not None:
+                used_percent = (1.0 - remaining_fraction) * 100.0
+
+        if used_percent is None:
+            continue
+
+        remaining = max(0.0, min(100.0 - used_percent, 100.0))
+        remaining_list.append(remaining)
+
+    if not remaining_list:
+        return None
+
+    min_remaining = min(remaining_list)
+    if len(remaining_list) == 1:
+        return f"剩余 {_format_percent(min_remaining)}"
+    return f"最低剩余 {_format_percent(min_remaining)} ({len(remaining_list)} 模型)"
+
+
+def _build_account_quota(provider_type: str, upstream_metadata: Any) -> str | None:
+    if not isinstance(upstream_metadata, dict):
+        return None
+
+    normalized_type = provider_type.strip().lower()
+    if normalized_type == "codex":
+        return _build_codex_account_quota(upstream_metadata)
+    if normalized_type == "kiro":
+        return _build_kiro_account_quota(upstream_metadata)
+    if normalized_type == "antigravity":
+        return _build_antigravity_account_quota(upstream_metadata)
+    return None
+
+
 @router.post("/{provider_id}/keys/batch-action", response_model=BatchActionResponse)
 async def batch_action_keys(
     provider_id: str,
@@ -192,6 +330,7 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
 
         pcfg = parse_pool_config(getattr(provider, "config", None))
         pid = str(provider.id)
+        provider_type = str(getattr(provider, "provider_type", "custom") or "custom")
 
         # Base query
         q = db.query(ProviderAPIKey).filter(ProviderAPIKey.provider_id == pid)
@@ -271,6 +410,10 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
                     key_name=k.name or "",
                     is_active=bool(k.is_active),
                     auth_type=str(getattr(k, "auth_type", "api_key") or "api_key"),
+                    account_quota=_build_account_quota(
+                        provider_type,
+                        getattr(k, "upstream_metadata", None),
+                    ),
                     cooldown_reason=cd_reason,
                     cooldown_ttl_seconds=cd_ttl,
                     cost_window_usage=cost_totals.get(kid, 0),

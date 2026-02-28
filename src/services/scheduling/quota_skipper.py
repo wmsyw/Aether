@@ -33,7 +33,7 @@ def is_key_quota_exhausted(
 
     Requirements:
     - Kiro: account-level quota. When remaining == 0, skip this key; allow again when remaining > 0.
-    - Codex: only consider weekly quota + 5H quota (ignore code review quota).
+    - Codex: only consider weekly quota + 5H quota.
              If either remaining is 0%, skip this key.
     - Antigravity: quota is per-model; do not disable the account.
                    When the requested model's quota is 0%, skip this key.
