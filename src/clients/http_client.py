@@ -73,7 +73,7 @@ class HTTPClientPool:
             # 双重检查，避免重复创建
             if cls._default_client is None:
                 cls._default_client = httpx.AsyncClient(
-                    http2=False,  # 暂时禁用HTTP/2以提高兼容性
+                    http2=config.enable_http2,
                     verify=get_ssl_context(),  # 使用 certifi 证书
                     timeout=httpx.Timeout(
                         connect=config.http_connect_timeout,
@@ -106,7 +106,7 @@ class HTTPClientPool:
         """
         if cls._default_client is None:
             cls._default_client = httpx.AsyncClient(
-                http2=False,  # 暂时禁用HTTP/2以提高兼容性
+                http2=config.enable_http2,
                 verify=get_ssl_context(),  # 使用 certifi 证书
                 timeout=httpx.Timeout(
                     connect=config.http_connect_timeout,
@@ -143,7 +143,7 @@ class HTTPClientPool:
         if name not in cls._clients:
             # 合并默认配置和自定义配置
             default_config = {
-                "http2": False,
+                "http2": config.enable_http2,
                 "verify": get_ssl_context(),
                 "timeout": httpx.Timeout(
                     connect=config.http_connect_timeout,
@@ -282,7 +282,7 @@ class HTTPClientPool:
 
             # 创建新客户端（使用默认超时，请求时可覆盖）
             client_config: dict[str, Any] = {
-                "http2": False,
+                "http2": config.enable_http2,
                 "verify": get_ssl_context_for_profile(tls_profile),
                 "follow_redirects": True,
                 "limits": httpx.Limits(
@@ -377,7 +377,7 @@ class HTTPClientPool:
                 response = await client.get('https://example.com')
         """
         default_config = {
-            "http2": False,
+            "http2": config.enable_http2,
             "verify": get_ssl_context(),
             "timeout": httpx.Timeout(
                 connect=config.http_connect_timeout,
@@ -416,7 +416,7 @@ class HTTPClientPool:
             配置好的 httpx.AsyncClient 实例（调用者需要负责关闭）
         """
         client_config: dict[str, Any] = {
-            "http2": False,
+            "http2": config.enable_http2,
             "verify": get_ssl_context_for_profile(tls_profile),
             "follow_redirects": True,
         }

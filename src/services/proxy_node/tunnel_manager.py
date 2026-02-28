@@ -8,6 +8,7 @@ WebSocket 隧道管理器
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import time
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,10 @@ from starlette.websockets import WebSocket, WebSocketState
 from src.core.logger import logger
 
 from .tunnel_protocol import Frame, FrameFlags, MsgType
+
+# 隧道帧压缩的最小 payload 大小（字节）
+# 小于此值的帧压缩收益不大，反而增加 CPU 开销
+_TUNNEL_COMPRESS_MIN_SIZE = 512
 
 
 class TunnelConnection:
@@ -309,7 +314,7 @@ class TunnelManager:
         stream_state = conn.create_stream(stream_id)
 
         try:
-            # 发送 REQUEST_HEADERS
+            # 发送 REQUEST_HEADERS（大元数据帧压缩）
             meta = json.dumps(
                 {
                     "method": method,
@@ -318,13 +323,19 @@ class TunnelManager:
                     "timeout": int(timeout),
                 }
             ).encode()
-            await conn.send_frame(Frame(stream_id, MsgType.REQUEST_HEADERS, 0, meta))
-
-            # 发送 REQUEST_BODY + END_STREAM
-            body_data = body or b""
+            meta_payload, meta_flags = _compress_frame_payload(meta)
             await conn.send_frame(
-                Frame(stream_id, MsgType.REQUEST_BODY, FrameFlags.END_STREAM, body_data)
+                Frame(stream_id, MsgType.REQUEST_HEADERS, meta_flags, meta_payload)
             )
+
+            # 发送 REQUEST_BODY + END_STREAM（大请求体帧压缩）
+            body_data = body or b""
+            if body_data:
+                body_payload, body_flags = _compress_frame_payload(body_data)
+            else:
+                body_payload, body_flags = body_data, 0
+            body_flags |= FrameFlags.END_STREAM
+            await conn.send_frame(Frame(stream_id, MsgType.REQUEST_BODY, body_flags, body_payload))
         except Exception:
             conn.remove_stream(stream_id)
             raise
@@ -348,14 +359,16 @@ class TunnelManager:
             if not stream:
                 return
             try:
-                meta = json.loads(frame.payload)
+                payload = _decompress_frame_payload(frame)
+                meta = json.loads(payload)
                 stream.set_response_headers(meta["status"], meta.get("headers", []))
             except Exception as e:
                 stream.set_error(f"invalid response headers: {e}")
 
         elif frame.msg_type == MsgType.RESPONSE_BODY:
             if stream:
-                stream.push_body_chunk(frame.payload)
+                payload = _decompress_frame_payload(frame)
+                stream.push_body_chunk(payload)
 
         elif frame.msg_type == MsgType.STREAM_END:
             if stream:
@@ -424,6 +437,32 @@ class TunnelManager:
             await conn.send_frame(Frame(0, MsgType.HEARTBEAT_ACK, 0, json.dumps(ack).encode()))
         except TunnelStreamError:
             logger.debug("heartbeat ACK send failed for node_id={}", conn.node_id)
+
+
+# ---------------------------------------------------------------------------
+# 隧道帧压缩 / 解压
+# ---------------------------------------------------------------------------
+
+
+def _compress_frame_payload(data: bytes) -> tuple[bytes, int]:
+    """按配置对帧 payload 进行 gzip 压缩。
+
+    Returns:
+        (payload, flags) — 若压缩则 flags 含 GZIP_COMPRESSED，否则 flags=0。
+    """
+    if len(data) >= _TUNNEL_COMPRESS_MIN_SIZE:
+        compressed = gzip.compress(data, compresslevel=6)
+        # 仅在压缩确实缩小时使用
+        if len(compressed) < len(data):
+            return compressed, FrameFlags.GZIP_COMPRESSED
+    return data, 0
+
+
+def _decompress_frame_payload(frame: Frame) -> bytes:
+    """如果帧设置了 GZIP_COMPRESSED 标志则解压，否则原样返回。"""
+    if frame.is_gzip:
+        return gzip.decompress(frame.payload)
+    return frame.payload
 
 
 # 全局单例

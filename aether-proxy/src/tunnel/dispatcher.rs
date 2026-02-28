@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 use crate::state::{AppState, ServerContext};
 
 use super::heartbeat::HeartbeatHandle;
-use super::protocol::{Frame, MsgType, RequestMeta};
+use super::protocol::{decompress_if_gzip, Frame, MsgType, RequestMeta};
 use super::stream_handler;
 use super::writer::FrameSender;
 
@@ -92,8 +92,15 @@ where
 
         match frame.msg_type {
             MsgType::RequestHeaders => {
-                // Parse request metadata
-                let meta: RequestMeta = match serde_json::from_slice(&frame.payload) {
+                // Decompress if the frame is gzip-compressed, then parse metadata
+                let payload = match decompress_if_gzip(&frame) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!(stream_id = frame.stream_id, error = %e, "frame decompress failed");
+                        continue;
+                    }
+                };
+                let meta: RequestMeta = match serde_json::from_slice(&payload) {
                     Ok(m) => m,
                     Err(e) => {
                         warn!(stream_id = frame.stream_id, error = %e, "invalid request metadata");

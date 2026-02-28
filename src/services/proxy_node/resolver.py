@@ -7,13 +7,16 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
+import json
 import time
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
 
+from src.config import config
 from src.core.exceptions import ProxyNodeUnavailableError
 from src.core.logger import logger
 
@@ -614,6 +617,30 @@ def resolve_delegate_config(proxy_config: dict[str, Any] | None) -> dict[str, An
 # ---------------------------------------------------------------------------
 
 
+def _maybe_compress_payload(
+    payload: Any,
+    headers: dict[str, str],
+) -> tuple[bytes, dict[str, str]]:
+    """
+    将 payload 序列化为 JSON bytes，按配置决定是否 gzip 压缩。
+
+    NOTE: 使用紧凑分隔符 ``(",", ":")`` 序列化（无空格），相比 httpx ``json=``
+    参数的默认 ``json.dumps``（带空格分隔符）体积更小，所有上游 API 均兼容。
+
+    Returns:
+        (body_bytes, updated_headers)
+    """
+    json_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    if config.enable_request_compression and len(json_bytes) >= config.request_compression_min_size:
+        compressed = gzip.compress(json_bytes, compresslevel=6)
+        if len(compressed) < len(json_bytes):
+            headers = {**headers, "Content-Encoding": "gzip"}
+            return compressed, headers
+
+    return json_bytes, headers
+
+
 def build_post_kwargs(
     _delegate_cfg: dict[str, Any] | None = None,
     *,
@@ -631,10 +658,11 @@ def build_post_kwargs(
     ``_delegate_cfg`` 和 ``refresh_auth`` 已废弃（tunnel 模式下认证由 transport 层处理），
     保留仅为兼容现有调用方签名。
     """
+    content, final_headers = _maybe_compress_payload(payload, headers)
     return {
         "url": url,
-        "json": payload,
-        "headers": headers,
+        "content": content,
+        "headers": final_headers,
         "timeout": httpx.Timeout(timeout),
     }
 
@@ -655,11 +683,12 @@ def build_stream_kwargs(
 
     ``_delegate_cfg`` 已废弃，保留仅为兼容现有调用方签名。
     """
+    content, final_headers = _maybe_compress_payload(payload, headers)
     kwargs: dict[str, Any] = {
         "method": "POST",
         "url": url,
-        "json": payload,
-        "headers": headers,
+        "content": content,
+        "headers": final_headers,
     }
     if timeout is not None:
         kwargs["timeout"] = httpx.Timeout(timeout)

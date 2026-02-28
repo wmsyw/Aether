@@ -39,6 +39,7 @@ BROWSER_FINGERPRINT_HEADERS: dict[str, str] = {
         "Chrome/140.0.7339.249 Electron/38.7.0 Safari/537.36"
     ),
     "Accept": "application/json",
+    "Accept-Encoding": "gzip, deflate, br",
     "Accept-Language": "zh-CN",
     "sec-ch-ua": '"Not=A?Brand";v="24", "Chromium";v="140"',
     "sec-ch-ua-mobile": "?0",
@@ -73,7 +74,7 @@ UPSTREAM_DROP_HEADERS: frozenset[str] = frozenset(
         "content-length",
         "transfer-encoding",
         "connection",
-        # 编码头 - 避免客户端请求 brotli/zstd 但 httpx 不支持
+        # 编码头 - 丢弃客户端值，由 BROWSER_FINGERPRINT_HEADERS 统一设置
         "accept-encoding",
         # 反向代理 / 网关注入的头部 - 属于本站基础设施，不应泄露给上游
         "x-real-ip",

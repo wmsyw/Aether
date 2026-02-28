@@ -159,3 +159,53 @@ pub struct ResponseMeta {
     /// Header list preserving duplicates (e.g. multiple Set-Cookie).
     pub headers: Vec<(String, String)>,
 }
+
+// ---------------------------------------------------------------------------
+// Tunnel frame compression helpers
+// ---------------------------------------------------------------------------
+
+/// Minimum payload size to attempt gzip compression (bytes).
+const COMPRESS_MIN_SIZE: usize = 512;
+
+/// If the frame has the GZIP_COMPRESSED flag, decompress the payload; otherwise
+/// return a clone of the raw payload bytes.
+pub fn decompress_if_gzip(frame: &Frame) -> Result<Bytes, std::io::Error> {
+    if frame.is_gzip() {
+        decompress_gzip(&frame.payload)
+    } else {
+        Ok(frame.payload.clone())
+    }
+}
+
+/// Gzip-compress `data` if it is large enough and compression actually shrinks
+/// the payload. Returns `(payload, extra_flags)` where `extra_flags` contains
+/// `GZIP_COMPRESSED` when compression was applied.
+pub fn compress_payload(data: Bytes) -> (Bytes, u8) {
+    if data.len() >= COMPRESS_MIN_SIZE {
+        if let Ok(compressed) = compress_gzip(&data) {
+            if compressed.len() < data.len() {
+                return (compressed, flags::GZIP_COMPRESSED);
+            }
+        }
+    }
+    (data, 0)
+}
+
+fn decompress_gzip(data: &[u8]) -> Result<Bytes, std::io::Error> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    let mut decoder = GzDecoder::new(data);
+    let mut buf = Vec::new();
+    decoder.read_to_end(&mut buf)?;
+    Ok(Bytes::from(buf))
+}
+
+fn compress_gzip(data: &[u8]) -> Result<Bytes, std::io::Error> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(data)?;
+    let compressed = encoder.finish()?;
+    Ok(Bytes::from(compressed))
+}

@@ -177,6 +177,22 @@ class Config:
         )
         self.http_keepalive_expiry = float(os.getenv("HTTP_KEEPALIVE_EXPIRY", "30.0"))
 
+        # 上游传输优化配置
+        # ENABLE_HTTP2: 是否对上游请求启用 HTTP/2（HPACK 头部压缩 + 多路复用）
+        #   - 三家上游（Claude/OpenAI/Gemini）均已确认支持 HTTP/2
+        #   - 出现兼容性问题时可通过环境变量快速回退到 HTTP/1.1
+        self.enable_http2 = os.getenv("ENABLE_HTTP2", "true").lower() == "true"
+        # ENABLE_REQUEST_COMPRESSION: 是否对上游请求体启用 gzip 压缩
+        #   - 仅对超过 REQUEST_COMPRESSION_MIN_SIZE 的请求体生效
+        #   - 上游 Cloudflare/Google Front End 层会透明解压
+        self.enable_request_compression = (
+            os.getenv("ENABLE_REQUEST_COMPRESSION", "true").lower() == "true"
+        )
+        # REQUEST_COMPRESSION_MIN_SIZE: 触发请求体压缩的最小字节数
+        #   - gzip 有固定头部开销，小请求压缩后可能反而变大
+        #   - 默认 1024 字节（1KB）
+        self.request_compression_min_size = int(os.getenv("REQUEST_COMPRESSION_MIN_SIZE", "1024"))
+
         # 流式处理配置
         # STREAM_PREFETCH_LINES: 预读行数，用于检测嵌套错误
         # STREAM_STATS_DELAY: 统计记录延迟（秒），等待流完全关闭

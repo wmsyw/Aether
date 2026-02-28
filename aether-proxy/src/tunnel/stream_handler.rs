@@ -15,7 +15,9 @@ use tracing::{debug, warn};
 use crate::state::{AppState, ServerContext};
 use crate::target_filter;
 
-use super::protocol::{flags, Frame, MsgType, RequestMeta, ResponseMeta};
+use super::protocol::{
+    compress_payload, decompress_if_gzip, flags, Frame, MsgType, RequestMeta, ResponseMeta,
+};
 use super::writer::FrameSender;
 
 /// Maximum response body chunk size per frame (32 KB).
@@ -95,21 +97,17 @@ async fn handle_stream_inner(
         match body_rx.recv().await {
             Some(frame) => {
                 if frame.msg_type == MsgType::RequestBody {
-                    let payload = if frame.is_gzip() {
-                        match decompress_gzip(&frame.payload) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                send_error(
-                                    frame_tx,
-                                    stream_id,
-                                    &format!("gzip decompress failed: {e}"),
-                                )
-                                .await;
-                                return;
-                            }
+                    let payload = match decompress_if_gzip(&frame) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            send_error(
+                                frame_tx,
+                                stream_id,
+                                &format!("gzip decompress failed: {e}"),
+                            )
+                            .await;
+                            return;
                         }
-                    } else {
-                        frame.payload.clone()
                     };
                     if !payload.is_empty() {
                         body_parts.push(payload);
@@ -194,21 +192,23 @@ async fn handle_stream_inner(
     let timeout = Duration::from_secs(meta.timeout.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS));
 
     let method: reqwest::Method = meta.method.parse().unwrap_or(reqwest::Method::GET);
-    let mut req = client.request(method, &meta.url);
+    // Build a complete HeaderMap from tunnel headers, then set it all at once
+    // via .headers() which *replaces* reqwest defaults (e.g. Accept: */*),
+    // ensuring upstream sees exactly what Aether server intended.
+    let mut header_map = reqwest::header::HeaderMap::with_capacity(meta.headers.len());
     for (k, v) in &meta.headers {
         let k_lower = k.to_ascii_lowercase();
-        // Skip hop-by-hop and security-sensitive headers
         if BLOCKED_HEADERS.contains(&k_lower.as_str()) {
             continue;
         }
-        // Validate header name/value are valid HTTP
         if let (Ok(name), Ok(value)) = (
             reqwest::header::HeaderName::from_bytes(k.as_bytes()),
             reqwest::header::HeaderValue::from_str(v),
         ) {
-            req = req.header(name, value);
+            header_map.insert(name, value);
         }
     }
+    let mut req = client.request(method, &meta.url).headers(header_map);
     let body_size = body.len();
     if !body.is_empty() {
         req = req.body(body);
@@ -258,39 +258,51 @@ async fn handle_stream_inner(
         status,
         headers: resp_headers,
     };
-    let meta_json = serde_json::to_vec(&resp_meta).unwrap_or_default();
+    let meta_json: Bytes = serde_json::to_vec(&resp_meta).unwrap_or_default().into();
+    let (meta_payload, meta_flags) = compress_payload(meta_json);
     if !send_frame(
         frame_tx,
-        Frame::new(stream_id, MsgType::ResponseHeaders, 0, meta_json),
+        Frame::new(
+            stream_id,
+            MsgType::ResponseHeaders,
+            meta_flags,
+            meta_payload,
+        ),
     )
     .await
     {
         return;
     }
 
-    // Stream response body
+    // Stream response body — relay upstream bytes through the tunnel.
+    // Apply tunnel-level frame compression for chunks that benefit from it
+    // (e.g. uncompressed SSE text). Already-compressed data (gzip/br from
+    // upstream Content-Encoding) won't shrink further and will be sent as-is
+    // thanks to the size check in compress_payload().
     let mut stream = response.bytes_stream();
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
             Ok(chunk) => {
                 if chunk.len() <= MAX_CHUNK_SIZE {
+                    let (payload, extra_flags) = compress_payload(chunk);
                     if !send_frame(
                         frame_tx,
-                        Frame::new(stream_id, MsgType::ResponseBody, 0, chunk),
+                        Frame::new(stream_id, MsgType::ResponseBody, extra_flags, payload),
                     )
                     .await
                     {
                         return;
                     }
                 } else {
-                    // Split oversized chunks
+                    // Split oversized chunks, compress each slice
                     let mut offset = 0;
                     while offset < chunk.len() {
                         let end = (offset + MAX_CHUNK_SIZE).min(chunk.len());
                         let slice = chunk.slice(offset..end);
+                        let (payload, extra_flags) = compress_payload(slice);
                         if !send_frame(
                             frame_tx,
-                            Frame::new(stream_id, MsgType::ResponseBody, 0, slice),
+                            Frame::new(stream_id, MsgType::ResponseBody, extra_flags, payload),
                         )
                         .await
                         {
@@ -336,13 +348,4 @@ async fn send_error(tx: &FrameSender, stream_id: u32, msg: &str) {
         ),
     )
     .await;
-}
-
-fn decompress_gzip(data: &[u8]) -> Result<Bytes, std::io::Error> {
-    use flate2::read::GzDecoder;
-    use std::io::Read;
-    let mut decoder = GzDecoder::new(data);
-    let mut buf = Vec::new();
-    decoder.read_to_end(&mut buf)?;
-    Ok(Bytes::from(buf))
 }
