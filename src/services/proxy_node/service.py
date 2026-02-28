@@ -257,7 +257,11 @@ class ProxyNodeService:
 
         node = (
             db.query(ProxyNode)
-            .filter(ProxyNode.name == name, ProxyNode.is_manual == False)  # noqa: E712
+            .filter(
+                ProxyNode.ip == ip,
+                ProxyNode.port == port,
+                ProxyNode.is_manual == False,  # noqa: E712
+            )
             .first()
         )
         if node:
