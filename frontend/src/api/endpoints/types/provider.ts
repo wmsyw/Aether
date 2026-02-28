@@ -284,10 +284,6 @@ export interface CodexUpstreamMetadata {
   secondary_reset_seconds?: number  // 5H限额重置剩余秒数
   secondary_reset_at?: number  // 5H限额重置时间（Unix 时间戳）
   secondary_window_minutes?: number  // 5H限额窗口大小（分钟）
-  code_review_used_percent?: number  // 代码审查限额使用百分比
-  code_review_reset_seconds?: number  // 代码审查限额重置剩余秒数
-  code_review_reset_at?: number  // 代码审查限额重置时间（Unix 时间戳）
-  code_review_window_minutes?: number  // 代码审查限额窗口大小（分钟）
   has_credits?: boolean  // 是否有积分
   credits_balance?: number  // 积分余额
 }

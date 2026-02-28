@@ -202,12 +202,10 @@ def parse_codex_wham_usage_response(data: dict[str, Any]) -> dict[str, Any] | No
 
     Free 账号:
     - rate_limit.primary_window: 周限额
-    - code_review_rate_limit.primary_window: 代码审查周限额
 
     Team/Plus/Enterprise 账号:
     - rate_limit.primary_window: 5H 限额
     - rate_limit.secondary_window: 周限额
-    - code_review_rate_limit.primary_window: 代码审查周限额
     """
     if data is None:
         return None
@@ -260,18 +258,6 @@ def parse_codex_wham_usage_response(data: dict[str, Any]) -> dict[str, Any] | No
             source_field="rate_limit.primary_window",
             target_prefix="primary",
         )
-
-    # 解析 code_review_rate_limit (代码审查限额)
-    code_review_limit = _as_dict(data.get("code_review_rate_limit"), "code_review_rate_limit")
-    code_review_primary = _as_dict(
-        code_review_limit.get("primary_window"), "code_review_rate_limit.primary_window"
-    )
-    _write_window(
-        result,
-        source=code_review_primary,
-        source_field="code_review_rate_limit.primary_window",
-        target_prefix="code_review",
-    )
 
     # 解析 credits
     credits = _as_dict(data.get("credits"), "credits")
@@ -333,16 +319,6 @@ def parse_codex_usage_headers(headers: Mapping[str, Any] | None) -> dict[str, An
         window_minutes_key="x-codex-secondary-window-minutes",
         source_field="headers.secondary_window",
     )
-    # 兼容未来可能出现的 code review header（当前反代可缺失）
-    code_review_primary = _read_header_window(
-        headers=normalized_headers,
-        used_percent_key="x-codex-code-review-primary-used-percent",
-        reset_seconds_key="x-codex-code-review-primary-reset-after-seconds",
-        reset_at_key="x-codex-code-review-primary-reset-at",
-        window_minutes_key="x-codex-code-review-primary-window-minutes",
-        source_field="headers.code_review.primary_window",
-    )
-
     # 与 wham/usage 解析保持一致：
     # - metadata.primary_* 统一表示周限额
     # - metadata.secondary_* 统一表示 5H 限额
@@ -367,13 +343,6 @@ def parse_codex_usage_headers(headers: Mapping[str, Any] | None) -> dict[str, An
             source_field="headers.primary_window",
             target_prefix="primary",
         )
-
-    _write_window(
-        result,
-        source=code_review_primary,
-        source_field="headers.code_review.primary_window",
-        target_prefix="code_review",
-    )
 
     # 当前窗口挤占占比（有值才记录）
     primary_over_secondary_limit = _coerce_optional_float(

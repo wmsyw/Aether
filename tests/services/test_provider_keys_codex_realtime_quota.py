@@ -114,7 +114,7 @@ def test_sync_codex_quota_from_headers_updates_and_preserves_existing_fields() -
         upstream_metadata={
             "codex": {
                 "primary_used_percent": 50.0,
-                "code_review_used_percent": 12.0,
+                "legacy_marker": "keep-me",
             }
         },
     )
@@ -131,8 +131,8 @@ def test_sync_codex_quota_from_headers_updates_and_preserves_existing_fields() -
     codex_meta = key.upstream_metadata["codex"]
     assert codex_meta["primary_used_percent"] == 64.0
     assert codex_meta["secondary_used_percent"] == 3.0
-    # 旧的 code_review 字段应被保留（wham/usage 补充信息）
-    assert codex_meta["code_review_used_percent"] == 12.0
+    # 旧字段应被保留（解析器只覆盖已知配额字段）
+    assert codex_meta["legacy_marker"] == "keep-me"
 
 
 def test_sync_codex_quota_from_headers_skips_when_only_reset_seconds_changed() -> None:

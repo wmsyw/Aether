@@ -68,7 +68,6 @@ def test_codex_weekly_quota_exhausted_skips(_mock_cb: MagicMock) -> None:
             "codex": {
                 "primary_used_percent": 100.0,
                 "secondary_used_percent": 10.0,
-                "code_review_used_percent": 100.0,
             }
         }
     )
@@ -114,14 +113,14 @@ def test_codex_5h_quota_exhausted_skips(_mock_cb: MagicMock) -> None:
     "src.services.scheduling.candidate_builder.health_monitor.get_circuit_breaker_status",
     return_value=(True, None),
 )
-def test_codex_ignores_code_review_quota(_mock_cb: MagicMock) -> None:
+def test_codex_ignores_unrelated_metadata_fields(_mock_cb: MagicMock) -> None:
     scheduler = CacheAwareScheduler()
     key = _make_key(
         upstream_metadata={
             "codex": {
                 "primary_used_percent": 10.0,
                 "secondary_used_percent": 20.0,
-                "code_review_used_percent": 100.0,
+                "legacy_marker": "ignore-me",
             }
         }
     )

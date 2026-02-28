@@ -534,10 +534,10 @@
                           </span>
                         </div>
                       </div>
-                      <!-- 限额并排显示：Team/Plus/Enterprise 账号 3列, Free 账号 2列 -->
+                      <!-- 限额并排显示：Team/Plus/Enterprise 账号 2列, Free 账号 1列 -->
                       <div
                         class="grid gap-3"
-                        :class="isCodexTeamPlan(key) ? 'grid-cols-3' : 'grid-cols-2'"
+                        :class="isCodexTeamPlan(key) ? 'grid-cols-2' : 'grid-cols-1'"
                       >
                         <!-- 周限额 -->
                         <div v-if="key.upstream_metadata.codex?.primary_used_percent !== undefined">
@@ -583,28 +583,6 @@
                             <template v-else>
                               已重置
                             </template>
-                          </div>
-                        </div>
-                        <!-- 代码审查限额 -->
-                        <div v-if="key.upstream_metadata.codex?.code_review_used_percent !== undefined">
-                          <div class="flex items-center justify-between text-[10px] mb-0.5">
-                            <span class="text-muted-foreground">审查限额</span>
-                            <span :class="getQuotaRemainingClass(key.upstream_metadata.codex.code_review_used_percent)">
-                              {{ (100 - key.upstream_metadata.codex.code_review_used_percent).toFixed(1) }}%
-                            </span>
-                          </div>
-                          <div class="relative w-full h-1.5 bg-border rounded-full overflow-hidden">
-                            <div
-                              class="absolute left-0 top-0 h-full transition-all duration-300"
-                              :class="getQuotaRemainingBarColor(key.upstream_metadata.codex.code_review_used_percent)"
-                              :style="{ width: `${Math.max(100 - key.upstream_metadata.codex.code_review_used_percent, 0)}%` }"
-                            />
-                          </div>
-                          <div
-                            v-if="key.upstream_metadata.codex.code_review_reset_seconds"
-                            class="text-[9px] text-muted-foreground/70 mt-0.5"
-                          >
-                            {{ formatResetTime(key.upstream_metadata.codex.code_review_reset_seconds) }}后重置
                           </div>
                         </div>
                       </div>

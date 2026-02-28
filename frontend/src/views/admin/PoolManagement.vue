@@ -290,6 +290,12 @@
                 <TableHead class="font-semibold">
                   名称
                 </TableHead>
+                <TableHead
+                  v-if="showAccountQuotaColumn"
+                  class="w-64 font-semibold"
+                >
+                  配额
+                </TableHead>
                 <TableHead class="w-20 font-semibold">
                   状态
                 </TableHead>
@@ -329,6 +335,51 @@
                   <span class="text-sm truncate max-w-[200px] block">
                     {{ key.key_name || '未命名' }}
                   </span>
+                </TableCell>
+                <TableCell
+                  v-if="showAccountQuotaColumn"
+                  class="py-3"
+                >
+                  <div
+                    v-if="quotaProgressMap[key.key_id]?.length"
+                    class="flex items-stretch gap-2 overflow-x-auto pb-0.5"
+                  >
+                    <div
+                      v-for="(item, idx) in quotaProgressMap[key.key_id]"
+                      :key="`${key.key_id}-quota-${idx}`"
+                      class="min-w-[140px] max-w-[180px] shrink-0"
+                    >
+                      <div class="flex items-center justify-between text-[10px] mb-0.5">
+                        <span class="text-muted-foreground">{{ item.label }}</span>
+                        <span :class="getQuotaRemainingClassByRemaining(item.remainingPercent)">
+                          {{ item.remainingPercent.toFixed(1) }}%
+                        </span>
+                      </div>
+                      <div class="relative w-full h-1.5 bg-border rounded-full overflow-hidden">
+                        <div
+                          class="absolute left-0 top-0 h-full transition-all duration-300"
+                          :class="getQuotaRemainingBarColorByRemaining(item.remainingPercent)"
+                          :style="{ width: `${item.remainingPercent}%` }"
+                        />
+                      </div>
+                      <div
+                        v-if="item.detail"
+                        class="text-[9px] text-muted-foreground/70 mt-0.5 truncate"
+                      >
+                        {{ item.detail }}
+                      </div>
+                    </div>
+                  </div>
+                  <span
+                    v-else-if="key.account_quota"
+                    :class="getQuotaTextClass(key.account_quota)"
+                  >
+                    {{ key.account_quota }}
+                  </span>
+                  <span
+                    v-else
+                    class="text-xs text-muted-foreground"
+                  >-</span>
                 </TableCell>
                 <TableCell class="py-3">
                   <Badge
@@ -488,7 +539,10 @@
                 </Button>
               </div>
             </div>
-            <div class="mt-2.5 ml-7 grid grid-cols-3 gap-2">
+            <div
+              class="mt-2.5 ml-7 grid gap-2"
+              :class="showAccountQuotaColumn ? 'grid-cols-4' : 'grid-cols-3'"
+            >
               <div class="p-2 bg-muted/50 rounded-lg text-xs">
                 <div class="text-muted-foreground mb-0.5">
                   冷却
@@ -541,6 +595,56 @@
                 </div>
                 <div class="text-[11px]">
                   {{ key.last_used_at ? formatRelativeTime(key.last_used_at) : '-' }}
+                </div>
+              </div>
+              <div
+                v-if="showAccountQuotaColumn"
+                class="p-2 bg-muted/50 rounded-lg text-xs"
+              >
+                <div class="text-muted-foreground mb-0.5">
+                  配额
+                </div>
+                <div
+                  v-if="quotaProgressMap[key.key_id]?.length"
+                  class="flex items-stretch gap-2 overflow-x-auto pb-0.5"
+                >
+                  <div
+                    v-for="(item, idx) in quotaProgressMap[key.key_id]"
+                    :key="`${key.key_id}-quota-mobile-${idx}`"
+                    class="min-w-[120px] max-w-[160px] shrink-0"
+                  >
+                    <div class="flex items-center justify-between text-[10px] mb-0.5">
+                      <span class="text-muted-foreground">{{ item.label }}</span>
+                      <span :class="getQuotaRemainingClassByRemaining(item.remainingPercent)">
+                        {{ item.remainingPercent.toFixed(1) }}%
+                      </span>
+                    </div>
+                    <div class="relative w-full h-1.5 bg-border rounded-full overflow-hidden">
+                      <div
+                        class="absolute left-0 top-0 h-full transition-all duration-300"
+                        :class="getQuotaRemainingBarColorByRemaining(item.remainingPercent)"
+                        :style="{ width: `${item.remainingPercent}%` }"
+                      />
+                    </div>
+                    <div
+                      v-if="item.detail"
+                      class="text-[9px] text-muted-foreground/70 mt-0.5 truncate"
+                    >
+                      {{ item.detail }}
+                    </div>
+                  </div>
+                </div>
+                <div
+                  v-else-if="key.account_quota"
+                  :class="getQuotaTextClass(key.account_quota)"
+                >
+                  {{ key.account_quota }}
+                </div>
+                <div
+                  v-else
+                  class="text-muted-foreground"
+                >
+                  -
                 </div>
               </div>
             </div>
@@ -682,6 +786,19 @@ const selectedProviderConfig = computed<PoolAdvancedConfig | null>(() => {
   return (selectedProviderData.value as Record<string, unknown> | null)?.pool_advanced as PoolAdvancedConfig | null ?? null
 })
 
+const selectedProviderType = computed(() => {
+  const fromDetail = String(selectedProviderData.value?.provider_type || '').trim().toLowerCase()
+  if (fromDetail) return fromDetail
+  const fromOverview = poolProviders.value.find(item => item.provider_id === selectedProviderId.value)?.provider_type
+  return String(fromOverview || '').trim().toLowerCase()
+})
+
+const showAccountQuotaColumn = computed(() => {
+  return selectedProviderType.value === 'codex'
+    || selectedProviderType.value === 'kiro'
+    || selectedProviderType.value === 'antigravity'
+})
+
 async function selectProvider(id: string) {
   selectedProviderId.value = id
   selectedKeys.value.clear()
@@ -713,6 +830,20 @@ const searchQuery = ref('')
 const statusFilter = ref('all')
 const currentPage = ref(1)
 const pageSize = ref(50)
+
+interface QuotaProgressItem {
+  label: string
+  remainingPercent: number
+  detail?: string
+}
+
+const quotaProgressMap = computed<Record<string, QuotaProgressItem[]>>(() => {
+  const map: Record<string, QuotaProgressItem[]> = {}
+  for (const key of keyPage.value.keys) {
+    map[key.key_id] = parseQuotaProgressItems(key.account_quota)
+  }
+  return map
+})
 
 async function loadKeys() {
   if (!selectedProviderId.value) return
@@ -838,6 +969,70 @@ function getCostBarColor(usage: number, limit: number): string {
   if (ratio >= 0.9) return 'bg-red-500'
   if (ratio >= 0.7) return 'bg-yellow-500'
   return 'bg-green-500'
+}
+
+function normalizeQuotaLabel(label: string): string {
+  const normalized = label.trim()
+  if (!normalized) return '额度'
+  if (normalized.includes('周剩余')) return '周限额'
+  if (normalized.includes('5H剩余')) return '5H限额'
+  if (normalized.includes('最低剩余')) return '最低剩余'
+  if (normalized === '剩余') return '剩余额度'
+  return normalized
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 100) return 100
+  return value
+}
+
+function parseQuotaProgressItems(quotaText: string | null | undefined): QuotaProgressItem[] {
+  if (!quotaText) return []
+
+  const segments = quotaText
+    .split('|')
+    .map(s => s.trim())
+    .filter(Boolean)
+
+  const items: QuotaProgressItem[] = []
+  for (const segment of segments) {
+    const match = segment.match(/^(.*?)(-?\d+(?:\.\d+)?)%\s*(.*)$/)
+    if (!match) continue
+
+    const [, rawLabel, rawPercent, rawTail] = match
+    const remainingPercent = clampPercent(Number(rawPercent))
+    const label = normalizeQuotaLabel(rawLabel)
+    const detail = rawTail.trim().replace(/^[()]+|[()]+$/g, '').trim()
+
+    items.push({
+      label,
+      remainingPercent,
+      detail: detail || undefined,
+    })
+  }
+
+  return items
+}
+
+function getQuotaRemainingClassByRemaining(remaining: number): string {
+  if (remaining <= 10) return 'text-red-600 dark:text-red-400'
+  if (remaining <= 30) return 'text-yellow-600 dark:text-yellow-400'
+  return 'text-green-600 dark:text-green-400'
+}
+
+function getQuotaRemainingBarColorByRemaining(remaining: number): string {
+  if (remaining <= 10) return 'bg-red-500 dark:bg-red-400'
+  if (remaining <= 30) return 'bg-yellow-500 dark:bg-yellow-400'
+  return 'bg-green-500 dark:bg-green-400'
+}
+
+function getQuotaTextClass(quotaText: string): string {
+  if (quotaText.includes('封禁') || quotaText.includes('受限')) {
+    return 'text-[11px] text-destructive leading-4'
+  }
+  return 'text-[11px] text-foreground/90 leading-4'
 }
 
 function formatRelativeTime(isoStr: string): string {
