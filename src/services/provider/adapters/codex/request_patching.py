@@ -8,14 +8,14 @@ round-trip, so every field the client sent is preserved as-is unless explicitly
 modified here.
 
 Transformations applied:
-- Force ``store=false`` (avoid persistence features not supported by some gateways).
-- Force ``stream=true`` (Codex gateways require streaming).
+- Force ``store=false``.
+- Force ``stream=true`` (except compact requests).
 - Force ``parallel_tool_calls=true``.
-- Ensure ``instructions`` exists (Codex expects it in some deployments).
-- Convert ``role=system`` messages to ``role=developer`` (Codex may not accept ``system``).
+- Ensure ``instructions`` exists (empty string when absent).
+- Convert ``role=system`` messages to ``role=developer``.
 - Drop request parameters known to be rejected by Codex gateways.
-- Ensure ``include`` contains ``"reasoning.encrypted_content"`` for parity with CLI behavior.
-- Remove ``previous_response_id`` (not supported by Codex gateways).
+- Force ``include`` to ``["reasoning.encrypted_content"]``.
+- Drop compatibility-problematic fields (``context_management`` / ``user``).
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ _REJECTED_PARAMS: frozenset[str] = frozenset(
     {
         "max_output_tokens",
         "max_completion_tokens",
-        "max_tokens",
         "temperature",
         "top_p",
         "service_tier",
         "previous_response_id",
+        "truncation",
     }
 )
 
@@ -53,8 +53,12 @@ def patch_openai_cli_request_for_codex(request_body: dict[str, Any]) -> dict[str
     # Codex gateways often reject/ignore persistence; be explicit.
     out["store"] = False
 
-    # Codex gateways require streaming.
-    out["stream"] = True
+    # Codex compact endpoint is non-streaming; normal responses requires stream=true.
+    is_compact = bool(out.pop("_aether_compact", False))
+    if is_compact:
+        out.pop("stream", None)
+    else:
+        out["stream"] = True
 
     # Codex expects parallel tool calls enabled.
     out["parallel_tool_calls"] = True
@@ -62,7 +66,7 @@ def patch_openai_cli_request_for_codex(request_body: dict[str, Any]) -> dict[str
     # Ensure instructions exists (some gateways require it even if empty).
     instructions = out.get("instructions")
     if not isinstance(instructions, str):
-        out["instructions"] = "You are a helpful coding assistant."
+        out["instructions"] = ""
 
     # Convert "system" role to "developer" (Codex behavior).
     input_items = out.get("input")
@@ -78,22 +82,12 @@ def patch_openai_cli_request_for_codex(request_body: dict[str, Any]) -> dict[str
                 patched_items.append(item)
         out["input"] = patched_items
 
-    # Ensure required include item exists.
-    include = out.get("include")
-    if include is None:
-        out["include"] = [_REQUIRED_INCLUDE_ITEM]
-    elif isinstance(include, str):
-        out["include"] = (
-            [include] if include == _REQUIRED_INCLUDE_ITEM else [include, _REQUIRED_INCLUDE_ITEM]
-        )
-    elif isinstance(include, (list, tuple, set)):
-        include_list = list(include)
-        if _REQUIRED_INCLUDE_ITEM not in include_list:
-            include_list.append(_REQUIRED_INCLUDE_ITEM)
-        out["include"] = include_list
-    else:
-        # Unknown type; overwrite to keep behavior deterministic.
-        out["include"] = [_REQUIRED_INCLUDE_ITEM]
+    # Keep codex behavior deterministic: force the exact include list.
+    out["include"] = [_REQUIRED_INCLUDE_ITEM]
+
+    # Codex upstream currently rejects these fields.
+    out.pop("context_management", None)
+    out.pop("user", None)
 
     return out
 

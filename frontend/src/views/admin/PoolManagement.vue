@@ -912,7 +912,11 @@ async function toggleKeyActive(key: PoolKeyDetail) {
       key_ids: [key.key_id],
       action,
     })
-    await loadKeys()
+    // 局部更新：直接修改本地列表中的状态
+    const target = keyPage.value.keys.find(k => k.key_id === key.key_id)
+    if (target) {
+      target.is_active = !target.is_active
+    }
   } catch (err) {
     showError(parseApiError(err))
   }

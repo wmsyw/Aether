@@ -405,6 +405,9 @@ class UpdateProviderRequest(BaseModel):
         None, description="Claude Code 特有配置"
     )
     failover_rules: FailoverRulesConfig | None = Field(None, description="故障转移规则配置")
+    enable_format_conversion: bool | None = Field(
+        None, description="是否允许格式转换（提供商级别开关）"
+    )
     config: dict[str, Any] | None = None
 
     # 复用相同的验证器

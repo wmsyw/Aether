@@ -302,7 +302,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   'providerCreated': []
-  'providerUpdated': []
+  'providerUpdated': [provider: ProviderWithEndpointsSummary]
 }>()
 
 const { success, error: showError } = useToast()
@@ -456,9 +456,9 @@ const handleSubmit = async () => {
 
     if (isEditMode.value && props.provider) {
       // 更新提供商
-      await updateProvider(props.provider.id, payload)
+      const updated = await updateProvider(props.provider.id, payload)
       success('提供商更新成功')
-      emit('providerUpdated')
+      emit('providerUpdated', updated)
     } else {
       // 创建提供商
       await createProvider(payload)

@@ -129,6 +129,7 @@ class ChatAdapterBase(HandlerAdapterBase):
                     original_headers=original_headers,
                     original_request_body=original_request_body,
                     query_params=query_params,
+                    client_content_encoding=context.client_content_encoding,
                 )
             return await handler.process_sync(
                 request=request_obj,
@@ -136,6 +137,8 @@ class ChatAdapterBase(HandlerAdapterBase):
                 original_headers=original_headers,
                 original_request_body=original_request_body,
                 query_params=query_params,
+                client_content_encoding=context.client_content_encoding,
+                client_accept_encoding=context.client_accept_encoding,
             )
 
         except HTTPException:

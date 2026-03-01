@@ -60,6 +60,15 @@ def get_upstream_stream_policy(
     provider_obj = getattr(endpoint, "provider", None)
     pt = str(provider_type or getattr(provider_obj, "provider_type", "") or "").strip().lower()
     sig = str(endpoint_sig or getattr(endpoint, "api_format", "") or "").strip().lower()
+    is_codex_compact = False
+    if pt == ProviderType.CODEX and sig == "openai:cli":
+        try:
+            from src.services.provider.adapters.codex.context import get_codex_request_context
+
+            ctx = get_codex_request_context()
+            is_codex_compact = bool(ctx and ctx.is_compact)
+        except Exception:
+            is_codex_compact = False
 
     # Explicit config wins (unless upstream has a hard constraint).
     cfg = getattr(endpoint, "config", None)
@@ -76,6 +85,7 @@ def get_upstream_stream_policy(
                 pt == ProviderType.CODEX
                 and sig == "openai:cli"
                 and parsed == UpstreamStreamPolicy.FORCE_NON_STREAM
+                and not is_codex_compact
             ):
                 return UpstreamStreamPolicy.FORCE_STREAM
             if pt == ProviderType.KIRO and parsed == UpstreamStreamPolicy.FORCE_NON_STREAM:
@@ -84,7 +94,11 @@ def get_upstream_stream_policy(
 
     # Safe-by-default: Codex Responses OAuth behaves like SSE-only.
     if pt == ProviderType.CODEX and sig == "openai:cli":
-        return UpstreamStreamPolicy.FORCE_STREAM
+        return (
+            UpstreamStreamPolicy.FORCE_NON_STREAM
+            if is_codex_compact
+            else UpstreamStreamPolicy.FORCE_STREAM
+        )
 
     # Kiro upstream streams binary AWS Event Stream; treat as stream-only.
     if pt == ProviderType.KIRO:

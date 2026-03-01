@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from src.services.provider.adapters.codex.context import (
+    CodexRequestContext,
+    set_codex_request_context,
+)
 from src.services.provider.transport import build_provider_url
 
 
@@ -44,3 +48,19 @@ def test_codex_openai_cli_does_not_duplicate_responses_suffix() -> None:
     )
 
     assert url == "https://chatgpt.com/backend-api/codex/responses"
+
+
+def test_codex_openai_cli_uses_compact_suffix_when_context_marked_compact() -> None:
+    endpoint = _DummyEndpoint(
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_format="openai:cli",
+        provider=SimpleNamespace(provider_type="codex"),
+    )
+    set_codex_request_context(CodexRequestContext(is_compact=True))
+    url = build_provider_url(
+        endpoint,  # type: ignore[arg-type]
+        path_params={"model": "ignored"},
+        is_stream=False,
+    )
+    assert url == "https://chatgpt.com/backend-api/codex/responses/compact"
+    set_codex_request_context(None)

@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from src.services.provider.adapters.codex.context import (
+    CodexRequestContext,
+    set_codex_request_context,
+)
 from src.services.provider.stream_policy import (
     UpstreamStreamPolicy,
     enforce_stream_mode_for_upstream,
@@ -40,6 +44,19 @@ def test_get_upstream_stream_policy_codex_ignores_force_non_stream_config() -> N
         provider=SimpleNamespace(provider_type="codex"),
     )
     assert get_upstream_stream_policy(ep) == UpstreamStreamPolicy.FORCE_STREAM
+
+
+def test_get_upstream_stream_policy_codex_compact_forces_non_stream() -> None:
+    ep = _DummyEndpoint(
+        api_format="openai:cli",
+        config=None,
+        provider=SimpleNamespace(provider_type="codex"),
+    )
+    try:
+        set_codex_request_context(CodexRequestContext(is_compact=True))
+        assert get_upstream_stream_policy(ep) == UpstreamStreamPolicy.FORCE_NON_STREAM
+    finally:
+        set_codex_request_context(None)
 
 
 def test_enforce_stream_mode_for_upstream_openai_chat_sets_stream_options_usage() -> None:

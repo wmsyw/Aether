@@ -101,6 +101,7 @@ class TestBuildUpstreamHeaders:
                 "X-Api-Key": "client",
                 "User-Agent": "ua",
                 "Content-Type": "text/plain",
+                "Content-Encoding": "gzip",
             },
             "openai:chat",
             "provider",
@@ -112,6 +113,7 @@ class TestBuildUpstreamHeaders:
         assert result["Authorization"] == "Bearer provider"
         assert result["User-Agent"] == "extra"
         assert result["Content-Type"] == "text/plain"
+        assert "Content-Encoding" not in result
         assert result["X-Endpoint"] == "1"
         assert result["X-Extra"] == "1"
 

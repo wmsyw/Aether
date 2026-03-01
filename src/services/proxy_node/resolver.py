@@ -10,14 +10,15 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 import time
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
 
-from src.config import config
 from src.core.exceptions import ProxyNodeUnavailableError
+from src.core.http_compression import is_gzip_content_encoding
 from src.core.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -26,7 +27,10 @@ from src.core.logger import logger
 _proxy_node_cache: dict[str, tuple[dict[str, Any] | None, float]] = {}
 _PROXY_NODE_CACHE_TTL_SECONDS = 15.0
 _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS = 5.0  # 不可用节点使用更短的 TTL，加速恢复感知
+_PROXY_NODE_CACHE_TUNNEL_LOCAL_MISS_TTL_SECONDS = 0.5  # 本地 worker 无 tunnel 时，快速重试
 _PROXY_NODE_CACHE_MAX_SIZE = 256
+_TUNNEL_LOCAL_MISS_LOG_COOLDOWN_SECONDS = 30.0
+_tunnel_local_miss_log_next_at: dict[str, float] = {}
 
 
 def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
@@ -74,9 +78,23 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
 
             manager = get_tunnel_manager()
             if not manager.has_tunnel(node_id):
+                # 多 worker 部署时，DB 可能显示 ONLINE（其他 worker 有 tunnel），
+                # 但当前 worker 无本地连接，请求仍不可用。记录限频告警便于定位。
+                if now >= _tunnel_local_miss_log_next_at.get(node_id, 0.0):
+                    _tunnel_local_miss_log_next_at[node_id] = (
+                        now + _TUNNEL_LOCAL_MISS_LOG_COOLDOWN_SECONDS
+                    )
+                    logger.warning(
+                        "tunnel node {} has no local connection on pid={} "
+                        "(db_status={}, db_tunnel_connected={}), request may fail on this worker",
+                        node_id,
+                        os.getpid(),
+                        str(getattr(node, "status", "unknown")),
+                        bool(getattr(node, "tunnel_connected", False)),
+                    )
                 _proxy_node_cache[node_id] = (
                     None,
-                    now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS,
+                    now + _PROXY_NODE_CACHE_TUNNEL_LOCAL_MISS_TTL_SECONDS,
                 )
                 return None
             value: dict[str, Any] = {
@@ -127,6 +145,7 @@ _SYSTEM_PROXY_CACHE_TTL = 60.0
 def invalidate_proxy_node_cache(node_id: str) -> None:
     """主动清除指定节点的信息缓存（tunnel 断开时调用，避免使用过期的连接状态）"""
     _proxy_node_cache.pop(node_id, None)
+    _tunnel_local_miss_log_next_at.pop(node_id, None)
 
 
 def invalidate_system_proxy_cache() -> None:
@@ -509,7 +528,10 @@ def resolve_proxy_info(proxy_config: dict[str, Any] | None) -> dict[str, Any] | 
         node_id = node_id.strip()
         node_info = _get_proxy_node_info(node_id)
         node_name = node_info.get("name", "unknown") if node_info else "offline"
-        return {"node_id": node_id, "node_name": node_name, "source": source}
+        info: dict[str, Any] = {"node_id": node_id, "node_name": node_name, "source": source}
+        if node_info and node_info.get("is_manual"):
+            info["is_manual"] = True
+        return info
 
     # 旧格式 URL 模式
     proxy_url = effective_config.get("url")
@@ -620,9 +642,10 @@ def resolve_delegate_config(proxy_config: dict[str, Any] | None) -> dict[str, An
 def _maybe_compress_payload(
     payload: Any,
     headers: dict[str, str],
+    client_content_encoding: str | None = None,
 ) -> tuple[bytes, dict[str, str]]:
     """
-    将 payload 序列化为 JSON bytes，按配置决定是否 gzip 压缩。
+    将 payload 序列化为 JSON bytes，并按客户端请求行为决定是否 gzip 压缩。
 
     NOTE: 使用紧凑分隔符 ``(",", ":")`` 序列化（无空格），相比 httpx ``json=``
     参数的默认 ``json.dumps``（带空格分隔符）体积更小，所有上游 API 均兼容。
@@ -631,14 +654,14 @@ def _maybe_compress_payload(
         (body_bytes, updated_headers)
     """
     json_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    normalized_headers = {k: v for k, v in headers.items() if k.lower() != "content-encoding"}
 
-    if config.enable_request_compression and len(json_bytes) >= config.request_compression_min_size:
+    if is_gzip_content_encoding(client_content_encoding):
         compressed = gzip.compress(json_bytes, compresslevel=6)
-        if len(compressed) < len(json_bytes):
-            headers = {**headers, "Content-Encoding": "gzip"}
-            return compressed, headers
+        normalized_headers = {**normalized_headers, "Content-Encoding": "gzip"}
+        return compressed, normalized_headers
 
-    return json_bytes, headers
+    return json_bytes, normalized_headers
 
 
 def build_post_kwargs(
@@ -648,6 +671,7 @@ def build_post_kwargs(
     headers: dict[str, str],
     payload: Any,
     timeout: float,
+    client_content_encoding: str | None = None,
     refresh_auth: bool = False,
 ) -> dict[str, Any]:
     """
@@ -658,7 +682,11 @@ def build_post_kwargs(
     ``_delegate_cfg`` 和 ``refresh_auth`` 已废弃（tunnel 模式下认证由 transport 层处理），
     保留仅为兼容现有调用方签名。
     """
-    content, final_headers = _maybe_compress_payload(payload, headers)
+    content, final_headers = _maybe_compress_payload(
+        payload,
+        headers,
+        client_content_encoding=client_content_encoding,
+    )
     return {
         "url": url,
         "content": content,
@@ -674,6 +702,7 @@ def build_stream_kwargs(
     headers: dict[str, str],
     payload: Any,
     timeout: float | None = None,
+    client_content_encoding: str | None = None,
 ) -> dict[str, Any]:
     """
     构建上游 stream 请求的 httpx kwargs
@@ -683,7 +712,11 @@ def build_stream_kwargs(
 
     ``_delegate_cfg`` 已废弃，保留仅为兼容现有调用方签名。
     """
-    content, final_headers = _maybe_compress_payload(payload, headers)
+    content, final_headers = _maybe_compress_payload(
+        payload,
+        headers,
+        client_content_encoding=client_content_encoding,
+    )
     kwargs: dict[str, Any] = {
         "method": "POST",
         "url": url,

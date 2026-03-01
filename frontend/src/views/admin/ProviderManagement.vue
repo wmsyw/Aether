@@ -178,7 +178,7 @@
     @update:open="providerDrawerOpen = $event"
     @edit="openEditProviderDialog"
     @toggle-status="toggleProviderStatus"
-    @refresh="loadProviders"
+    @refresh="handleDrawerRefresh"
   />
 
   <ProviderAuthDialog
@@ -211,6 +211,7 @@ import { useProviderFilters } from '@/features/providers/composables/useProvider
 import { useProviderBalance } from '@/features/providers/composables/useProviderBalance'
 import {
   getProvidersSummary,
+  getProvider,
   deleteProvider,
   updateProvider,
   getGlobalModels,
@@ -407,8 +408,28 @@ function handleOpsConfigSaved() {
 }
 
 // 处理提供商编辑完成
-function handleProviderUpdated() {
-  loadProviders()
+function handleProviderUpdated(updated: ProviderWithEndpointsSummary) {
+  const index = providers.value.findIndex(p => p.id === updated.id)
+  if (index !== -1) {
+    providers.value[index] = updated
+    // 刷新该提供商的余额数据
+    loadBalances([updated])
+  }
+}
+
+// 处理详情抽屉内的刷新：只刷新当前查看的那一条提供商
+async function handleDrawerRefresh() {
+  if (!selectedProviderId.value) return
+  try {
+    const updated = await getProvider(selectedProviderId.value)
+    const index = providers.value.findIndex(p => p.id === updated.id)
+    if (index !== -1) {
+      providers.value[index] = updated
+      loadBalances([updated])
+    }
+  } catch (err) {
+    showError(parseApiError(err, '刷新提供商数据失败'), '错误')
+  }
 }
 
 // 优先级保存成功回调

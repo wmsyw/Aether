@@ -16,8 +16,11 @@ from src.api.handlers.base.upstream_stream_bridge import (
     aggregate_upstream_stream_to_internal_response,
 )
 from src.api.handlers.base.utils import (
+    build_json_response_for_client,
     filter_proxy_response_headers,
     get_format_converter_registry,
+    resolve_client_accept_encoding,
+    resolve_client_content_encoding,
 )
 from src.config.settings import config
 from src.core.error_utils import extract_client_error_message
@@ -52,6 +55,8 @@ class CliSyncMixin:
         original_headers: dict[str, str],
         query_params: dict[str, str] | None = None,
         path_params: dict[str, Any] | None = None,
+        client_content_encoding: str | None = None,
+        client_accept_encoding: str | None = None,
     ) -> JSONResponse:
         """
         处理非流式请求
@@ -62,6 +67,14 @@ class CliSyncMixin:
         3. 解析响应并记录统计
         """
         logger.debug("开始非流式响应处理 ({})", self.FORMAT_ID)
+        effective_client_content_encoding = resolve_client_content_encoding(
+            original_headers,
+            client_content_encoding,
+        )
+        effective_client_accept_encoding = resolve_client_accept_encoding(
+            original_headers,
+            client_accept_encoding,
+        )
 
         # 使用子类实现的方法提取 model（不同 API 格式的 model 位置不同）
         model = self.extract_model_from_request(original_request_body, path_params)
@@ -303,6 +316,7 @@ class CliSyncMixin:
                         headers=provider_headers,
                         payload=provider_payload,
                         timeout=request_timeout,
+                        client_content_encoding=effective_client_content_encoding,
                     )
                     resp = await http_client.post(**_pkw)
                 except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
@@ -327,6 +341,7 @@ class CliSyncMixin:
                         headers=provider_headers,
                         payload=provider_payload,
                         timeout=request_timeout,
+                        client_content_encoding=effective_client_content_encoding,
                     )
                     async with http_client.stream(**_stream_args) as stream_resp:
                         resp = stream_resp
@@ -532,6 +547,13 @@ class CliSyncMixin:
             # 非流式成功时，返回给客户端的是提供商响应头（透传）
             client_response_headers = filter_proxy_response_headers(response_headers)
             client_response_headers["content-type"] = "application/json"
+            client_response = build_json_response_for_client(
+                status_code=status_code,
+                content=response_json,
+                headers=client_response_headers,
+                client_accept_encoding=effective_client_accept_encoding,
+            )
+            actual_client_response_headers = dict(client_response.headers)
 
             request_metadata = self._build_request_metadata() or {}
             if sync_proxy_info:
@@ -548,7 +570,7 @@ class CliSyncMixin:
                 request_headers=original_headers,
                 request_body=original_request_body,
                 response_headers=response_headers,
-                client_response_headers=client_response_headers,
+                client_response_headers=actual_client_response_headers,
                 response_body=provider_response_json or response_json,
                 client_response_body=response_json if provider_response_json else None,
                 provider_request_body=provider_request_body,
@@ -576,11 +598,7 @@ class CliSyncMixin:
             logger.info("{} 非流式响应处理完成", self.FORMAT_ID)
 
             # 透传提供商的响应头
-            return JSONResponse(
-                status_code=status_code,
-                content=response_json,
-                headers=client_response_headers,
-            )
+            return client_response
 
         except ThinkingSignatureException as e:
             # Thinking 签名错误：TaskService 层已处理整流重试但仍失败

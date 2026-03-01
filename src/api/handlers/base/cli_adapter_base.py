@@ -147,12 +147,15 @@ class CliAdapterBase(HandlerAdapterBase):
                     query_params=query_params,
                     path_params=context.path_params,
                     http_request=http_request,
+                    client_content_encoding=context.client_content_encoding,
                 )
             return await handler.process_sync(
                 original_request_body=original_request_body,
                 original_headers=original_headers,
                 query_params=query_params,
                 path_params=context.path_params,
+                client_content_encoding=context.client_content_encoding,
+                client_accept_encoding=context.client_accept_encoding,
             )
 
         except HTTPException:

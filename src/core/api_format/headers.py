@@ -76,6 +76,7 @@ UPSTREAM_DROP_HEADERS: frozenset[str] = frozenset(
         "connection",
         # 编码头 - 丢弃客户端值，由 BROWSER_FINGERPRINT_HEADERS 统一设置
         "accept-encoding",
+        "content-encoding",
         # 反向代理 / 网关注入的头部 - 属于本站基础设施，不应泄露给上游
         "x-real-ip",
         "x-real-proto",

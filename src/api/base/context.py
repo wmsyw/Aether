@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import time
 import uuid
@@ -9,6 +10,8 @@ from typing import Any
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from src.core.api_format.headers import get_header_value
+from src.core.http_compression import is_gzip_content_encoding, normalize_content_encoding
 from src.core.logger import logger
 from src.models.database import ApiKey, ManagementToken, User
 from src.utils.perf import PerfRecorder
@@ -47,6 +50,8 @@ class ApiRequestContext:
 
     # 高频轮询端点日志抑制标志
     quiet_logging: bool = False
+    client_content_encoding: str | None = None
+    client_accept_encoding: str | None = None
 
     def ensure_json_body(self) -> dict[str, Any]:
         """确保请求体已解析为JSON并返回。"""
@@ -67,8 +72,25 @@ class ApiRequestContext:
                 return
             perf_metrics.setdefault("pipeline", {})["json_parse_ms"] = int(duration * 1000)
 
+        body_to_parse = self.raw_body
+        content_encoding = self.client_content_encoding or normalize_content_encoding(
+            get_header_value(self.original_headers, "content-encoding")
+        )
+        if is_gzip_content_encoding(content_encoding):
+            try:
+                body_to_parse = gzip.decompress(body_to_parse)
+            except OSError as exc:
+                parse_duration = PerfRecorder.stop(
+                    parse_start,
+                    "pipeline_json_parse",
+                    labels={"mode": self.mode},
+                )
+                _record_parse_duration(parse_duration)
+                logger.warning("gzip 请求体解压失败: {}", exc)
+                raise HTTPException(status_code=400, detail="gzip 请求体解压失败") from exc
+
         try:
-            self.json_body = json.loads(self.raw_body.decode("utf-8"))
+            self.json_body = json.loads(body_to_parse.decode("utf-8"))
             parse_duration = PerfRecorder.stop(
                 parse_start,
                 "pipeline_json_parse",
@@ -118,6 +140,12 @@ class ApiRequestContext:
         start_time = time.time()
         client_ip = get_client_ip(request)
         user_agent = request.headers.get("user-agent", "unknown")
+        client_content_encoding = normalize_content_encoding(
+            request.headers.get("content-encoding")
+        )
+        client_accept_encoding = request.headers.get("accept-encoding")
+        if isinstance(client_accept_encoding, str):
+            client_accept_encoding = client_accept_encoding.strip() or None
 
         context = cls(
             request=request,
@@ -134,6 +162,8 @@ class ApiRequestContext:
             mode=mode,
             api_format_hint=api_format_hint,
             path_params=path_params or {},
+            client_content_encoding=client_content_encoding,
+            client_accept_encoding=client_accept_encoding,
         )
 
         perf_metrics = getattr(request.state, "perf_metrics", None)

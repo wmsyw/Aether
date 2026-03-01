@@ -29,8 +29,11 @@ from src.api.handlers.base.stream_context import (
     is_format_converted,
 )
 from src.api.handlers.base.utils import (
+    build_json_response_for_client,
     filter_proxy_response_headers,
     get_format_converter_registry,
+    resolve_client_accept_encoding,
+    resolve_client_content_encoding,
 )
 from src.core.error_utils import extract_client_error_message
 from src.core.exceptions import (
@@ -87,10 +90,20 @@ class ChatSyncExecutor:
         original_headers: dict[str, Any],
         original_request_body: dict[str, Any],
         query_params: dict[str, str] | None = None,
+        client_content_encoding: str | None = None,
+        client_accept_encoding: str | None = None,
     ) -> JSONResponse:
         """处理非流式响应（原 process_sync 的完整逻辑）"""
         handler = self._handler
         logger.debug(f"开始非流式响应处理 ({handler.FORMAT_ID})")
+        effective_client_content_encoding = resolve_client_content_encoding(
+            original_headers,
+            client_content_encoding,
+        )
+        effective_client_accept_encoding = resolve_client_accept_encoding(
+            original_headers,
+            client_accept_encoding,
+        )
 
         # 转换请求格式
         converted_request = await handler._convert_request(request)
@@ -130,6 +143,7 @@ class ChatSyncExecutor:
                 original_headers=original_headers,
                 request_body_ref=request_body_ref,
                 query_params=query_params,
+                client_content_encoding=effective_client_content_encoding,
             )
 
         try:
@@ -191,6 +205,13 @@ class ChatSyncExecutor:
             # JSONResponse 会自动设置 content-type，但我们记录实际返回的完整头
             client_response_headers = filter_proxy_response_headers(ctx.response_headers)
             client_response_headers["content-type"] = "application/json"
+            client_response = build_json_response_for_client(
+                status_code=ctx.status_code,
+                content=ctx.response_json,
+                headers=client_response_headers,
+                client_accept_encoding=effective_client_accept_encoding,
+            )
+            actual_client_response_headers = dict(client_response.headers)
 
             request_metadata = handler._build_request_metadata() or {}
             if ctx.sync_proxy_info:
@@ -207,7 +228,7 @@ class ChatSyncExecutor:
                 request_headers=original_headers,
                 request_body=original_request_body,
                 response_headers=ctx.response_headers,
-                client_response_headers=client_response_headers,
+                client_response_headers=actual_client_response_headers,
                 response_body=ctx.provider_response_json or ctx.response_json,
                 client_response_body=ctx.response_json if ctx.provider_response_json else None,
                 provider_request_body=ctx.provider_request_body,
@@ -243,11 +264,7 @@ class ChatSyncExecutor:
             )
 
             # 透传提供商的响应头
-            return JSONResponse(
-                status_code=ctx.status_code,
-                content=ctx.response_json,
-                headers=client_response_headers,
-            )
+            return client_response
 
         except ThinkingSignatureException as e:
             # Thinking 签名错误：TaskService 层已处理整流重试但仍失败
@@ -279,9 +296,11 @@ class ChatSyncExecutor:
                 provider_format,
                 needs_conversion=ctx.needs_conversion_for_error,
             )
-            return JSONResponse(
+            return build_json_response_for_client(
                 status_code=_get_error_status_code(e),
                 content=payload,
+                headers={"content-type": "application/json"},
+                client_accept_encoding=effective_client_accept_encoding,
             )
 
         except UpstreamClientException as e:
@@ -289,6 +308,20 @@ class ChatSyncExecutor:
             request_metadata = handler._build_request_metadata() or {}
             if ctx.sync_proxy_info:
                 request_metadata["proxy"] = ctx.sync_proxy_info
+            client_format = (ctx.client_api_format_for_error or "").upper()
+            provider_format = (ctx.provider_api_format_for_error or client_format).upper()
+            payload = _build_error_json_payload(
+                e,
+                client_format,
+                provider_format,
+                needs_conversion=ctx.needs_conversion_for_error,
+            )
+            error_response = build_json_response_for_client(
+                status_code=_get_error_status_code(e),
+                content=payload,
+                headers={"content-type": "application/json"},
+                client_accept_encoding=effective_client_accept_encoding,
+            )
             await handler.telemetry.record_failure(
                 provider=ctx.provider_name or "unknown",
                 model=model,
@@ -304,7 +337,7 @@ class ChatSyncExecutor:
                 endpoint_kind=handler.endpoint_kind,
                 provider_request_headers=ctx.provider_request_headers,
                 response_headers=ctx.response_headers,
-                client_response_headers={"content-type": "application/json"},
+                client_response_headers=dict(error_response.headers),
                 provider_id=ctx.provider_id,
                 provider_endpoint_id=ctx.endpoint_id,
                 provider_api_key_id=ctx.key_id,
@@ -316,18 +349,7 @@ class ChatSyncExecutor:
                 target_model=ctx.mapped_model_result,
                 request_metadata=request_metadata,
             )
-            client_format = (ctx.client_api_format_for_error or "").upper()
-            provider_format = (ctx.provider_api_format_for_error or client_format).upper()
-            payload = _build_error_json_payload(
-                e,
-                client_format,
-                provider_format,
-                needs_conversion=ctx.needs_conversion_for_error,
-            )
-            return JSONResponse(
-                status_code=_get_error_status_code(e),
-                content=payload,
-            )
+            return error_response
 
         except Exception as e:
             response_time_ms = handler.elapsed_ms()
@@ -394,6 +416,7 @@ class ChatSyncExecutor:
         original_headers: dict[str, Any],
         request_body_ref: dict[str, Any],
         query_params: dict[str, str] | None = None,
+        client_content_encoding: str | None = None,
     ) -> dict[str, Any]:
         """单次同步请求（原 sync_request_func 内嵌函数）"""
         handler = self._handler
@@ -520,6 +543,7 @@ class ChatSyncExecutor:
                     headers=provider_hdrs,
                     payload=provider_payload,
                     timeout=request_timeout,
+                    client_content_encoding=client_content_encoding,
                 )
                 resp = await http_client.post(**_pkw)
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
@@ -544,6 +568,7 @@ class ChatSyncExecutor:
                     headers=provider_hdrs,
                     payload=provider_payload,
                     timeout=request_timeout,
+                    client_content_encoding=client_content_encoding,
                 )
                 async with http_client.stream(**_stream_args) as stream_resp:
                     resp = stream_resp

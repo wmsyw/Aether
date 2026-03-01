@@ -1,11 +1,17 @@
 """测试 handler 基础工具函数"""
 
+import gzip
+import json
+
 import pytest
 
 from src.api.handlers.base.utils import (
+    build_json_response_for_client,
     build_sse_headers,
     extract_cache_creation_tokens,
     filter_proxy_response_headers,
+    resolve_client_accept_encoding,
+    resolve_client_content_encoding,
 )
 
 
@@ -135,3 +141,51 @@ class TestFilterProxyResponseHeaders:
 
         assert result["X-Request-Id"] == "abc"
         assert result["Anthropic-RateLimit-Requests-Remaining"] == "10"
+
+
+class TestResolveClientEncoding:
+    def test_content_encoding_prefers_hint(self) -> None:
+        headers = {"content-encoding": "gzip"}
+        result = resolve_client_content_encoding(headers, hinted_content_encoding="br")
+        assert result == "br"
+
+    def test_content_encoding_fallback_to_headers(self) -> None:
+        headers = {"Content-Encoding": "gzip"}
+        result = resolve_client_content_encoding(headers)
+        assert result == "gzip"
+
+    def test_accept_encoding_prefers_hint(self) -> None:
+        headers = {"accept-encoding": "gzip"}
+        result = resolve_client_accept_encoding(headers, hinted_accept_encoding="br")
+        assert result == "br"
+
+    def test_accept_encoding_fallback_to_headers(self) -> None:
+        headers = {"Accept-Encoding": "gzip, deflate"}
+        result = resolve_client_accept_encoding(headers)
+        assert result == "gzip, deflate"
+
+
+class TestBuildJsonResponseForClient:
+    def test_returns_gzip_response_when_client_accepts_gzip(self) -> None:
+        response = build_json_response_for_client(
+            status_code=200,
+            content={"ok": True},
+            headers={"content-type": "application/json"},
+            client_accept_encoding="gzip, deflate",
+        )
+
+        assert response.headers.get("content-encoding") == "gzip"
+        assert "accept-encoding" in response.headers.get("vary", "").lower()
+        decompressed = gzip.decompress(bytes(response.body))
+        assert json.loads(decompressed.decode("utf-8")) == {"ok": True}
+
+    def test_returns_plain_json_when_gzip_not_accepted(self) -> None:
+        response = build_json_response_for_client(
+            status_code=200,
+            content={"ok": True},
+            headers={"content-type": "application/json"},
+            client_accept_encoding="gzip;q=0, deflate",
+        )
+
+        assert response.headers.get("content-encoding") is None
+        assert json.loads(bytes(response.body).decode("utf-8")) == {"ok": True}

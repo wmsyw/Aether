@@ -30,21 +30,25 @@ class CodexOAuthEnvelope:
     """Provider envelope hooks for Codex OAuth upstream."""
 
     name = "codex:oauth"
+    _CODEX_VERSION = "0.101.0"
+    _CODEX_ORIGINATOR = "codex_cli_rs"
 
     def extra_headers(self) -> dict[str, str] | None:
-        # These headers are best-effort: Codex upstream is stricter than public OpenAI API.
-        # Keep them provider-scoped (via ProviderEnvelope) to avoid leaking to other upstreams.
+        # Keep these headers provider-scoped to avoid leaking to other upstreams.
         headers: dict[str, str] = {
-            "OpenAI-Beta": "responses=experimental",
             # Codex upstream is strict about Content-Type; variants like
             # "application/json; charset=utf-8" are rejected.
             "Content-Type": "application/json",
-            "x-oai-web-search-eligible": "true",
-            "session_id": str(uuid.uuid4()),
-            "originator": "codex_cli_rs",
-            # Ensure SSE is returned when upstream is forced to streaming mode.
-            "Accept": "text/event-stream",
+            "Version": self._CODEX_VERSION,
+            "Session_id": str(uuid.uuid4()),
+            "Connection": "Keep-Alive",
+            "Originator": self._CODEX_ORIGINATOR,
         }
+
+        # Compact endpoint is non-stream; normal responses endpoint expects SSE.
+        ctx = get_codex_request_context()
+        is_compact = bool(ctx.is_compact) if ctx else False
+        headers["Accept"] = "application/json" if is_compact else "text/event-stream"
 
         ua = str(getattr(config, "internal_user_agent_openai_cli", "") or "").strip()
         if ua:
@@ -52,9 +56,8 @@ class CodexOAuthEnvelope:
 
         # Add chatgpt-account-id from context (set by wrap_request).
         # Context is NOT cleared here — build_codex_url reads is_compact from it later.
-        ctx = get_codex_request_context()
         if ctx and ctx.account_id:
-            headers["chatgpt-account-id"] = ctx.account_id
+            headers["Chatgpt-Account-Id"] = ctx.account_id
 
         return headers
 

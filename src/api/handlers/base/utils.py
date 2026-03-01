@@ -4,11 +4,16 @@ Handler 基础工具函数
 
 from __future__ import annotations
 
+import gzip
 import json
 from typing import TYPE_CHECKING, Any
 
+from fastapi.responses import JSONResponse, Response
+
 from src.core.api_format import filter_response_headers
+from src.core.api_format.headers import get_header_value
 from src.core.exceptions import EmbeddedErrorException, ProviderNotAvailableException
+from src.core.http_compression import accepts_gzip, normalize_content_encoding
 from src.core.logger import logger
 
 if TYPE_CHECKING:
@@ -150,6 +155,71 @@ def filter_proxy_response_headers(headers: dict[str, str] | None) -> dict[str, s
     如果透传上游的 `content-length/content-encoding/...`，会导致客户端解码失败或等待更多字节。
     """
     return filter_response_headers(headers)
+
+
+def resolve_client_content_encoding(
+    original_headers: dict[str, str],
+    hinted_content_encoding: str | None = None,
+) -> str | None:
+    """解析客户端请求体编码（优先使用上层透传值）。"""
+    if hinted_content_encoding is not None:
+        return normalize_content_encoding(hinted_content_encoding)
+    return normalize_content_encoding(get_header_value(original_headers, "content-encoding"))
+
+
+def resolve_client_accept_encoding(
+    original_headers: dict[str, str],
+    hinted_accept_encoding: str | None = None,
+) -> str | None:
+    """解析客户端 Accept-Encoding（优先使用上层透传值）。"""
+    if isinstance(hinted_accept_encoding, str):
+        normalized_hint = hinted_accept_encoding.strip()
+        if normalized_hint:
+            return normalized_hint
+    header_value = get_header_value(original_headers, "accept-encoding")
+    normalized_header = header_value.strip()
+    return normalized_header or None
+
+
+def build_json_response_for_client(
+    *,
+    status_code: int,
+    content: Any,
+    headers: dict[str, str] | None,
+    client_accept_encoding: str | None,
+) -> Response:
+    """根据客户端 Accept-Encoding 返回普通或 gzip 压缩 JSON 响应。"""
+    response_headers = dict(headers or {})
+    response_headers.setdefault("content-type", "application/json")
+
+    if not accepts_gzip(client_accept_encoding):
+        return JSONResponse(status_code=status_code, content=content, headers=response_headers)
+
+    json_bytes = json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    compressed_bytes = gzip.compress(json_bytes, compresslevel=6)
+
+    cleaned_headers = {
+        key: value
+        for key, value in response_headers.items()
+        if key.lower() not in {"content-length", "content-encoding", "vary"}
+    }
+    cleaned_headers["Content-Encoding"] = "gzip"
+
+    existing_vary = next(
+        (v for k, v in response_headers.items() if k.lower() == "vary"), ""
+    )
+    vary_values = [part.strip() for part in str(existing_vary).split(",") if part.strip()]
+    if not any(part.lower() == "accept-encoding" for part in vary_values):
+        vary_values.append("Accept-Encoding")
+    if vary_values:
+        cleaned_headers["Vary"] = ", ".join(vary_values)
+
+    return Response(
+        status_code=status_code,
+        content=compressed_bytes,
+        headers=cleaned_headers,
+        media_type="application/json",
+    )
 
 
 def check_html_response(line: str) -> bool:

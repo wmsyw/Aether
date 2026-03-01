@@ -315,18 +315,16 @@ class OpenAICliNormalizer(FormatNormalizer):
         # Codex 特定设置（覆盖/删除不支持的字段）
         if is_codex:
             result["parallel_tool_calls"] = True
-            # 添加 reasoning.encrypted_content 到 include
-            include = result.get("include", [])
-            if not isinstance(include, list):
-                include = []
-            if self._CODEX_REQUIRED_INCLUDE not in include:
-                include.append(self._CODEX_REQUIRED_INCLUDE)
-            result["include"] = include
+            # 和 codex passthrough patch 保持一致：固定 include 列表
+            result["include"] = [self._CODEX_REQUIRED_INCLUDE]
             # 删除 Codex 不支持的字段
             for key in (
                 "previous_response_id",
                 "service_tier",
                 "max_completion_tokens",
+                "truncation",
+                "context_management",
+                "user",
             ):
                 result.pop(key, None)
 

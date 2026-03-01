@@ -1141,7 +1141,12 @@ async function handleKeyFormSubmit(data: StandaloneKeyFormData) {
         allowed_api_formats: data.allowed_api_formats,
         allowed_models: data.allowed_models
       }
-      await adminApi.updateApiKey(data.id, updateData)
+      const { message: _, ...updated } = await adminApi.updateApiKey(data.id, updateData)
+      // 局部更新：直接替换列表中对应的记录
+      const index = apiKeys.value.findIndex(k => k.id === data.id)
+      if (index !== -1) {
+        apiKeys.value[index] = updated
+      }
       success('API Key 更新成功')
     } else {
       // 创建
@@ -1164,9 +1169,9 @@ async function handleKeyFormSubmit(data: StandaloneKeyFormData) {
       newKeyValue.value = response.key
       showNewKeyDialog.value = true
       success('独立 Key 创建成功')
+      await loadApiKeys()
     }
     closeKeyFormDialog()
-    await loadApiKeys()
   } catch (err: unknown) {
     log.error('保存独立Key失败:', err)
     error(parseApiError(err, '保存失败'))

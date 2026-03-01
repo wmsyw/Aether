@@ -691,12 +691,18 @@ async function saveToken() {
 
     if (editingToken.value) {
       // 更新
-      await managementTokenApi.updateToken(editingToken.value.id, {
+      const tokenId = editingToken.value.id
+      const result = await managementTokenApi.updateToken(tokenId, {
         name: formData.name,
         description: formData.description.trim() || null,
         allowed_ips: allowedIps.length > 0 ? allowedIps : null,
         expires_at: expiresAtUtc
       })
+      // 局部更新：直接替换列表中对应的记录
+      const index = tokens.value.findIndex(t => t.id === tokenId)
+      if (index !== -1) {
+        tokens.value[index] = result.data
+      }
       success('令牌更新成功')
     } else {
       // 创建
@@ -710,10 +716,10 @@ async function saveToken() {
       isRegenerating.value = false
       showTokenDialog.value = true
       success('令牌创建成功')
+      await loadTokens()
     }
 
     closeDialog()
-    await loadTokens()
   } catch (err: unknown) {
     log.error('保存 Token 失败:', err)
     showError(parseApiError(err, '保存失败'))

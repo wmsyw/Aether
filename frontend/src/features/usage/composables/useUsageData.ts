@@ -176,7 +176,7 @@ export function useUsageData(options: UseUsageDataOptions) {
         // 使用 mergeRecordStatus 保护已有的活跃状态，避免轮询更新被覆盖
         const nextRecords = (userData.records || []) as UsageRecord[]
         currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
-        totalRecords.value = currentRecords.value.length
+        totalRecords.value = userData.pagination?.total ?? currentRecords.value.length
 
         // 从记录中提取筛选选项和 API 格式统计
         const models = new Set<string>()

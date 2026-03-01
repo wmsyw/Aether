@@ -55,6 +55,7 @@ from src.api.handlers.base.utils import (
     build_sse_headers,
     filter_proxy_response_headers,
     get_format_converter_registry,
+    resolve_client_content_encoding,
 )
 from src.config.settings import config
 from src.core.api_format.conversion.stream_bridge import (
@@ -464,9 +465,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         original_headers: dict[str, Any],
         original_request_body: dict[str, Any],
         query_params: dict[str, str] | None = None,
+        client_content_encoding: str | None = None,
     ) -> StreamingResponse | JSONResponse:
         """处理流式响应"""
         logger.debug(f"开始流式响应处理 ({self.FORMAT_ID})")
+        effective_client_content_encoding = resolve_client_content_encoding(
+            original_headers,
+            client_content_encoding,
+        )
 
         # 转换请求格式
         converted_request = await self._convert_request(request)
@@ -534,6 +540,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 query_params,
                 candidate,
                 is_disconnected=http_request.is_disconnected,
+                client_content_encoding=effective_client_content_encoding,
             )
 
         try:
@@ -824,6 +831,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         query_params: dict[str, str] | None = None,
         candidate: ProviderCandidate | None = None,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+        client_content_encoding: str | None = None,
     ) -> AsyncGenerator[bytes]:
         """执行流式请求并返回流生成器"""
         # 重置上下文状态（重试时清除之前的数据）
@@ -939,6 +947,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     headers=provider_headers,
                     payload=provider_payload,
                     timeout=request_timeout_sync,
+                    client_content_encoding=client_content_encoding,
                 )
                 resp = await http_client.post(**_pkw)
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
@@ -978,6 +987,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                         headers=provider_headers,
                         payload=provider_payload,
                         timeout=request_timeout_sync,
+                        client_content_encoding=client_content_encoding,
                         refresh_auth=True,
                     )
                     resp = await http_client.post(**_pkw)
@@ -1143,11 +1153,12 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 url=url,
                 headers=provider_headers,
                 payload=provider_payload,
-                timeout=(
-                    provider.request_timeout or config.http_request_timeout
-                    if delegate_cfg
-                    else None
-                ),
+                client_content_encoding=client_content_encoding,
+                # 流式请求不应使用 provider.request_timeout 作为“整条流总时长”超时，
+                # 否则会在长响应中途被硬切断（常见于 request_timeout=15s 的配置）。
+                # 首字节超时由外层 wait_for(stream_first_byte_timeout) 控制；
+                # 后续分块读取由 http client 默认 read timeout（长超时）控制。
+                timeout=None,
             )
             response_ctx = http_client.stream(**_skw)
             stream_response = await response_ctx.__aenter__()
@@ -1304,11 +1315,19 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         original_headers: dict[str, Any],
         original_request_body: dict[str, Any],
         query_params: dict[str, str] | None = None,
+        client_content_encoding: str | None = None,
+        client_accept_encoding: str | None = None,
     ) -> JSONResponse:
         """处理非流式响应"""
         from src.api.handlers.base.chat_sync_executor import ChatSyncExecutor
 
         executor = ChatSyncExecutor(self)
         return await executor.execute(
-            request, http_request, original_headers, original_request_body, query_params
+            request,
+            http_request,
+            original_headers,
+            original_request_body,
+            query_params,
+            client_content_encoding=client_content_encoding,
+            client_accept_encoding=client_accept_encoding,
         )

@@ -68,7 +68,7 @@
       :available-providers="availableProviders"
       :current-page="currentPage"
       :page-size="pageSize"
-      :total-records="totalRecords"
+      :total-records="effectiveTotalRecords"
       :page-size-options="pageSizeOptions"
       :auto-refresh="globalAutoRefresh"
       @update:time-range="handleTimeRangeChange"
@@ -397,7 +397,7 @@ onUnmounted(() => {
   stopGlobalAutoRefresh()
 })
 
-// 用户页面的前端分页
+// 用户页面的前端分页（后端一次性返回所有记录，前端分页+筛选）
 const paginatedRecords = computed(() => {
   if (!isAdminPage.value) {
     const start = (currentPage.value - 1) * pageSize.value
@@ -405,6 +405,14 @@ const paginatedRecords = computed(() => {
     return filteredRecords.value.slice(start, end)
   }
   return currentRecords.value
+})
+
+// 用户页面使用前端筛选后的总数，管理员页面使用后端返回的总数
+const effectiveTotalRecords = computed(() => {
+  if (!isAdminPage.value) {
+    return filteredRecords.value.length
+  }
+  return totalRecords.value
 })
 
 // 显示的记录
@@ -425,20 +433,22 @@ onMounted(async () => {
   const heatmapTask = loadHeatmapData().catch(err => {
     log.error('加载热力图数据失败:', err)
   })
-  const recordsTask = loadRecords(
-    { page: currentPage.value, pageSize: pageSize.value },
-    getCurrentFilters()
-  )
 
-  const tasks: Promise<unknown>[] = [statsTask, heatmapTask, recordsTask]
+  const tasks: Promise<unknown>[] = [statsTask, heatmapTask]
 
   if (isAdminPage.value) {
+    // 管理员页面：stats 和 records 分开加载（后端分页）
+    tasks.push(loadRecords(
+      { page: currentPage.value, pageSize: pageSize.value },
+      getCurrentFilters()
+    ))
     tasks.push(
       usersApi.getAllUsers().then(users => {
         availableUsers.value = users.map(u => ({ id: u.id, username: u.username, email: u.email }))
       })
     )
   }
+  // 用户页面：loadStats 已包含记录加载，不需要单独调用 loadRecords
 
   await Promise.allSettled(tasks)
 })
@@ -448,20 +458,29 @@ async function handleTimeRangeChange(value: DateRangeParams) {
   timeRange.value = value
   currentPage.value = 1 // 重置到第一页
   await loadStats(timeRange.value)
-  await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
+  if (isAdminPage.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
+  }
+  // 用户页面：loadStats 已包含记录加载
 }
 
 // 处理分页变化
 async function handlePageChange(page: number) {
   currentPage.value = page
-  await loadRecords({ page, pageSize: pageSize.value }, getCurrentFilters())
+  if (isAdminPage.value) {
+    await loadRecords({ page, pageSize: pageSize.value }, getCurrentFilters())
+  }
+  // 用户页面使用前端分页，无需重新请求
 }
 
 // 处理每页大小变化
 async function handlePageSizeChange(size: number) {
   pageSize.value = size
   currentPage.value = 1  // 重置到第一页
-  await loadRecords({ page: 1, pageSize: size }, getCurrentFilters())
+  if (isAdminPage.value) {
+    await loadRecords({ page: 1, pageSize: size }, getCurrentFilters())
+  }
+  // 用户页面使用前端分页，无需重新请求
 }
 
 // 获取当前筛选参数
@@ -481,7 +500,11 @@ async function handleFilterSearchChange(value: string) {
   filterSearch.value = value
   currentPage.value = 1
 
-  await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
+  if (isAdminPage.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
+  }
+  // 用户页面：search 需要重新从后端拉取数据（后端支持 search 参数）
+  // 但通过 filteredRecords 做前端过滤已覆盖，无需额外请求
 }
 
 async function handleFilterUserChange(value: string) {
@@ -532,7 +555,10 @@ async function handleFilterStatusChange(value: string) {
 // 刷新数据
 async function refreshData() {
   await loadStats(timeRange.value)
-  await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+  if (isAdminPage.value) {
+    await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+  }
+  // 用户页面：loadStats 已包含记录加载
 }
 
 async function refreshDataWithFreshStats() {

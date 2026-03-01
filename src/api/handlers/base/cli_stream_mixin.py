@@ -27,6 +27,7 @@ from src.api.handlers.base.utils import (
     build_sse_headers,
     filter_proxy_response_headers,
     get_format_converter_registry,
+    resolve_client_content_encoding,
 )
 from src.config.settings import config
 from src.core.api_format.conversion.stream_bridge import (
@@ -67,6 +68,7 @@ class CliStreamMixin:
         query_params: dict[str, str] | None = None,
         path_params: dict[str, Any] | None = None,
         http_request: Request | None = None,
+        client_content_encoding: str | None = None,
     ) -> StreamingResponse:
         """
         处理流式请求
@@ -85,6 +87,10 @@ class CliStreamMixin:
             http_request: FastAPI Request 对象，用于检测客户端断连
         """
         logger.debug("开始流式响应处理 ({})", self.FORMAT_ID)
+        effective_client_content_encoding = resolve_client_content_encoding(
+            original_headers,
+            client_content_encoding,
+        )
 
         # 可变请求体容器：允许 TaskService 在遇到 Thinking 签名错误时整流请求体后重试
         # 结构: {"body": 实际请求体, "_rectified": 是否已整流, "_rectified_this_turn": 本轮是否整流}
@@ -138,6 +144,7 @@ class CliStreamMixin:
                 query_params,
                 candidate,
                 http_request,  # 传递 http_request 用于断连检测
+                effective_client_content_encoding,
             )
 
         try:
@@ -243,6 +250,7 @@ class CliStreamMixin:
         query_params: dict[str, str] | None = None,
         candidate: ProviderCandidate | None = None,
         http_request: Request | None = None,
+        client_content_encoding: str | None = None,
     ) -> AsyncGenerator[bytes]:
         """执行流式请求并返回流生成器"""
         from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
@@ -456,6 +464,7 @@ class CliStreamMixin:
                     headers=provider_headers,
                     payload=provider_payload,
                     timeout=request_timeout_sync,
+                    client_content_encoding=client_content_encoding,
                 )
                 _connect_start = time.monotonic()
                 resp = await http_client.post(**_pkw)
@@ -497,6 +506,7 @@ class CliStreamMixin:
                         headers=provider_headers,
                         payload=provider_payload,
                         timeout=request_timeout_sync,
+                        client_content_encoding=client_content_encoding,
                         refresh_auth=True,
                     )
                     _connect_start = time.monotonic()
@@ -658,11 +668,12 @@ class CliStreamMixin:
                 url=url,
                 headers=provider_headers,
                 payload=provider_payload,
-                timeout=(
-                    provider.request_timeout or config.http_request_timeout
-                    if delegate_cfg
-                    else None
-                ),
+                client_content_encoding=client_content_encoding,
+                # 流式请求不应使用 provider.request_timeout 作为“整条流总时长”超时，
+                # 否则会在长响应中途被硬切断（常见于 request_timeout=15s 的配置）。
+                # 首字节超时由外层 wait_for(stream_first_byte_timeout) 控制；
+                # 后续分块读取由 http client 默认 read timeout（长超时）控制。
+                timeout=None,
             )
             _connect_start = time.monotonic()
             response_ctx = http_client.stream(**_skw)
