@@ -32,6 +32,67 @@ if TYPE_CHECKING:
 class CliMonitorMixin:
     """监控和统计相关方法的 Mixin"""
 
+    # CancelledError 归因时，断连检查参数（秒）
+    CANCEL_DISCONNECT_CHECK_TIMEOUT_SECONDS = 0.5
+    CANCEL_DISCONNECT_RETRY_DELAYS_SECONDS = (0.1, 0.2)
+
+    async def _probe_client_disconnect(
+        self,
+        http_request: Request,
+        *,
+        request_id: str,
+    ) -> tuple[bool, bool]:
+        """单次探测客户端是否断连。
+
+        Returns:
+            (is_disconnected, is_indeterminate)
+        """
+        try:
+            disconnected = await asyncio.wait_for(
+                asyncio.shield(http_request.is_disconnected()),
+                timeout=self.CANCEL_DISCONNECT_CHECK_TIMEOUT_SECONDS,
+            )
+            return bool(disconnected), False
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            return False, True
+        except Exception as e:
+            logger.debug("ID:{} | cancel 断连检测失败: {}", request_id, e)
+            return False, True
+
+    async def _confirm_client_disconnect(
+        self,
+        http_request: Request,
+        *,
+        request_id: str,
+    ) -> tuple[bool, bool]:
+        """CancelledError 场景下做多次断连确认，降低误判。
+
+        Returns:
+            (is_client_disconnected, check_indeterminate)
+        """
+        disconnected, uncertain = await self._probe_client_disconnect(
+            http_request,
+            request_id=request_id,
+        )
+        if disconnected:
+            return True, uncertain
+
+        for delay in self.CANCEL_DISCONNECT_RETRY_DELAYS_SECONDS:
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                # 重试期间协程再次被取消，无法继续探测，标记为不确定
+                return False, True
+            disconnected, step_uncertain = await self._probe_client_disconnect(
+                http_request,
+                request_id=request_id,
+            )
+            uncertain = uncertain or step_uncertain
+            if disconnected:
+                return True, uncertain
+
+        return False, uncertain
+
     async def _create_monitored_stream(
         self,
         ctx: StreamContext,
@@ -111,28 +172,35 @@ class CliMonitorMixin:
             time_since_last_chunk = time_module.time() - last_chunk_time
 
             is_client_disconnected = False
+            disconnect_check_uncertain = False
             if http_request is not None:
-                try:
-                    # shield + timeout: 避免在取消态下二次被 CancelledError 打断，尽力取到断连状态
-                    # 限时 0.5s 防止极端情况下的阻塞
-                    is_client_disconnected = await asyncio.wait_for(
-                        asyncio.shield(http_request.is_disconnected()),
-                        timeout=0.5,
+                is_client_disconnected, disconnect_check_uncertain = (
+                    await self._confirm_client_disconnect(
+                        http_request,
+                        request_id=ctx.request_id,
                     )
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    # 无法在取消态/超时下完成断连检查，保守视为未知（不强行归因为客户端）
-                    is_client_disconnected = False
-                except Exception as e:
-                    logger.debug("ID:{} | cancel 断连检测失败: {}", ctx.request_id, e)
-                    is_client_disconnected = False
+                )
 
             # 如果响应已完成，不标记为失败/取消
             if not ctx.has_completion:
                 if is_client_disconnected:
                     ctx.status_code = 499
                     ctx.error_message = "client_disconnected"
+                    cancel_origin = "client_disconnected"
                     logger.warning(
                         f"ID:{ctx.request_id} | Stream cancelled by client: "
+                        f"chunks={chunk_count}, "
+                        f"has_completion={ctx.has_completion}, "
+                        f"time_since_last_chunk={time_since_last_chunk:.2f}s, "
+                        f"output_tokens={ctx.output_tokens}"
+                    )
+                elif disconnect_check_uncertain:
+                    # 断连检查本身不稳定（超时/取消/异常）时，避免直接定性为 server_cancelled。
+                    ctx.status_code = 503
+                    ctx.error_message = "cancelled_unknown"
+                    cancel_origin = "cancelled_unknown"
+                    logger.warning(
+                        f"ID:{ctx.request_id} | Stream cancelled with unknown origin: "
                         f"chunks={chunk_count}, "
                         f"has_completion={ctx.has_completion}, "
                         f"time_since_last_chunk={time_since_last_chunk:.2f}s, "
@@ -142,6 +210,7 @@ class CliMonitorMixin:
                     # 服务端中断（例如重载/关停/内部取消） -- 不应伪装成客户端取消
                     ctx.status_code = 503
                     ctx.error_message = "server_cancelled"
+                    cancel_origin = "server_cancelled"
                     logger.error(
                         f"ID:{ctx.request_id} | Stream interrupted by server: "
                         f"chunks={chunk_count}, "
@@ -149,6 +218,13 @@ class CliMonitorMixin:
                         f"time_since_last_chunk={time_since_last_chunk:.2f}s, "
                         f"output_tokens={ctx.output_tokens}"
                     )
+                ctx.upstream_response = (
+                    f"cancel_origin={cancel_origin}, "
+                    f"chunks={chunk_count}, "
+                    f"has_completion={ctx.has_completion}, "
+                    f"time_since_last_chunk={time_since_last_chunk:.2f}s, "
+                    f"output_tokens={ctx.output_tokens}"
+                )
             raise
         except httpx.TimeoutException as e:
             ctx.status_code = 504

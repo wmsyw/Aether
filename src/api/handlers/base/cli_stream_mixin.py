@@ -658,11 +658,11 @@ class CliStreamMixin:
                 url=url,
                 headers=provider_headers,
                 payload=provider_payload,
-                timeout=(
-                    provider.request_timeout or config.http_request_timeout
-                    if delegate_cfg
-                    else None
-                ),
+                # 流式请求不应使用 provider.request_timeout 作为“整条流总时长”超时，
+                # 否则会在长响应中途被硬切断（常见于 request_timeout=15s 的配置）。
+                # 首字节超时由外层 wait_for(stream_first_byte_timeout) 控制；
+                # 后续分块读取由 http client 默认 read timeout（长超时）控制。
+                timeout=None,
             )
             _connect_start = time.monotonic()
             response_ctx = http_client.stream(**_skw)
