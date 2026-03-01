@@ -4,6 +4,7 @@
 # 用法:
 #   部署/更新:    ./deploy.sh  (自动检测所有变化)
 #   强制重建:     ./deploy.sh --rebuild-base
+#   强制重建 Hub: ./deploy.sh --rebuild-hub
 #   强制全部重建: ./deploy.sh --force
 
 set -e
@@ -12,12 +13,23 @@ cd "$(dirname "$0")"
 # 兼容 docker-compose 和 docker compose
 if command -v docker-compose &> /dev/null; then
     DC="docker-compose -f docker-compose.build.yml"
+    USE_LEGACY_COMPOSE=true
 else
     DC="docker compose -f docker-compose.build.yml"
+    USE_LEGACY_COMPOSE=false
 fi
+
+compose_up() {
+    if [ "$USE_LEGACY_COMPOSE" = true ]; then
+        $DC up -d --no-build "$@"
+    else
+        $DC up -d --no-build --pull never "$@"
+    fi
+}
 
 # 缓存文件
 HASH_FILE=".deps-hash"
+HUB_HASH_FILE=".hub-hash"
 CODE_HASH_FILE=".code-hash"
 MIGRATION_HASH_FILE=".migration-hash"
 
@@ -63,6 +75,16 @@ calc_code_hash() {
     } | md5sum | cut -d' ' -f1
 }
 
+# 计算 Hub 文件的哈希值（本地构建 aether-hub:local）
+calc_hub_hash() {
+    {
+        cat aether-hub/Dockerfile 2>/dev/null
+        cat aether-hub/Cargo.toml 2>/dev/null
+        cat aether-hub/Cargo.lock 2>/dev/null
+        find aether-hub/src -type f -name "*.rs" 2>/dev/null | sort | xargs cat 2>/dev/null
+    } | md5sum | cut -d' ' -f1
+}
+
 # 计算迁移文件的哈希值
 calc_migration_hash() {
     find alembic/versions -name "*.py" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum | cut -d' ' -f1
@@ -92,6 +114,18 @@ check_code_changed() {
     return 0
 }
 
+# 检查 Hub 是否变化
+check_hub_changed() {
+    local current_hash=$(calc_hub_hash)
+    if [ -f "$HUB_HASH_FILE" ]; then
+        local saved_hash=$(cat "$HUB_HASH_FILE")
+        if [ "$current_hash" = "$saved_hash" ]; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
 # 检查迁移是否变化
 check_migration_changed() {
     local current_hash=$(calc_migration_hash)
@@ -106,14 +140,22 @@ check_migration_changed() {
 
 # 保存哈希
 save_deps_hash() { calc_deps_hash > "$HASH_FILE"; }
+save_hub_hash() { calc_hub_hash > "$HUB_HASH_FILE"; }
 save_code_hash() { calc_code_hash > "$CODE_HASH_FILE"; }
 save_migration_hash() { calc_migration_hash > "$MIGRATION_HASH_FILE"; }
 
 # 构建基础镜像
 build_base() {
     echo ">>> Building base image (dependencies)..."
-    docker build -f Dockerfile.base.local -t aether-base:latest .
+    docker build --pull=false -f Dockerfile.base.local -t aether-base:latest .
     save_deps_hash
+}
+
+# 构建 Hub 镜像（本地）
+build_hub() {
+    echo ">>> Building hub image (local)..."
+    docker build --pull=false -f aether-hub/Dockerfile -t aether-hub:local ./aether-hub
+    save_hub_hash
 }
 
 # 生成版本文件
@@ -138,7 +180,7 @@ EOF
 build_app() {
     echo ">>> Building app image (code only)..."
     generate_version_file
-    docker build -f Dockerfile.app.local -t aether-app:latest .
+    docker build --pull=false --build-arg HUB_BINARY_IMAGE=aether-hub:local -f Dockerfile.app.local -t aether-app:latest .
     save_code_hash
 }
 
@@ -189,8 +231,9 @@ print('Old version cleared')
 if [ "$1" = "--force" ] || [ "$1" = "-f" ]; then
     echo ">>> Force rebuilding everything..."
     build_base
+    build_hub
     build_app
-    $DC up -d --force-recreate
+    compose_up --force-recreate
     sleep 3
     run_migration
     docker image prune -f
@@ -206,13 +249,19 @@ if [ "$1" = "--rebuild-base" ] || [ "$1" = "-r" ]; then
     exit 0
 fi
 
-# 拉取最新代码
-echo ">>> Pulling latest code..."
-git pull
+# 强制重建 Hub 镜像
+if [ "$1" = "--rebuild-hub" ]; then
+    build_hub
+    echo ">>> Hub image rebuilt. Run ./deploy.sh to deploy."
+    exit 0
+fi
+
+echo ">>> Local-only mode: skip git pull."
 
 # 标记是否需要重启
 NEED_RESTART=false
 BASE_REBUILT=false
+HUB_REBUILT=false
 
 # 检查基础镜像是否存在，或依赖是否变化
 if ! docker image inspect aether-base:latest >/dev/null 2>&1; then
@@ -229,6 +278,21 @@ else
     echo ">>> Dependencies unchanged."
 fi
 
+# 检查 Hub 镜像是否存在，或 Hub 代码是否变化
+if ! docker image inspect aether-hub:local >/dev/null 2>&1; then
+    echo ">>> Hub image not found, building..."
+    build_hub
+    HUB_REBUILT=true
+    NEED_RESTART=true
+elif check_hub_changed; then
+    echo ">>> Hub changed, rebuilding hub image..."
+    build_hub
+    HUB_REBUILT=true
+    NEED_RESTART=true
+else
+    echo ">>> Hub unchanged."
+fi
+
 # 检查代码或迁移是否变化，或者 base 重建了（app 依赖 base）
 # 注意：迁移文件打包在镜像中，所以迁移变化也需要重建 app 镜像
 MIGRATION_CHANGED=false
@@ -242,6 +306,10 @@ if ! docker image inspect aether-app:latest >/dev/null 2>&1; then
     NEED_RESTART=true
 elif [ "$BASE_REBUILT" = true ]; then
     echo ">>> Base image rebuilt, rebuilding app image..."
+    build_app
+    NEED_RESTART=true
+elif [ "$HUB_REBUILT" = true ]; then
+    echo ">>> Hub image rebuilt, rebuilding app image..."
     build_app
     NEED_RESTART=true
 elif check_code_changed; then
@@ -265,10 +333,10 @@ fi
 # 有变化时重启，或容器未运行时启动
 if [ "$NEED_RESTART" = true ]; then
     echo ">>> Restarting services..."
-    $DC up -d
+    compose_up
 elif [ "$CONTAINERS_RUNNING" = false ]; then
     echo ">>> Containers not running, starting services..."
-    $DC up -d
+    compose_up
 else
     echo ">>> No changes detected, skipping restart."
 fi

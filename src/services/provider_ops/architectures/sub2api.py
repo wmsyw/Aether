@@ -106,9 +106,9 @@ class _Sub2ApiTokenMixin:
         """获取不带 auth hook 的裸 HTTP 客户端（用于登录/刷新 token）"""
         transport = None
         if self._tunnel_node_id:
-            from src.services.proxy_node.tunnel_transport import TunnelTransport
+            from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-            transport = TunnelTransport(self._tunnel_node_id, timeout=self._timeout)
+            transport = create_tunnel_transport(self._tunnel_node_id, timeout=self._timeout)
         elif self._proxy:
             transport = httpx.AsyncHTTPTransport(proxy=self._proxy)
         async with httpx.AsyncClient(
@@ -488,9 +488,9 @@ class Sub2ApiArchitecture(ProviderArchitecture):
             "verify": get_ssl_context(),
         }
         if tunnel_node_id:
-            from src.services.proxy_node.tunnel_transport import TunnelTransport
+            from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-            client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=30.0)
+            client_kwargs["transport"] = create_tunnel_transport(tunnel_node_id, timeout=30.0)
         elif proxy:
             client_kwargs["proxy"] = proxy
 

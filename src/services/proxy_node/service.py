@@ -177,10 +177,10 @@ async def _test_tunnel_connectivity(node_id: str) -> dict[str, Any]:
     """通过 WebSocket tunnel 测试连通性，返回标准化结果 dict"""
     import time as _time
 
-    from .tunnel_transport import TunnelTransport
+    from .tunnel_transport import create_tunnel_transport
 
     test_url = "https://1.1.1.1/cdn-cgi/trace"
-    transport = TunnelTransport(node_id, timeout=15.0)
+    transport = create_tunnel_transport(node_id, timeout=15.0)
     start = _time.monotonic()
 
     try:
@@ -556,17 +556,38 @@ class ProxyNodeService:
 
         # tunnel 节点：通过 WebSocket tunnel 测试
         if not node.is_manual:
-            # 以 TunnelManager 内存中的实际连接状态为准（与 health_scheduler 一致），
-            # 而非仅依赖 DB 的 tunnel_connected 字段，避免竞态导致误判。
-            from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+            from src.services.proxy_node.hub_config import get_hub_config
 
-            manager = get_tunnel_manager()
-            if not manager.has_tunnel(node.id):
+            hub_enabled = get_hub_config().enabled
+            connected = False
+            if hub_enabled:
+                connected = bool(node.tunnel_connected) and node.status == ProxyNodeStatus.ONLINE
+            else:
+                # 非 Hub 模式：以当前 worker 本地 TunnelManager 状态为准，
+                # 避免多 worker 场景的跨进程状态误判。
+                from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+
+                manager = get_tunnel_manager()
+                connected = manager.has_tunnel(node.id)
+
+            if not connected:
+                hint = ""
+                try:
+                    from src.config import config
+
+                    if config.worker_processes > 1 and not hub_enabled:
+                        hint = (
+                            "（当前 worker 无 tunnel 连接；检测到多 worker 部署，"
+                            "建议设置 GUNICORN_WORKERS/WEB_CONCURRENCY=1）"
+                        )
+                except Exception:
+                    # 配置读取失败时保持原始错误，避免影响主流程
+                    hint = ""
                 return {
                     "success": False,
                     "latency_ms": None,
                     "exit_ip": None,
-                    "error": "tunnel 未连接",
+                    "error": f"tunnel 未连接{hint}",
                 }
             result = await _test_tunnel_connectivity(node.id)
 

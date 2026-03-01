@@ -78,14 +78,22 @@ async def _on_startup() -> None:
 
     from src.config import config
     from src.services.proxy_node.health_scheduler import get_proxy_node_health_scheduler
+    from src.services.proxy_node.hub_config import get_hub_config
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     logger = logging.getLogger("aether.modules.proxy_nodes")
+    hub_enabled = get_hub_config().enabled
 
-    if config.worker_processes > 1:
+    if config.worker_processes > 1 and not hub_enabled:
         logger.warning(
             "检测到 WEB_CONCURRENCY={}。Proxy tunnel 连接是进程内资源，"
-            "多 worker 场景可能出现节点显示 ONLINE 但当前 worker 无可用 tunnel 的情况。",
+            "多 worker 场景可能出现节点显示 ONLINE 但当前 worker 无可用 tunnel 的情况。"
+            "建议设置 GUNICORN_WORKERS/WEB_CONCURRENCY=1。",
+            config.worker_processes,
+        )
+    elif config.worker_processes > 1 and hub_enabled:
+        logger.info(
+            "检测到 WEB_CONCURRENCY={}，Hub 模式已启用，允许多 worker 共享 tunnel。",
             config.worker_processes,
         )
 
@@ -111,14 +119,22 @@ async def _on_shutdown() -> None:
     import logging
 
     from src.services.proxy_node.health_scheduler import get_proxy_node_health_scheduler
-    from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+    from src.services.proxy_node.hub_config import get_hub_config
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     logger = logging.getLogger("aether.modules.proxy_nodes")
 
-    # 先向所有 tunnel 连接发送 GoAway，让 proxy 端立即重连到其他 worker
-    manager = get_tunnel_manager()
-    await manager.shutdown_all()
+    hub_enabled = get_hub_config().enabled
+    if hub_enabled:
+        from src.services.proxy_node.hub_transport import shutdown_hub_connection_manager
+
+        await shutdown_hub_connection_manager()
+    else:
+        # 先向所有 tunnel 连接发送 GoAway，让 proxy 端立即重连到其他 worker
+        from src.services.proxy_node.tunnel_manager import get_tunnel_manager
+
+        manager = get_tunnel_manager()
+        await manager.shutdown_all()
 
     from src.clients import get_redis_client
 

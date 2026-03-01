@@ -127,9 +127,9 @@ class ProviderConnector(ABC):
         """
         transport = None
         if self._tunnel_node_id:
-            from src.services.proxy_node.tunnel_transport import TunnelTransport
+            from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-            transport = TunnelTransport(self._tunnel_node_id, timeout=self._timeout)
+            transport = create_tunnel_transport(self._tunnel_node_id, timeout=self._timeout)
         elif self._proxy:
             transport = httpx.AsyncHTTPTransport(proxy=self._proxy)
 

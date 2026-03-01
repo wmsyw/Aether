@@ -1,0 +1,159 @@
+mod hub;
+mod protocol;
+mod proxy_conn;
+mod worker_conn;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::State;
+use axum::response::{IntoResponse, Json};
+use axum::routing::get;
+use axum::Router;
+use clap::Parser;
+use tracing::{info, warn};
+
+use crate::hub::HubRouter;
+
+#[derive(Parser, Debug)]
+#[command(name = "aether-hub", about = "Tunnel Hub for Aether")]
+struct Args {
+    /// Bind address
+    #[arg(long, default_value = "0.0.0.0:8085", env = "TUNNEL_HUB_BIND")]
+    bind: String,
+
+    /// Proxy-side idle timeout in seconds
+    #[arg(long, default_value_t = 90, env = "TUNNEL_HUB_PROXY_IDLE_TIMEOUT")]
+    proxy_idle_timeout: u64,
+
+    /// Worker-side idle timeout in seconds
+    #[arg(long, default_value_t = 60, env = "TUNNEL_HUB_WORKER_IDLE_TIMEOUT")]
+    worker_idle_timeout: u64,
+
+    /// Ping interval in seconds (for both sides)
+    #[arg(long, default_value_t = 15, env = "TUNNEL_HUB_PING_INTERVAL")]
+    ping_interval: u64,
+
+    /// Max concurrent streams per proxy connection
+    #[arg(long, default_value_t = 2048, env = "TUNNEL_HUB_MAX_STREAMS")]
+    max_streams: usize,
+}
+
+#[derive(Clone)]
+struct AppState {
+    hub: Arc<HubRouter>,
+    proxy_idle_timeout: Duration,
+    worker_idle_timeout: Duration,
+    ping_interval: Duration,
+    max_streams: usize,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "aether_hub=info".into()),
+        )
+        .init();
+
+    let args = Args::parse();
+
+    let hub = HubRouter::new();
+    let state = AppState {
+        hub,
+        proxy_idle_timeout: Duration::from_secs(args.proxy_idle_timeout),
+        worker_idle_timeout: Duration::from_secs(args.worker_idle_timeout),
+        ping_interval: Duration::from_secs(args.ping_interval),
+        max_streams: args.max_streams,
+    };
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/stats", get(stats))
+        .route("/proxy", get(ws_proxy))
+        .route("/worker", get(ws_worker))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind(&args.bind).await?;
+    info!(bind = %args.bind, "aether-hub started");
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// HTTP endpoints
+// ---------------------------------------------------------------------------
+
+async fn health() -> impl IntoResponse {
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn stats(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.hub.stats())
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket endpoints
+// ---------------------------------------------------------------------------
+
+async fn ws_proxy(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let node_id = headers
+        .get("x-node-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let node_name = headers
+        .get("x-node-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(&node_id)
+        .trim()
+        .to_string();
+
+    let max_streams: usize = headers
+        .get("x-tunnel-max-streams")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(state.max_streams)
+        .clamp(64, 2048);
+
+    if node_id.is_empty() {
+        warn!("proxy connection rejected: missing X-Node-ID header");
+        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    }
+
+    ws.max_frame_size(64 * 1024 * 1024)
+        .on_upgrade(move |socket| {
+            proxy_conn::handle_proxy_connection(
+                socket,
+                state.hub,
+                node_id,
+                node_name,
+                max_streams,
+                state.ping_interval,
+                state.proxy_idle_timeout,
+            )
+        })
+        .into_response()
+}
+
+async fn ws_worker(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.max_frame_size(64 * 1024 * 1024)
+        .on_upgrade(move |socket| {
+            worker_conn::handle_worker_connection(
+                socket,
+                state.hub,
+                state.ping_interval,
+                state.worker_idle_timeout,
+            )
+        })
+}

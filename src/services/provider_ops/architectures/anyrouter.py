@@ -214,9 +214,9 @@ async def _get_acw_cookie(
             "verify": get_ssl_context(),
         }
         if tunnel_node_id:
-            from src.services.proxy_node.tunnel_transport import TunnelTransport
+            from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-            client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=timeout)
+            client_kwargs["transport"] = create_tunnel_transport(tunnel_node_id, timeout=timeout)
         elif proxy:
             client_kwargs["proxy"] = proxy
             logger.debug(f"获取 acw_sc__v2 Cookie 使用代理: {proxy}")

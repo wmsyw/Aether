@@ -14,6 +14,7 @@ on:
 env:
   REGISTRY: ghcr.io
   BASE_IMAGE_NAME: fawney19/aether-base
+  HUB_IMAGE_NAME: fawney19/aether-hub
   APP_IMAGE_NAME: fawney19/aether
   # Base image hash inputs:
   # - Dockerfile.base
@@ -174,9 +175,61 @@ jobs:
           cache-to: type=gha,mode=max,scope=base
           platforms: linux/amd64,linux/arm64
 
+  build-hub:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      hub_binary_image: ${{ steps.hub-ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for hub image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.HUB_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=pre,enable=${{ contains(github.ref, '-') }}
+            type=raw,value=fix,enable=${{ contains(github.ref, '-fix') }}
+            type=raw,value=${{ github.sha }}
+            type=sha,prefix=
+          flavor: |
+            latest=auto
+
+      - name: Build and push hub image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./aether-hub
+          file: ./aether-hub/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=hub
+          cache-to: type=gha,mode=max,scope=hub
+          platforms: linux/amd64,linux/arm64
+
+      - name: Export hub binary image reference
+        id: hub-ref
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.HUB_IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
   build-app:
-    needs: [check-base-changes, build-base]
-    if: always() && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped')
+    needs: [check-base-changes, build-base, build-hub]
+    if: always() && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped') && needs.build-hub.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -249,6 +302,8 @@ jobs:
           context: .
           file: ./Dockerfile.app
           push: true
+          build-args: |
+            HUB_BINARY_IMAGE=${{ needs.build-hub.outputs.hub_binary_image }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           no-cache-filters: builder

@@ -136,3 +136,15 @@ def is_tunnel_node(node_info: dict[str, Any] | None) -> bool:
     if not node_info:
         return False
     return bool(node_info.get("tunnel_mode")) and bool(node_info.get("tunnel_connected"))
+
+
+def create_tunnel_transport(node_id: str, timeout: float = 60.0) -> httpx.AsyncBaseTransport:
+    """根据配置创建 tunnel transport（Hub 模式或直连 tunnel 模式）。"""
+    from .hub_config import get_hub_config
+
+    hub_cfg = get_hub_config()
+    if hub_cfg.enabled:
+        from .hub_transport import HubTunnelTransport
+
+        return HubTunnelTransport(node_id, timeout=timeout)
+    return TunnelTransport(node_id, timeout=timeout)

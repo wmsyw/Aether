@@ -495,7 +495,7 @@ class HTTPClientPool:
         调用方不应关闭此 client，其生命周期由 HTTPClientPool 管理。
         当 timeout 非 None 时（流式请求），每次创建新 client，由调用方负责关闭。
         """
-        from src.services.proxy_node.tunnel_transport import TunnelTransport
+        from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
         t = timeout or httpx.Timeout(
             connect=config.http_connect_timeout,
@@ -507,7 +507,7 @@ class HTTPClientPool:
 
         # 流式请求：每次创建新 client（调用方负责关闭）
         if timeout is not None:
-            transport = TunnelTransport(node_id, timeout=timeout_secs or 60.0)
+            transport = create_tunnel_transport(node_id, timeout=timeout_secs or 60.0)
             return httpx.AsyncClient(transport=transport, timeout=t)
 
         # 非流式请求：复用缓存的 client（加锁与 proxy_clients 保持一致）
@@ -517,7 +517,7 @@ class HTTPClientPool:
             if existing and not existing.is_closed:
                 return existing
 
-            transport = TunnelTransport(node_id, timeout=timeout_secs or 60.0)
+            transport = create_tunnel_transport(node_id, timeout=timeout_secs or 60.0)
             client = httpx.AsyncClient(transport=transport, timeout=t)
             cls._tunnel_clients[node_id] = client
             return client
