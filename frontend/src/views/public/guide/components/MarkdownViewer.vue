@@ -1,9 +1,11 @@
 <template>
   <div class="markdown-viewer-container">
+    <!-- eslint-disable vue/no-v-html -->
     <div
       class="markdown-body"
       v-html="renderedHtml"
     />
+    <!-- eslint-enable vue/no-v-html -->
   </div>
 </template>
 

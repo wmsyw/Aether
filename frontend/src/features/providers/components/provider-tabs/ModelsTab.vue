@@ -124,47 +124,14 @@
             </td>
             <td class="align-top px-4 py-3">
               <div class="flex justify-end gap-1">
-                <!-- 测试按钮（支持多格式选择） -->
-                <DropdownMenu
-                  v-if="availableApiFormats.length > 1"
-                  v-model:open="formatMenuOpen[model.id]"
-                >
-                  <DropdownMenuTrigger as-child>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="h-8 w-8"
-                      title="测试模型"
-                      :disabled="testingModelId === model.id"
-                    >
-                      <Loader2
-                        v-if="testingModelId === model.id"
-                        class="w-3.5 h-3.5 animate-spin"
-                      />
-                      <Play
-                        v-else
-                        class="w-3.5 h-3.5"
-                      />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuItem
-                      v-for="fmt in availableApiFormats"
-                      :key="fmt"
-                      @select="testModelConnection(model, fmt)"
-                    >
-                      {{ fmt }}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <!-- 测试按钮（模拟外部请求） -->
                 <Button
-                  v-else
                   variant="ghost"
                   size="icon"
                   class="h-8 w-8"
                   title="测试模型"
                   :disabled="testingModelId === model.id"
-                  @click="testModelConnection(model, availableApiFormats[0])"
+                  @click="testModelConnection(model)"
                 >
                   <Loader2
                     v-if="testingModelId === model.id"
@@ -243,6 +210,13 @@
       </p>
     </div>
   </Card>
+
+  <!-- 测试结果对话框 -->
+  <TestResultDialog
+    :result="testResult"
+    :mode="testResultMode"
+    @close="testResult = null"
+  />
 </template>
 
 <script setup lang="ts">
@@ -251,36 +225,22 @@ import { useSmartPagination } from '@/composables/useSmartPagination'
 import { Box, Edit, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem
-} from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import { sortResolutionEntries } from '@/utils/form'
 import {
-  testModel,
+  testModelFailover,
   type Model,
-  type ProviderMappingPreviewResponse
+  type TestModelFailoverResponse,
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
-import { parseApiError, parseTestModelError } from '@/utils/errorParser'
+import { parseApiError } from '@/utils/errorParser'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
-
-interface Endpoint {
-  id: string
-  api_format: string
-  is_active: boolean
-  active_keys?: number
-}
+import TestResultDialog from './TestResultDialog.vue'
 
 const props = defineProps<{
   provider: ProviderWithEndpointsSummary
-  endpoints?: Endpoint[]
   models?: Model[]
-  mappingPreview?: ProviderMappingPreviewResponse | null
 }>()
 
 const emit = defineEmits<{
@@ -295,23 +255,12 @@ const { copyToClipboard } = useClipboard()
 // 状态
 const loading = ref(false)
 const localModels = ref<Model[]>([])
-const localMappingPreview = ref<ProviderMappingPreviewResponse | null>(null)
 const togglingModelId = ref<string | null>(null)
 const testingModelId = ref<string | null>(null)
-const formatMenuOpen = ref<Record<string, boolean>>({})
-
+const testResult = ref<TestModelFailoverResponse | null>(null)
+const testResultMode = ref<'global' | 'direct'>('global')
 // 使用 props 传入的数据，或使用本地数据
 const models = computed(() => props.models ?? localModels.value)
-const mappingPreview = computed(() => props.mappingPreview ?? localMappingPreview.value)
-
-// 获取可用的 API 格式（有活跃端点且有活跃 Key）
-const availableApiFormats = computed(() => {
-  if (!props.endpoints) return []
-  return props.endpoints
-    .filter(ep => ep.is_active && (ep.active_keys ?? 0) > 0)
-    .map(ep => ep.api_format)
-})
-
 // 按名称排序的模型列表
 const sortedModels = computed(() => {
   return [...models.value].sort((a, b) => {
@@ -472,63 +421,31 @@ async function toggleModelActive(model: Model) {
   }
 }
 
-// 查找模型的正则映射信息（返回第一个匹配的活跃 key 和映射名称）
-function findRegexMapping(model: Model): { keyId: string; mappedName: string } | null {
-  if (!mappingPreview.value) return null
-
-  // 在映射预览中查找该模型的全局模型 ID
-  const globalModelId = model.global_model_id
-  if (!globalModelId) return null
-
-  for (const keyInfo of mappingPreview.value.keys) {
-    // 跳过未激活的 key
-    if (!keyInfo.is_active) continue
-
-    for (const gm of keyInfo.matching_global_models) {
-      if (gm.global_model_id === globalModelId && gm.matched_models.length > 0) {
-        // 返回第一个匹配的映射名称
-        return {
-          keyId: keyInfo.key_id,
-          mappedName: gm.matched_models[0].allowed_model
-        }
-      }
-    }
-  }
-  return null
-}
-
-// 测试模型连接性
-async function testModelConnection(model: Model, apiFormat?: string) {
+// 测试模型连接性（模拟外部请求，带故障转移）
+async function testModelConnection(model: Model) {
   if (testingModelId.value) return
 
   testingModelId.value = model.id
-  formatMenuOpen.value[model.id] = false
   try {
-    // 检查是否有正则映射，如果有则使用映射名称和指定 key
-    const regexMapping = findRegexMapping(model)
-    const modelName = regexMapping?.mappedName || model.provider_model_name
-    const apiKeyId = regexMapping?.keyId
+    const modelName = model.global_model_name || model.provider_model_name
 
-    const result = await testModel({
+    const result = await testModelFailover({
       provider_id: props.provider.id,
+      mode: 'global',
       model_name: modelName,
       message: "hello",
-      api_format: apiFormat,
-      api_key_id: apiKeyId
     })
 
     if (result.success) {
-      // 根据响应内容显示不同的成功消息
-      if (result.data?.response?.choices?.[0]?.message?.content) {
-        const content = result.data.response.choices[0].message.content
-        showSuccess(`测试成功，响应: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`)
-      } else if (result.data?.content_preview) {
-        showSuccess(`流式测试成功，预览: ${result.data.content_preview}`)
-      } else {
-        showSuccess(`模型 "${modelName}" 测试成功`)
-      }
+      const successAttempt = result.attempts.find(a => a.status === 'success')
+      const latency = successAttempt?.latency_ms != null ? ` (${successAttempt.latency_ms}ms)` : ''
+      const mapped = successAttempt?.effective_model && successAttempt.effective_model !== modelName
+        ? ` -> ${successAttempt.effective_model}`
+        : ''
+      showSuccess(`${modelName}${mapped} 测试成功${latency}`)
     } else {
-      showError(`模型测试失败: ${parseTestModelError(result)}`)
+      testResultMode.value = 'global'
+      testResult.value = result
     }
   } catch (err: unknown) {
     showError(`模型测试失败: ${parseApiError(err, '测试请求失败')}`)

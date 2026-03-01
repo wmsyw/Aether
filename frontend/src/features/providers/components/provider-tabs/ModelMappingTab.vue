@@ -151,47 +151,14 @@
               <span class="font-mono text-sm truncate">
                 {{ mapping.name }}
               </span>
-              <!-- 测试按钮（支持多格式选择） -->
-              <DropdownMenu
-                v-if="getItemAvailableFormats(item).length > 1"
-                v-model:open="formatMenuOpen[`${item.key}-${mapping.name}`]"
-              >
-                <DropdownMenuTrigger as-child>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-7 w-7 shrink-0"
-                    title="测试映射"
-                    :disabled="testingMapping === `${item.key}-${mapping.name}`"
-                  >
-                    <Loader2
-                      v-if="testingMapping === `${item.key}-${mapping.name}`"
-                      class="w-3 h-3 animate-spin"
-                    />
-                    <Play
-                      v-else
-                      class="w-3 h-3"
-                    />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    v-for="fmt in getItemAvailableFormats(item)"
-                    :key="fmt"
-                    @select="testMapping(item, mapping, fmt)"
-                  >
-                    {{ fmt }}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <!-- 测试按钮（直连测试） -->
               <Button
-                v-else
                 variant="ghost"
                 size="icon"
                 class="h-7 w-7 shrink-0"
                 title="测试映射"
-                :disabled="testingMapping === `${item.key}-${mapping.name}` || getItemAvailableFormats(item).length === 0"
-                @click="testMapping(item, mapping, getItemAvailableFormats(item)[0])"
+                :disabled="testingMapping === `${item.key}-${mapping.name}`"
+                @click="testMapping(item, mapping)"
               >
                 <Loader2
                   v-if="testingMapping === `${item.key}-${mapping.name}`"
@@ -340,6 +307,13 @@
     @confirm="confirmDelete"
     @cancel="deleteConfirmOpen = false"
   />
+
+  <!-- 测试结果对话框（仅失败时显示） -->
+  <TestResultDialog
+    :result="testResult"
+    mode="direct"
+    @close="testResult = null"
+  />
 </template>
 
 <script setup lang="ts">
@@ -348,21 +322,21 @@ import { useSmartPagination } from '@/composables/useSmartPagination'
 import { Tag, Plus, Edit, Trash2, ChevronRight, Loader2, Play } from 'lucide-vue-next'
 import {
   Card, Button, Badge,
-  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem
 } from '@/components/ui'
 import AlertDialog from '@/components/common/AlertDialog.vue'
 import ModelMappingDialog, { type AliasGroup } from '../ModelMappingDialog.vue'
+import TestResultDialog from './TestResultDialog.vue'
 import { useToast } from '@/composables/useToast'
 import {
-  testModel,
+  testModelFailover,
   type Model,
   type ProviderModelAlias,
-  type ProviderMappingPreviewResponse
+  type ProviderMappingPreviewResponse,
+  type TestModelFailoverResponse
 } from '@/api/endpoints'
 import { type EndpointAPIKey } from '@/api/endpoints/keys'
-import type { ProviderEndpoint } from '@/api/endpoints/types'
 import { updateModel } from '@/api/endpoints/models'
-import { parseApiError, parseTestModelError } from '@/utils/errorParser'
+import { parseApiError } from '@/utils/errorParser'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 
 interface MappingItem {
@@ -394,7 +368,6 @@ const props = defineProps<{
   providerKeys?: EndpointAPIKey[]
   models?: Model[]
   mappingPreview?: ProviderMappingPreviewResponse | null
-  endpoints?: ProviderEndpoint[]
 }>()
 
 const emit = defineEmits<{
@@ -410,15 +383,12 @@ const deleteConfirmOpen = ref(false)
 const editingGroup = ref<AliasGroup | null>(null)
 const deletingGroup = ref<AliasGroup | null>(null)
 const testingMapping = ref<string | null>(null)
+const testResult = ref<TestModelFailoverResponse | null>(null)
 const preselectedModelId = ref<string | null>(null)
-
-// 测试下拉菜单状态
-const formatMenuOpen = ref<Record<string, boolean>>({})
 
 // 使用 props 传入的数据
 const models = computed(() => props.models ?? [])
 const aliasMappingPreview = computed(() => props.mappingPreview ?? null)
-const providerEndpoints = computed(() => props.endpoints ?? [])
 const providerKeysState = computed(() => props.providerKeys ?? [])
 
 // 是否有 key 配置了自动获取上游模型
@@ -647,74 +617,24 @@ async function onDialogSaved() {
   emit('refresh')
 }
 
-// 获取可用的 API 格式（所有端点，去重；测试只关注 Key 是否支持，不依赖端点启用状态）
-const availableApiFormats = computed(() => {
-  const formats = new Set(
-    providerEndpoints.value
-      .map(ep => ep.api_format)
-  )
-  return [...formats]
-})
-
-// 获取映射项支持的 API 格式
-// 逻辑：找到支持该映射格式的所有活跃 Key，获取这些 Key 支持的所有格式，与端点格式取交集
-function getItemAvailableFormats(item: CombinedMapping): string[] {
-  // 精确映射：基于 group.apiFormats 筛选
-  if (item.type === 'exact' && item.group?.apiFormats && item.group.apiFormats.length > 0) {
-    const mappingFormats = item.group.apiFormats
-
-    // 找到所有支持该映射格式的活跃 Key
-    const supportingKeys = providerKeysState.value.filter(key => {
-      if (!key.is_active) return false
-      // Key 的 api_formats 与映射的 apiFormats 有交集
-      return key.api_formats?.some(fmt => mappingFormats.includes(fmt))
-    })
-
-    if (supportingKeys.length === 0) {
-      return []
-    }
-
-    // 收集这些 Key 支持的所有格式
-    const keyFormats = new Set<string>()
-    for (const key of supportingKeys) {
-      for (const fmt of key.api_formats || []) {
-        keyFormats.add(fmt)
-      }
-    }
-
-    // 与端点格式取交集
-    return availableApiFormats.value.filter(fmt => keyFormats.has(fmt))
-  }
-
-  // 正则映射或无限制：返回所有有活跃 Key 支持的端点格式
-  const allKeyFormats = new Set<string>()
-  for (const key of providerKeysState.value) {
-    if (!key.is_active) continue
-    for (const fmt of key.api_formats || []) {
-      allKeyFormats.add(fmt)
-    }
-  }
-  return availableApiFormats.value.filter(fmt => allKeyFormats.has(fmt))
-}
-
-// 测试精确映射（直接发请求或显示下拉菜单选择格式）
-async function testMapping(item: CombinedMapping, mapping: MappingItem, apiFormat?: string) {
-  const testingKey = `${item.key}-${mapping.name}`
+// 测试映射（直连测试，带故障转移）
+async function runMappingTest(testingKey: string, modelName: string) {
   testingMapping.value = testingKey
-  formatMenuOpen.value[testingKey] = false
 
   try {
-    const result = await testModel({
+    const result = await testModelFailover({
       provider_id: props.provider.id,
-      model_name: mapping.name,
+      mode: 'direct',
+      model_name: modelName,
       message: "hello",
-      api_format: apiFormat
     })
 
     if (result.success) {
-      showSuccess(`映射 "${mapping.name}" 测试成功`)
+      const successAttempt = result.attempts.find(a => a.status === 'success')
+      const latency = successAttempt?.latency_ms != null ? ` (${successAttempt.latency_ms}ms)` : ''
+      showSuccess(`映射 "${modelName}" 测试成功${latency}`)
     } else {
-      showError(`映射测试失败: ${parseTestModelError(result)}`)
+      testResult.value = result
     }
   } catch (err: unknown) {
     showError(`映射测试失败: ${parseApiError(err, '测试请求失败')}`)
@@ -723,29 +643,14 @@ async function testMapping(item: CombinedMapping, mapping: MappingItem, apiForma
   }
 }
 
-// 测试正则映射（指定 Key，直接发请求，因为已经有 Key 信息）
-async function testRegexMapping(item: CombinedMapping, keyItem: MatchedKeyInfo, match: MappingItem) {
-  const testingKey = `${item.key}-${keyItem.keyId}-${match.name}`
-  testingMapping.value = testingKey
+// 测试精确映射
+function testMapping(item: CombinedMapping, mapping: MappingItem) {
+  runMappingTest(`${item.key}-${mapping.name}`, mapping.name)
+}
 
-  try {
-    const result = await testModel({
-      provider_id: props.provider.id,
-      model_name: match.name,
-      message: "hello",
-      api_key_id: keyItem.keyId
-    })
-
-    if (result.success) {
-      showSuccess(`映射 "${match.name}" 测试成功`)
-    } else {
-      showError(`映射测试失败: ${parseTestModelError(result)}`)
-    }
-  } catch (err: unknown) {
-    showError(`映射测试失败: ${parseApiError(err, '测试请求失败')}`)
-  } finally {
-    testingMapping.value = null
-  }
+// 测试正则映射
+function testRegexMapping(item: CombinedMapping, keyItem: MatchedKeyInfo, match: MappingItem) {
+  runMappingTest(`${item.key}-${keyItem.keyId}-${match.name}`, match.name)
 }
 
 // 暴露给父组件

@@ -891,9 +891,7 @@
                 v-if="provider"
                 :key="`models-${provider.id}`"
                 :provider="provider"
-                :endpoints="endpoints"
                 :models="providerModels"
-                :mapping-preview="providerMappingPreview"
                 @edit-model="handleEditModel"
                 @batch-assign="handleBatchAssign"
                 @refresh="loadEndpoints"
@@ -908,7 +906,6 @@
                 :provider-keys="providerKeys"
                 :models="providerModels"
                 :mapping-preview="providerMappingPreview"
-                :endpoints="endpoints"
                 @refresh="handleModelMappingChanged"
               />
             </div>

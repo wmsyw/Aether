@@ -130,6 +130,48 @@ export async function testModel(data: TestModelRequest): Promise<TestModelRespon
 }
 
 /**
+ * 带故障转移的模型测试
+ */
+export interface TestModelFailoverRequest {
+  provider_id: string
+  mode: 'global' | 'direct'
+  model_name: string
+  api_format?: string
+  message?: string
+}
+
+export interface TestAttemptDetail {
+  candidate_index: number
+  endpoint_api_format: string
+  endpoint_base_url: string
+  key_name: string | null
+  key_id: string
+  auth_type: string
+  effective_model?: string | null
+  status: 'success' | 'failed' | 'skipped'
+  skip_reason?: string | null
+  error_message?: string | null
+  status_code?: number | null
+  latency_ms?: number | null
+}
+
+export interface TestModelFailoverResponse {
+  success: boolean
+  model: string
+  provider: { id: string; name: string }
+  attempts: TestAttemptDetail[]
+  total_candidates: number
+  total_attempts: number
+  data?: Record<string, unknown> | null
+  error?: string | null
+}
+
+export async function testModelFailover(data: TestModelFailoverRequest): Promise<TestModelFailoverResponse> {
+  const response = await client.post('/api/admin/provider-query/test-model-failover', data)
+  return response.data
+}
+
+/**
  * 映射预览相关类型
  */
 export interface MappingMatchedModel {
