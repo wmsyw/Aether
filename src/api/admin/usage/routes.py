@@ -25,9 +25,14 @@ from src.models.database import (
     ProviderEndpoint,
     RequestCandidate,
     Usage,
+    UserModelUsageCount,
     User,
 )
-from src.services.system.stats_aggregator import AggregatedStats, StatsFilter, query_stats_hybrid
+from src.services.system.stats_aggregator import (
+    AggregatedStats,
+    StatsFilter,
+    query_stats_hybrid,
+)
 from src.services.system.time_range import TimeRangeParams
 from src.services.usage.service import UsageService
 from src.utils.cache_decorator import cache_result
@@ -113,7 +118,9 @@ async def get_usage_aggregation(
     - 按 API 格式聚合时：api_format, request_count, total_tokens, total_cost, actual_cost, avg_response_time_ms
     """
     time_range = _apply_admin_default_range(
-        _build_time_range_params(start_date, end_date, preset, timezone_name, tz_offset_minutes)
+        _build_time_range_params(
+            start_date, end_date, preset, timezone_name, tz_offset_minutes
+        )
     )
 
     if group_by == "model":
@@ -129,7 +136,9 @@ async def get_usage_aggregation(
             status_code=400,
             detail=f"Invalid group_by value: {group_by}. Must be one of: model, user, provider, api_format",
         )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/stats")
@@ -162,10 +171,14 @@ async def get_usage_stats(
     - `cache_stats`: 缓存统计信息（cache_creation_tokens, cache_read_tokens, cache_creation_cost, cache_read_cost）
     """
     time_range = _apply_admin_default_range(
-        _build_time_range_params(start_date, end_date, preset, timezone_name, tz_offset_minutes)
+        _build_time_range_params(
+            start_date, end_date, preset, timezone_name, tz_offset_minutes
+        )
     )
     adapter = AdminUsageStatsAdapter(time_range=time_range)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/heatmap")
@@ -182,7 +195,9 @@ async def get_activity_heatmap(
     - 按日期聚合的请求数、token 数、成本等统计数据
     """
     adapter = AdminActivityHeatmapAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/records")
@@ -233,7 +248,9 @@ async def get_usage_records(
     - `offset`: 当前分页偏移量
     """
     time_range = _apply_admin_default_range(
-        _build_time_range_params(start_date, end_date, preset, timezone_name, tz_offset_minutes)
+        _build_time_range_params(
+            start_date, end_date, preset, timezone_name, tz_offset_minutes
+        )
     )
     adapter = AdminUsageRecordsAdapter(
         time_range=time_range,
@@ -247,13 +264,54 @@ async def get_usage_records(
         limit=limit,
         offset=offset,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
+
+
+@router.delete("/records")
+async def delete_usage_records(
+    request: Request,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    preset: str | None = None,
+    timezone_name: str | None = Query(None, alias="timezone"),
+    tz_offset_minutes: int | None = None,
+    search: str | None = None,
+    user_id: str | None = None,
+    username: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    api_format: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+) -> Any:
+    time_range = _apply_admin_default_range(
+        _build_time_range_params(
+            start_date, end_date, preset, timezone_name, tz_offset_minutes
+        )
+    )
+    adapter = AdminUsageDeleteRecordsAdapter(
+        time_range=time_range,
+        search=search,
+        user_id=user_id,
+        username=username,
+        model=model,
+        provider=provider,
+        api_format=api_format,
+        status=status,
+    )
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/active")
 async def get_active_requests(
     request: Request,
-    ids: str | None = Query(None, description="逗号分隔的请求 ID 列表，用于查询特定请求的状态"),
+    ids: str | None = Query(
+        None, description="逗号分隔的请求 ID 列表，用于查询特定请求的状态"
+    ),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -272,7 +330,9 @@ async def get_active_requests(
     - `requests`: 活跃请求列表，包含请求状态信息
     """
     adapter = AdminActiveRequestsAdapter(ids=ids)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{usage_id}/curl")
@@ -297,7 +357,9 @@ async def get_usage_curl_data(
     - `curl`: 生成的 cURL 命令字符串
     """
     adapter = AdminUsageCurlAdapter(usage_id=usage_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/{usage_id}/replay")
@@ -339,7 +401,9 @@ async def replay_usage_request(
         target_api_key_id=json_body.get("api_key_id"),
         body_override=json_body.get("body_override"),
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # NOTE: This route must be defined AFTER all other routes to avoid matching
@@ -396,7 +460,9 @@ async def get_usage_detail(
     - `tiered_pricing`: 阶梯计费信息（如适用）
     """
     adapter = AdminUsageDetailAdapter(usage_id=usage_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 class AdminUsageStatsAdapter(AdminApiAdapter):
@@ -406,7 +472,9 @@ class AdminUsageStatsAdapter(AdminApiAdapter):
         self.end_date = self.time_range.end_date if self.time_range else None
         self.preset = self.time_range.preset if self.time_range else None
         self.timezone = self.time_range.timezone if self.time_range else None
-        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
 
     @cache_result(
         key_prefix="admin:usage:stats",
@@ -425,7 +493,9 @@ class AdminUsageStatsAdapter(AdminApiAdapter):
                 func.sum(case((error_cond, 1), else_=0)).label("error_requests"),
                 func.sum(Usage.input_tokens).label("input_tokens"),
                 func.sum(Usage.output_tokens).label("output_tokens"),
-                func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
+                func.sum(Usage.cache_creation_input_tokens).label(
+                    "cache_creation_tokens"
+                ),
                 func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
                 func.sum(Usage.cache_creation_cost_usd).label("cache_creation_cost"),
                 func.sum(Usage.cache_read_cost_usd).label("cache_read_cost"),
@@ -441,13 +511,19 @@ class AdminUsageStatsAdapter(AdminApiAdapter):
                 error_requests=error_requests,
                 input_tokens=int(getattr(row, "input_tokens", 0) or 0),
                 output_tokens=int(getattr(row, "output_tokens", 0) or 0),
-                cache_creation_tokens=int(getattr(row, "cache_creation_tokens", 0) or 0),
+                cache_creation_tokens=int(
+                    getattr(row, "cache_creation_tokens", 0) or 0
+                ),
                 cache_read_tokens=int(getattr(row, "cache_read_tokens", 0) or 0),
-                cache_creation_cost=float(getattr(row, "cache_creation_cost", 0) or 0.0),
+                cache_creation_cost=float(
+                    getattr(row, "cache_creation_cost", 0) or 0.0
+                ),
                 cache_read_cost=float(getattr(row, "cache_read_cost", 0) or 0.0),
                 total_cost=float(getattr(row, "total_cost", 0) or 0.0),
                 actual_total_cost=float(getattr(row, "actual_total_cost", 0) or 0.0),
-                total_response_time_ms=float(getattr(row, "total_response_time_ms", 0) or 0.0),
+                total_response_time_ms=float(
+                    getattr(row, "total_response_time_ms", 0) or 0.0
+                ),
             )
 
         context.add_audit_metadata(
@@ -474,7 +550,9 @@ class AdminUsageStatsAdapter(AdminApiAdapter):
             "avg_response_time": round(avg_response_time, 2),
             "error_count": error_count,
             "error_rate": (
-                round((error_count / total_requests) * 100, 2) if total_requests > 0 else 0
+                round((error_count / total_requests) * 100, 2)
+                if total_requests > 0
+                else 0
             ),
             "cache_stats": {
                 "cache_creation_tokens": int(stats.cache_creation_tokens),
@@ -505,14 +583,23 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
         self.end_date = self.time_range.end_date if self.time_range else None
         self.preset = self.time_range.preset if self.time_range else None
         self.timezone = self.time_range.timezone if self.time_range else None
-        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:model",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
+        vary_by=[
+            "start_date",
+            "end_date",
+            "preset",
+            "timezone",
+            "tz_offset_minutes",
+            "limit",
+        ],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -530,9 +617,15 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
 
         if self.time_range:
             start_utc, end_utc = self.time_range.to_utc_datetime_range()
-            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+            query = query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
 
-        query = query.group_by(Usage.model).order_by(func.count(Usage.id).desc()).limit(self.limit)
+        query = (
+            query.group_by(Usage.model)
+            .order_by(func.count(Usage.id).desc())
+            .limit(self.limit)
+        )
         stats = query.all()
         context.add_audit_metadata(
             action="usage_by_model",
@@ -563,14 +656,23 @@ class AdminUsageByUserAdapter(AdminApiAdapter):
         self.end_date = self.time_range.end_date if self.time_range else None
         self.preset = self.time_range.preset if self.time_range else None
         self.timezone = self.time_range.timezone if self.time_range else None
-        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:user",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
+        vary_by=[
+            "start_date",
+            "end_date",
+            "preset",
+            "timezone",
+            "tz_offset_minutes",
+            "limit",
+        ],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -589,7 +691,9 @@ class AdminUsageByUserAdapter(AdminApiAdapter):
 
         if self.time_range:
             start_utc, end_utc = self.time_range.to_utc_datetime_range()
-            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+            query = query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
 
         query = query.order_by(func.count(Usage.id).desc()).limit(self.limit)
         stats = query.all()
@@ -624,14 +728,23 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
         self.end_date = self.time_range.end_date if self.time_range else None
         self.preset = self.time_range.preset if self.time_range else None
         self.timezone = self.time_range.timezone if self.time_range else None
-        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:provider",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
+        vary_by=[
+            "start_date",
+            "end_date",
+            "preset",
+            "timezone",
+            "tz_offset_minutes",
+            "limit",
+        ],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -646,7 +759,9 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
             func.sum(case((RequestCandidate.status == "success", 1), else_=0)).label(
                 "success_count"
             ),
-            func.sum(case((RequestCandidate.status == "failed", 1), else_=0)).label("failed_count"),
+            func.sum(case((RequestCandidate.status == "failed", 1), else_=0)).label(
+                "failed_count"
+            ),
             func.avg(RequestCandidate.latency_ms).label("avg_latency_ms"),
         ).filter(
             RequestCandidate.provider_id.isnot(None),
@@ -704,7 +819,9 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
         provider_map = {}
         if provider_ids:
             providers_data = (
-                db.query(Provider.id, Provider.name).filter(Provider.id.in_(provider_ids)).all()
+                db.query(Provider.id, Provider.name)
+                .filter(Provider.id.in_(provider_ids))
+                .all()
             )
             provider_map = {str(p.id): p.name for p in providers_data}
 
@@ -724,7 +841,9 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
             attempt_count = stat.attempt_count or 0
             success_count = int(stat.success_count or 0)
             failed_count = int(stat.failed_count or 0)
-            success_rate = (success_count / attempt_count * 100) if attempt_count > 0 else 0
+            success_rate = (
+                (success_count / attempt_count * 100) if attempt_count > 0 else 0
+            )
 
             # 从 usage_map 获取 token 和费用信息
             usage_stat = usage_map.get(provider_id_str)
@@ -734,9 +853,15 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
                     "provider_id": provider_id_str,
                     "provider": provider_map.get(provider_id_str, "Unknown"),
                     "request_count": attempt_count,  # 尝试次数
-                    "total_tokens": int(usage_stat.total_tokens or 0) if usage_stat else 0,
-                    "total_cost": float(usage_stat.total_cost or 0) if usage_stat else 0,
-                    "actual_cost": float(usage_stat.actual_cost or 0) if usage_stat else 0,
+                    "total_tokens": int(usage_stat.total_tokens or 0)
+                    if usage_stat
+                    else 0,
+                    "total_cost": float(usage_stat.total_cost or 0)
+                    if usage_stat
+                    else 0,
+                    "actual_cost": float(usage_stat.actual_cost or 0)
+                    if usage_stat
+                    else 0,
                     "avg_response_time_ms": float(stat.avg_latency_ms or 0),
                     "success_rate": round(success_rate, 2),
                     "error_count": failed_count,
@@ -753,14 +878,23 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
         self.end_date = self.time_range.end_date if self.time_range else None
         self.preset = self.time_range.preset if self.time_range else None
         self.timezone = self.time_range.timezone if self.time_range else None
-        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
         self.limit = limit
 
     @cache_result(
         key_prefix="admin:usage:agg:api_format",
         ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
         user_specific=False,
-        vary_by=["start_date", "end_date", "preset", "timezone", "tz_offset_minutes", "limit"],
+        vary_by=[
+            "start_date",
+            "end_date",
+            "preset",
+            "timezone",
+            "tz_offset_minutes",
+            "limit",
+        ],
     )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -781,10 +915,14 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
 
         if self.time_range:
             start_utc, end_utc = self.time_range.to_utc_datetime_range()
-            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+            query = query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
 
         query = (
-            query.group_by(Usage.api_format).order_by(func.count(Usage.id).desc()).limit(self.limit)
+            query.group_by(Usage.api_format)
+            .order_by(func.count(Usage.id).desc())
+            .limit(self.limit)
         )
         stats = query.all()
 
@@ -830,7 +968,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         self.end_date = self.time_range.end_date if self.time_range else None
         self.preset = self.time_range.preset if self.time_range else None
         self.timezone = self.time_range.timezone if self.time_range else None
-        self.tz_offset_minutes = self.time_range.tz_offset_minutes if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
         self.search = search
         self.user_id = user_id
         self.username = username
@@ -866,7 +1006,10 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         from sqlalchemy import or_
         from sqlalchemy.orm import load_only
 
-        from src.utils.database_helpers import escape_like_pattern, safe_truncate_escaped
+        from src.utils.database_helpers import (
+            escape_like_pattern,
+            safe_truncate_escaped,
+        )
 
         db = context.db
 
@@ -879,7 +1022,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         if needs_user_join:
             count_query = count_query.outerjoin(User, Usage.user_id == User.id)
         if needs_provider_join:
-            count_query = count_query.outerjoin(Provider, Usage.provider_id == Provider.id)
+            count_query = count_query.outerjoin(
+                Provider, Usage.provider_id == Provider.id
+            )
         if needs_apikey_join:
             count_query = count_query.outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
 
@@ -887,7 +1032,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         query = (
             db.query(Usage, User, ProviderEndpoint, ProviderAPIKey, ApiKey)
             .outerjoin(User, Usage.user_id == User.id)
-            .outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
+            .outerjoin(
+                ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id
+            )
             .outerjoin(ProviderAPIKey, Usage.provider_api_key_id == ProviderAPIKey.id)
             .outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
         )
@@ -947,7 +1094,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             elif self.status == "standard":
                 status_filter = Usage.is_stream == False  # noqa: E712
             elif self.status == "error":
-                status_filter = (Usage.status_code >= 400) | (Usage.error_message.isnot(None))
+                status_filter = (Usage.status_code >= 400) | (
+                    Usage.error_message.isnot(None)
+                )
             elif self.status in ("pending", "streaming", "completed", "cancelled"):
                 # 新的状态筛选：直接按 status 字段过滤
                 status_filter = Usage.status == self.status
@@ -981,7 +1130,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     db.query(RequestCandidate.request_id)
                     .filter(RequestCandidate.status.in_(["success", "failed"]))
                     .group_by(RequestCandidate.request_id)
-                    .having(func.count(func.distinct(RequestCandidate.candidate_index)) > 1)
+                    .having(
+                        func.count(func.distinct(RequestCandidate.candidate_index)) > 1
+                    )
                     .subquery()
                 )
                 status_filter = Usage.request_id.in_(fallback_subq)
@@ -1043,10 +1194,15 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             load_only(ApiKey.id, ApiKey.name, ApiKey.key_encrypted),
         )
         records = (
-            query.order_by(Usage.created_at.desc()).offset(self.offset).limit(self.limit).all()
+            query.order_by(Usage.created_at.desc())
+            .offset(self.offset)
+            .limit(self.limit)
+            .all()
         )
 
-        request_ids = [usage.request_id for usage, _, _, _, _ in records if usage.request_id]
+        request_ids = [
+            usage.request_id for usage, _, _, _, _ in records if usage.request_id
+        ]
         fallback_map = {}
         retry_map = {}
         rectified_map = {}
@@ -1068,9 +1224,13 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             )
 
             # 按 request_id 分组分析
-            request_candidates: dict[str, list[tuple[int, int, dict]]] = defaultdict(list)
+            request_candidates: dict[str, list[tuple[int, int, dict]]] = defaultdict(
+                list
+            )
             for req_id, candidate_idx, retry_idx, extra_data in executed_candidates:
-                request_candidates[req_id].append((candidate_idx, retry_idx, extra_data or {}))
+                request_candidates[req_id].append(
+                    (candidate_idx, retry_idx, extra_data or {})
+                )
 
             for req_id, candidates in request_candidates.items():
                 # 提取所有不同的 candidate_index
@@ -1082,13 +1242,17 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                 has_retry = False
                 for candidate_idx in unique_candidates:
                     retry_indices = [c[1] for c in candidates if c[0] == candidate_idx]
-                    if len(retry_indices) > 1 or (retry_indices and max(retry_indices) > 0):
+                    if len(retry_indices) > 1 or (
+                        retry_indices and max(retry_indices) > 0
+                    ):
                         has_retry = True
                         break
                 retry_map[req_id] = has_retry
 
                 # 检查是否有整流：任意候选的 extra_data 中有 rectified=True
-                rectified_map[req_id] = any(c[2].get("rectified", False) for c in candidates)
+                rectified_map[req_id] = any(
+                    c[2].get("rectified", False) for c in candidates
+                )
 
         context.add_audit_metadata(
             action="usage_records",
@@ -1114,7 +1278,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         provider_map = {}
         if provider_ids:
             providers_data = (
-                db.query(Provider.id, Provider.name).filter(Provider.id.in_(provider_ids)).all()
+                db.query(Provider.id, Provider.name)
+                .filter(Provider.id.in_(provider_ids))
+                .all()
             )
             provider_map = {str(p.id): p.name for p in providers_data}
 
@@ -1127,7 +1293,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                 else 0.0
             )
             rate_multiplier = (
-                float(usage.rate_multiplier) if usage.rate_multiplier is not None else 1.0
+                float(usage.rate_multiplier)
+                if usage.rate_multiplier is not None
+                else 1.0
             )
 
             # 提供商名称优先级：关联的 Provider 表 > usage.provider_name 字段
@@ -1209,6 +1377,336 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         }
 
 
+class AdminUsageDeleteRecordsAdapter(AdminApiAdapter):
+    def __init__(
+        self,
+        time_range: TimeRangeParams | None,
+        search: str | None,
+        user_id: str | None,
+        username: str | None,
+        model: str | None,
+        provider: str | None,
+        api_format: str | None,
+        status: str | None,
+    ):
+        self.time_range = _apply_admin_default_range(time_range)
+        self.start_date = self.time_range.start_date if self.time_range else None
+        self.end_date = self.time_range.end_date if self.time_range else None
+        self.preset = self.time_range.preset if self.time_range else None
+        self.timezone = self.time_range.timezone if self.time_range else None
+        self.tz_offset_minutes = (
+            self.time_range.tz_offset_minutes if self.time_range else None
+        )
+        self.search = search
+        self.user_id = user_id
+        self.username = username
+        self.model = model
+        self.provider = provider
+        self.api_format = api_format
+        self.status = status
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        from sqlalchemy import or_
+
+        from src.services.cache.invalidation import get_cache_invalidation_service
+        from src.utils.database_helpers import (
+            escape_like_pattern,
+            safe_truncate_escaped,
+        )
+
+        db = context.db
+
+        query = db.query(
+            Usage.id,
+            Usage.request_id,
+            Usage.user_id,
+            Usage.api_key_id,
+            Usage.model,
+            Usage.total_cost_usd,
+        )
+
+        needs_user_join = bool(self.search or self.username)
+        needs_provider_join = bool(self.search or self.provider)
+        needs_apikey_join = bool(self.search)
+
+        if needs_user_join:
+            query = query.outerjoin(User, Usage.user_id == User.id)
+        if needs_provider_join:
+            query = query.outerjoin(Provider, Usage.provider_id == Provider.id)
+        if needs_apikey_join:
+            query = query.outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
+
+        if self.search:
+            keywords = [kw for kw in self.search.strip().split() if kw][:10]
+            for keyword in keywords:
+                escaped = safe_truncate_escaped(escape_like_pattern(keyword), 100)
+                search_pattern = f"%{escaped}%"
+                search_filter = or_(
+                    User.username.ilike(search_pattern, escape="\\"),
+                    ApiKey.name.ilike(search_pattern, escape="\\"),
+                    Usage.model.ilike(search_pattern, escape="\\"),
+                    Provider.name.ilike(search_pattern, escape="\\"),
+                )
+                query = query.filter(search_filter)
+
+        if self.user_id:
+            query = query.filter(Usage.user_id == self.user_id)
+
+        if self.username:
+            escaped = escape_like_pattern(self.username)
+            query = query.filter(User.username.ilike(f"%{escaped}%", escape="\\"))
+
+        if self.model:
+            query = query.filter(Usage.model == self.model)
+
+        if self.provider:
+            query = query.filter(Provider.name == self.provider)
+
+        if self.api_format:
+            query = query.filter(
+                func.lower(Usage.api_format) == self.api_format.lower()
+            )
+
+        if self.status:
+            status_filter = None
+            if self.status == "stream":
+                status_filter = Usage.is_stream == True  # noqa: E712
+            elif self.status == "standard":
+                status_filter = Usage.is_stream == False  # noqa: E712
+            elif self.status == "error":
+                status_filter = (Usage.status_code >= 400) | (
+                    Usage.error_message.isnot(None)
+                )
+            elif self.status in ("pending", "streaming", "completed", "cancelled"):
+                status_filter = Usage.status == self.status
+            elif self.status == "failed":
+                status_filter = (
+                    (Usage.status == "failed")
+                    | (Usage.status_code >= 400)
+                    | (Usage.error_message.isnot(None))
+                )
+            elif self.status == "active":
+                status_filter = Usage.status.in_(["pending", "streaming"])
+            elif self.status == "has_retry":
+                retry_subq = (
+                    db.query(RequestCandidate.request_id)
+                    .filter(
+                        RequestCandidate.status.in_(["success", "failed"]),
+                        RequestCandidate.retry_index > 0,
+                    )
+                    .distinct()
+                    .subquery()
+                )
+                status_filter = Usage.request_id.in_(retry_subq)
+            elif self.status == "has_fallback":
+                fallback_subq = (
+                    db.query(RequestCandidate.request_id)
+                    .filter(RequestCandidate.status.in_(["success", "failed"]))
+                    .group_by(RequestCandidate.request_id)
+                    .having(
+                        func.count(func.distinct(RequestCandidate.candidate_index)) > 1
+                    )
+                    .subquery()
+                )
+                status_filter = Usage.request_id.in_(fallback_subq)
+
+            if status_filter is not None:
+                query = query.filter(status_filter)
+
+        if self.time_range:
+            start_utc, end_utc = self.time_range.to_utc_datetime_range()
+            query = query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
+
+        matched_rows = query.all()
+        if not matched_rows:
+            context.add_audit_metadata(
+                action="usage_records_delete",
+                start_date=self.start_date.isoformat() if self.start_date else None,
+                end_date=self.end_date.isoformat() if self.end_date else None,
+                preset=self.preset,
+                timezone=self.timezone,
+                search=self.search,
+                user_id=self.user_id,
+                username=self.username,
+                model=self.model,
+                provider=self.provider,
+                api_format=self.api_format,
+                status=self.status,
+                matched_count=0,
+            )
+            return {
+                "message": "未找到符合筛选条件的使用记录",
+                "deleted": {
+                    "usage_records": 0,
+                    "request_candidates": 0,
+                },
+                "updated": {
+                    "users": 0,
+                    "api_keys": 0,
+                    "user_model_usage_counts_rebuilt_users": 0,
+                },
+            }
+
+        usage_ids: list[str] = []
+        request_ids: set[str] = set()
+        affected_user_ids: set[str] = set()
+        deleted_cost_by_user: dict[str, float] = {}
+        deleted_cost_by_api_key: dict[str, float] = {}
+        deleted_requests_by_api_key: dict[str, int] = {}
+
+        for row in matched_rows:
+            usage_ids.append(str(row.id))
+            if row.request_id:
+                request_ids.add(str(row.request_id))
+
+            row_cost = float(row.total_cost_usd or 0.0)
+            if row.user_id:
+                user_id = str(row.user_id)
+                affected_user_ids.add(user_id)
+                deleted_cost_by_user[user_id] = (
+                    deleted_cost_by_user.get(user_id, 0.0) + row_cost
+                )
+
+            if row.api_key_id:
+                key_id = str(row.api_key_id)
+                deleted_requests_by_api_key[key_id] = (
+                    deleted_requests_by_api_key.get(key_id, 0) + 1
+                )
+                deleted_cost_by_api_key[key_id] = (
+                    deleted_cost_by_api_key.get(key_id, 0.0) + row_cost
+                )
+
+        deleted_candidates_count = 0
+        if request_ids:
+            deleted_candidates_count = int(
+                db.query(RequestCandidate)
+                .filter(RequestCandidate.request_id.in_(list(request_ids)))
+                .delete(synchronize_session=False)
+                or 0
+            )
+
+        deleted_usage_count = int(
+            db.query(Usage)
+            .filter(Usage.id.in_(usage_ids))
+            .delete(synchronize_session=False)
+            or 0
+        )
+
+        if deleted_cost_by_user:
+            user_rows = (
+                db.query(User)
+                .filter(User.id.in_(list(deleted_cost_by_user.keys())))
+                .all()
+            )
+            for user_row in user_rows:
+                user_id = str(user_row.id)
+                deleted_cost = float(deleted_cost_by_user.get(user_id, 0.0) or 0.0)
+                user_row.total_usd = max(
+                    float(user_row.total_usd or 0.0) - deleted_cost, 0.0
+                )
+                user_row.used_usd = max(
+                    float(user_row.used_usd or 0.0) - deleted_cost, 0.0
+                )
+
+        if deleted_requests_by_api_key:
+            api_key_rows = (
+                db.query(ApiKey)
+                .filter(ApiKey.id.in_(list(deleted_requests_by_api_key.keys())))
+                .all()
+            )
+            for api_key_row in api_key_rows:
+                key_id = str(api_key_row.id)
+                deleted_requests = int(deleted_requests_by_api_key.get(key_id, 0) or 0)
+                deleted_cost = float(deleted_cost_by_api_key.get(key_id, 0.0) or 0.0)
+                api_key_row.total_requests = max(
+                    int(api_key_row.total_requests or 0) - deleted_requests, 0
+                )
+                api_key_row.total_cost_usd = max(
+                    float(api_key_row.total_cost_usd or 0.0) - deleted_cost,
+                    0.0,
+                )
+                if bool(getattr(api_key_row, "is_standalone", False)):
+                    api_key_row.balance_used_usd = max(
+                        float(api_key_row.balance_used_usd or 0.0) - deleted_cost,
+                        0.0,
+                    )
+
+        rebuilt_users = 0
+        if affected_user_ids:
+            affected_user_id_list = list(affected_user_ids)
+            db.query(UserModelUsageCount).filter(
+                UserModelUsageCount.user_id.in_(affected_user_id_list)
+            ).delete(synchronize_session=False)
+
+            grouped_usage_counts = (
+                db.query(
+                    Usage.user_id,
+                    Usage.model,
+                    func.count(Usage.id).label("usage_count"),
+                )
+                .filter(
+                    Usage.user_id.in_(affected_user_id_list),
+                    Usage.model.isnot(None),
+                )
+                .group_by(Usage.user_id, Usage.model)
+                .all()
+            )
+
+            for user_id, model, usage_count in grouped_usage_counts:
+                if not user_id or not model:
+                    continue
+                db.add(
+                    UserModelUsageCount(
+                        user_id=str(user_id),
+                        model=str(model),
+                        usage_count=int(usage_count or 0),
+                    )
+                )
+
+            rebuilt_users = len(affected_user_id_list)
+
+        db.commit()
+
+        try:
+            cache_service = get_cache_invalidation_service()
+            cache_service.clear_all_caches()
+        except Exception:
+            pass
+
+        context.add_audit_metadata(
+            action="usage_records_delete",
+            start_date=self.start_date.isoformat() if self.start_date else None,
+            end_date=self.end_date.isoformat() if self.end_date else None,
+            preset=self.preset,
+            timezone=self.timezone,
+            search=self.search,
+            user_id=self.user_id,
+            username=self.username,
+            model=self.model,
+            provider=self.provider,
+            api_format=self.api_format,
+            status=self.status,
+            matched_count=len(matched_rows),
+            deleted_usage_records=deleted_usage_count,
+            deleted_request_candidates=deleted_candidates_count,
+        )
+
+        return {
+            "message": "已删除符合筛选条件的使用记录",
+            "deleted": {
+                "usage_records": deleted_usage_count,
+                "request_candidates": deleted_candidates_count,
+            },
+            "updated": {
+                "users": len(deleted_cost_by_user),
+                "api_keys": len(deleted_requests_by_api_key),
+                "user_model_usage_counts_rebuilt_users": rebuilt_users,
+            },
+        }
+
+
 class AdminActiveRequestsAdapter(AdminApiAdapter):
     """轻量级活跃请求状态查询适配器"""
 
@@ -1243,7 +1741,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
         usage_record = db.query(Usage).filter(Usage.id == self.usage_id).first()
         if not usage_record:
             # 兼容通过 request_id 查找（用于异步任务等场景）
-            usage_record = db.query(Usage).filter(Usage.request_id == self.usage_id).first()
+            usage_record = (
+                db.query(Usage).filter(Usage.request_id == self.usage_id).first()
+            )
         if not usage_record:
             raise HTTPException(status_code=404, detail="Usage record not found")
 
@@ -1290,9 +1790,13 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             },
             "cache_creation_input_tokens": usage_record.cache_creation_input_tokens,
             "cache_read_input_tokens": usage_record.cache_read_input_tokens,
-            "cache_creation_input_tokens_5m": usage_record.cache_creation_input_tokens_5m or 0,
-            "cache_creation_input_tokens_1h": usage_record.cache_creation_input_tokens_1h or 0,
-            "cache_creation_cost": getattr(usage_record, "cache_creation_cost_usd", 0.0),
+            "cache_creation_input_tokens_5m": usage_record.cache_creation_input_tokens_5m
+            or 0,
+            "cache_creation_input_tokens_1h": usage_record.cache_creation_input_tokens_1h
+            or 0,
+            "cache_creation_cost": getattr(
+                usage_record, "cache_creation_cost_usd", 0.0
+            ),
             "cache_read_cost": getattr(usage_record, "cache_read_cost_usd", 0.0),
             "request_cost": getattr(usage_record, "request_cost_usd", 0.0),
             "input_price_per_1m": usage_record.input_price_per_1m,
@@ -1307,7 +1811,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "status": usage_record.status,
             "response_time_ms": usage_record.response_time_ms,
             "first_byte_time_ms": usage_record.first_byte_time_ms,  # 首字时间 (TTFB)
-            "created_at": usage_record.created_at.isoformat() if usage_record.created_at else None,
+            "created_at": usage_record.created_at.isoformat()
+            if usage_record.created_at
+            else None,
             "request_headers": usage_record.request_headers,
             "request_body": usage_record.get_request_body(),
             "provider_request_headers": usage_record.provider_request_headers,
@@ -1321,7 +1827,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "video_billing": video_billing_info,
         }
 
-    async def _get_tiered_pricing_info(self, db: Session, usage_record: Any) -> dict | None:
+    async def _get_tiered_pricing_info(
+        self, db: Session, usage_record: Any
+    ) -> dict | None:
         """获取阶梯计费信息"""
         from src.services.model.cost import ModelCostService
 
@@ -1398,7 +1906,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
         if not metadata:
             return None
 
-        billing_snapshot = metadata.get("billing_snapshot") if isinstance(metadata, dict) else None
+        billing_snapshot = (
+            metadata.get("billing_snapshot") if isinstance(metadata, dict) else None
+        )
         dimensions = metadata.get("dimensions") if isinstance(metadata, dict) else None
 
         result: dict = {
@@ -1420,7 +1930,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
                 if "video_resolution_key" in dims_used:
                     result["resolution"] = dims_used["video_resolution_key"]
                 if "video_price_per_second" in dims_used:
-                    result["video_price_per_second"] = dims_used["video_price_per_second"]
+                    result["video_price_per_second"] = dims_used[
+                        "video_price_per_second"
+                    ]
                 if "video_cost" in dims_used:
                     result["video_cost"] = dims_used["video_cost"]
 
@@ -1538,9 +2050,13 @@ async def _resolve_provider_auth(
         from src.services.proxy_node.resolver import resolve_effective_proxy
 
         # 获取 Provider 对象以读取 proxy 和 provider_type
-        provider_obj = db.query(Provider).filter(Provider.id == provider_key.provider_id).first()
+        provider_obj = (
+            db.query(Provider).filter(Provider.id == provider_key.provider_id).first()
+        )
         provider_type = (
-            str(getattr(provider_obj, "provider_type", "") or "").lower() if provider_obj else ""
+            str(getattr(provider_obj, "provider_type", "") or "").lower()
+            if provider_obj
+            else ""
         )
 
         # Antigravity 使用 gemini:chat 端点格式
@@ -1597,10 +2113,14 @@ async def _resolve_provider_auth(
         if api_family and api_kind:
             endpoint_sig = f"{api_family}:{api_kind}"
         else:
-            endpoint_sig = str(getattr(endpoint, "api_format", "") or "") or "openai:chat"
+            endpoint_sig = (
+                str(getattr(endpoint, "api_format", "") or "") or "openai:chat"
+            )
 
         auth_header, auth_type_cfg = get_auth_config_for_endpoint(endpoint_sig)
-        auth_value = f"Bearer {decrypted_key}" if auth_type_cfg == "bearer" else decrypted_key
+        auth_value = (
+            f"Bearer {decrypted_key}" if auth_type_cfg == "bearer" else decrypted_key
+        )
         auth_headers[auth_header] = auth_value
 
     return auth_headers, decrypted_auth_config
@@ -1642,10 +2162,16 @@ class AdminUsageCurlAdapter(AdminApiAdapter):
 
         endpoint = None
         if endpoint_id:
-            endpoint = db.query(ProviderEndpoint).filter(ProviderEndpoint.id == endpoint_id).first()
+            endpoint = (
+                db.query(ProviderEndpoint)
+                .filter(ProviderEndpoint.id == endpoint_id)
+                .first()
+            )
         provider_key = None
         if key_id:
-            provider_key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
+            provider_key = (
+                db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
+            )
 
         # 解析认证信息
         stored_headers = usage_record.provider_request_headers or {}
@@ -1742,7 +2268,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
 
         # 确定原始请求的 API 格式（用于端点/Key 匹配）
         original_api_format = (
-            (usage_record.endpoint_api_format or usage_record.api_format or "").strip().lower()
+            (usage_record.endpoint_api_format or usage_record.api_format or "")
+            .strip()
+            .lower()
         )
         original_api_family = (
             original_api_format.split(":")[0] if ":" in original_api_format else ""
@@ -1761,7 +2289,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 raise HTTPException(status_code=404, detail="Target endpoint not found")
             target_pid = str(endpoint.provider_id)
         elif target_pid:
-            target_provider_obj = db.query(Provider).filter(Provider.id == target_pid).first()
+            target_provider_obj = (
+                db.query(Provider).filter(Provider.id == target_pid).first()
+            )
             if not target_provider_obj:
                 raise HTTPException(status_code=404, detail="Target provider not found")
             # 优先匹配相同 api_format 的端点，其次匹配同 family，最后取任意 active 端点
@@ -1784,7 +2314,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 # 同 family 匹配
                 if not endpoint and original_api_family:
                     for ep in active_endpoints:
-                        ep_family = (getattr(ep, "api_family", "") or "").strip().lower()
+                        ep_family = (
+                            (getattr(ep, "api_family", "") or "").strip().lower()
+                        )
                         if ep_family == original_api_family:
                             endpoint = ep
                             break
@@ -1792,7 +2324,8 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 endpoint = active_endpoints[0]
             if not endpoint:
                 raise HTTPException(
-                    status_code=404, detail="No active endpoint found for target provider"
+                    status_code=404,
+                    detail="No active endpoint found for target provider",
                 )
         else:
             endpoint = None
@@ -1813,7 +2346,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
         provider_key = None
         if self.target_api_key_id:
             provider_key = (
-                db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.target_api_key_id).first()
+                db.query(ProviderAPIKey)
+                .filter(ProviderAPIKey.id == self.target_api_key_id)
+                .first()
             )
         elif target_pid:
             # 优先选择 api_formats 包含目标端点格式的 Key
@@ -1848,7 +2383,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 )
 
         if not provider_key:
-            raise HTTPException(status_code=404, detail="No API key available for replay")
+            raise HTTPException(
+                status_code=404, detail="No API key available for replay"
+            )
 
         # 根据 auth_type 正确解析认证（支持 OAuth / Vertex AI / API Key）
         try:
@@ -1856,8 +2393,12 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 provider_key, endpoint, db
             )
         except Exception as e:
-            logger.error("[replay] Failed to resolve auth for key {}: {}", provider_key.id, e)
-            raise HTTPException(status_code=500, detail="Failed to resolve provider authentication")
+            logger.error(
+                "[replay] Failed to resolve auth for key {}: {}", provider_key.id, e
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to resolve provider authentication"
+            )
 
         # 构建 URL
         model_name = usage_record.target_model or usage_record.model
@@ -1873,11 +2414,19 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
 
         # 格式转换：如果存储的请求体格式与目标端点格式不同，需要转换
         if isinstance(body, dict):
-            target_format = str(getattr(endpoint, "api_format", "") or "").strip().lower()
+            target_format = (
+                str(getattr(endpoint, "api_format", "") or "").strip().lower()
+            )
 
-            if original_api_format and target_format and original_api_format != target_format:
+            if (
+                original_api_format
+                and target_format
+                and original_api_format != target_format
+            ):
                 try:
-                    from src.core.api_format.conversion import format_conversion_registry
+                    from src.core.api_format.conversion import (
+                        format_conversion_registry,
+                    )
 
                     body = format_conversion_registry.convert_request(
                         body,
@@ -1917,7 +2466,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                     if target_provider_obj
                     else None
                 )
-                target_ep_sig = (getattr(endpoint, "api_format", "") or "").strip().lower()
+                target_ep_sig = (
+                    (getattr(endpoint, "api_format", "") or "").strip().lower()
+                )
 
                 envelope = get_provider_envelope(
                     provider_type=target_provider_type,
@@ -1952,7 +2503,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
 
             # 解析代理（key > provider > 系统默认）
             eff_proxy = resolve_effective_proxy(
-                getattr(target_provider_obj, "proxy", None) if target_provider_obj else None,
+                getattr(target_provider_obj, "proxy", None)
+                if target_provider_obj
+                else None,
                 getattr(provider_key, "proxy", None) if provider_key else None,
             )
 
@@ -2022,7 +2575,9 @@ async def analyze_cache_affinity_ttl(
         api_key_id=api_key_id,
         hours=hours,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/cache-affinity/hit-analysis")
@@ -2043,7 +2598,9 @@ async def analyze_cache_hit(
         api_key_id=api_key_id,
         hours=hours,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 class CacheAffinityTTLAnalysisAdapter(AdminApiAdapter):
@@ -2119,7 +2676,9 @@ async def get_interval_timeline(
     hours: int = Query(24, ge=1, le=720, description="分析最近多少小时的数据"),
     limit: int = Query(10000, ge=100, le=50000, description="最大返回数据点数量"),
     user_id: str | None = Query(None, description="指定用户 ID"),
-    include_user_info: bool = Query(False, description="是否包含用户信息（用于管理员多用户视图）"),
+    include_user_info: bool = Query(
+        False, description="是否包含用户信息（用于管理员多用户视图）"
+    ),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -2138,7 +2697,9 @@ async def get_interval_timeline(
         user_id=user_id,
         include_user_info=include_user_info,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 class IntervalTimelineAdapter(AdminApiAdapter):

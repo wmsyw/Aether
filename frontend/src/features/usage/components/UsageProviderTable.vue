@@ -6,7 +6,7 @@
       </h3>
     </div>
     <div class="overflow-auto max-h-[320px]">
-      <Table class="text-sm">
+      <Table class="text-sm whitespace-nowrap">
         <TableHeader>
           <TableRow>
             <TableHead class="h-8 px-2">
@@ -42,8 +42,11 @@
             v-for="provider in data"
             :key="provider.provider"
           >
-            <TableCell class="font-medium py-2 px-2">
-              {{ provider.provider }}
+            <TableCell class="font-medium py-2 px-2 max-w-[220px]">
+              <span
+                class="block truncate"
+                :title="provider.provider"
+              >{{ provider.provider }}</span>
             </TableCell>
             <TableCell class="text-right py-2 px-2">
               {{ provider.requests }}

@@ -55,6 +55,7 @@
       :is-admin="isAdminPage"
       :show-actual-cost="authStore.isAdmin"
       :loading="isLoadingRecords"
+      :deleting-records="isDeletingRecords"
       :time-range="timeRange"
       :filter-search="filterSearch"
       :filter-user="filterUser"
@@ -81,6 +82,7 @@
       @update:page-size="handlePageSizeChange"
       @update:auto-refresh="handleAutoRefreshChange"
       @refresh="refreshData"
+      @delete-filtered-records="handleDeleteFilteredRecords"
       @show-detail="showRequestDetail"
     />
 
@@ -119,9 +121,12 @@ import type { UserOption } from '@/features/usage/components/UsageRecordsTable.v
 import { log } from '@/utils/logger'
 import type { ActivityHeatmap } from '@/types/activity'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
+import { parseApiError } from '@/utils/errorParser'
 
 const route = useRoute()
-const { warning } = useToast()
+const { warning, success, error } = useToast()
+const { confirmDanger } = useConfirm()
 const authStore = useAuthStore()
 
 // 判断是否是管理员页面
@@ -250,6 +255,7 @@ let globalAutoRefreshTimer: ReturnType<typeof setInterval> | null = null
 const AUTO_REFRESH_INTERVAL = 1000 // 1秒刷新一次（用于活跃请求）
 const GLOBAL_AUTO_REFRESH_INTERVAL = 5000 // 5秒刷新一次（全局自动刷新）
 const globalAutoRefresh = ref(false) // 全局自动刷新开关
+const isDeletingRecords = ref(false)
 
 // 轮询活跃请求状态（轻量级，只更新状态变化的记录）
 
@@ -527,6 +533,57 @@ async function handleFilterStatusChange(value: string) {
 async function refreshData() {
   await loadStats(timeRange.value)
   await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+}
+
+async function refreshDataWithFreshStats() {
+  await loadStats(timeRange.value, { bypassCache: true })
+  await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+}
+
+async function handleDeleteFilteredRecords() {
+  if (!isAdminPage.value || isDeletingRecords.value) return
+
+  const filters = getCurrentFilters()
+  const filterLabels: string[] = []
+
+  if (filters.search) filterLabels.push(`搜索:${filters.search}`)
+  if (filters.user_id) filterLabels.push(`用户:${filters.user_id}`)
+  if (filters.model) filterLabels.push(`模型:${filters.model}`)
+  if (filters.provider) filterLabels.push(`提供商:${filters.provider}`)
+  if (filters.api_format) filterLabels.push(`格式:${filters.api_format}`)
+  if (filters.status) filterLabels.push(`状态:${filters.status}`)
+
+  if (timeRange.value.preset) {
+    filterLabels.push(`时间:${timeRange.value.preset}`)
+  } else {
+    const start = timeRange.value.start_date || '-'
+    const end = timeRange.value.end_date || '-'
+    filterLabels.push(`时间:${start}~${end}`)
+  }
+
+  const confirmed = await confirmDanger(
+    `将删除当前筛选命中的使用记录（${filterLabels.join('，')}）。该操作不可恢复。`,
+    '确认删除筛选记录',
+    '删除'
+  )
+
+  if (!confirmed) return
+
+  isDeletingRecords.value = true
+  try {
+    const result = await usageApi.deleteFilteredUsageRecords({
+      ...timeRange.value,
+      ...filters
+    })
+    success(`删除完成：${result.deleted.usage_records} 条记录`)
+    currentPage.value = 1
+    await refreshDataWithFreshStats()
+  } catch (err: unknown) {
+    error(parseApiError(err, '删除使用记录失败'))
+    log.error('删除筛选使用记录失败:', err)
+  } finally {
+    isDeletingRecords.value = false
+  }
 }
 
 // 显示请求详情

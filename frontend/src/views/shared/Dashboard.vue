@@ -58,9 +58,21 @@
                 <p class="mt-2 sm:mt-4 text-xl sm:text-3xl font-semibold text-foreground">
                   {{ stat.value }}
                 </p>
+                <div
+                  v-if="statSubLines(stat).length > 0"
+                  class="mt-0.5 sm:mt-1 space-y-0.5 text-[10px] sm:text-sm text-muted-foreground"
+                >
+                  <p
+                    v-for="line in statSubLines(stat)"
+                    :key="line"
+                    class="whitespace-nowrap leading-tight"
+                  >
+                    {{ line }}
+                  </p>
+                </div>
                 <p
-                  v-if="stat.subValue"
-                  class="mt-0.5 sm:mt-1 text-[10px] sm:text-sm text-muted-foreground"
+                  v-else-if="stat.subValue"
+                  class="mt-0.5 sm:mt-1 text-[10px] sm:text-sm text-muted-foreground truncate"
                 >
                   {{ stat.subValue }}
                 </p>
@@ -931,6 +943,20 @@ const statCardGlows = [
 
 const getStatIconColor = (_index: number): string => {
   return 'text-muted-foreground'
+}
+
+function statSubLines(stat: DashboardStat): string[] {
+  const subValue = stat.subValue?.trim()
+  if (!subValue || !subValue.includes('/')) {
+    return []
+  }
+
+  if (stat.name !== '总Token' && stat.name !== '总缓存') {
+    return []
+  }
+
+  const parts = subValue.split('/').map(part => part.trim()).filter(Boolean)
+  return parts.length === 2 ? parts : []
 }
 
 // 统计数据

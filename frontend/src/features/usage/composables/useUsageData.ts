@@ -18,6 +18,10 @@ export interface UseUsageDataOptions {
   isAdminPage: Ref<boolean>
 }
 
+interface LoadStatsOptions {
+  bypassCache?: boolean
+}
+
 export interface PaginationParams {
   page: number
   pageSize: number
@@ -68,7 +72,7 @@ export function useUsageData(options: UseUsageDataOptions) {
   })
 
   // 加载统计数据（不加载记录）
-  async function loadStats(dateRange?: DateRangeParams) {
+  async function loadStats(dateRange?: DateRangeParams, options?: LoadStatsOptions) {
     isLoadingStats.value = true
     currentDateRange.value = dateRange
 
@@ -76,14 +80,14 @@ export function useUsageData(options: UseUsageDataOptions) {
       if (isAdminPage.value) {
         // 管理员页面，并行加载统计数据
         const [statsData, modelData, providerData, apiFormatData] = await Promise.all([
-          usageApi.getUsageStats(dateRange),
-          usageApi.getUsageByModel(dateRange),
-          usageApi.getUsageByProvider(dateRange),
-          usageApi.getUsageByApiFormat(dateRange)
+          usageApi.getUsageStats(dateRange, options),
+          usageApi.getUsageByModel(dateRange, options),
+          usageApi.getUsageByProvider(dateRange, options),
+          usageApi.getUsageByApiFormat(dateRange, options)
         ])
 
         // statsData may contain additional fields not declared in UsageStats
-        const statsRaw = statsData as Record<string, unknown>
+        const statsRaw = statsData as unknown as Record<string, unknown>
         stats.value = {
           total_requests: statsData.total_requests || 0,
           total_tokens: statsData.total_tokens || 0,
@@ -98,7 +102,7 @@ export function useUsageData(options: UseUsageDataOptions) {
         }
 
         modelStats.value = modelData.map(item => {
-          const raw = item as Record<string, unknown>
+          const raw = item as unknown as Record<string, unknown>
           return {
             model: item.model,
             request_count: item.request_count || 0,
@@ -279,7 +283,7 @@ export function useUsageData(options: UseUsageDataOptions) {
         }
 
         const response = await usageApi.getAllUsageRecords(params)
-        const nextRecords = (response.records || []) as UsageRecord[]
+        const nextRecords = (response.records || []) as unknown as UsageRecord[]
         currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = response.total || 0
       } else {
@@ -320,14 +324,16 @@ export function useUsageData(options: UseUsageDataOptions) {
       // 确定是否需要保护 status（避免刷新把已知状态覆盖为 undefined 或回退）
       const hasExistingStatus = typeof existing.status === 'string' && existing.status.length > 0
       const hasNextStatus = typeof record.status === 'string' && record.status.length > 0
-      const currentRank = hasExistingStatus ? (statusPriority[existing.status] ?? -1) : -1
-      const nextRank = hasNextStatus ? (statusPriority[record.status] ?? -1) : -1
+      const existingStatus = hasExistingStatus ? existing.status : undefined
+      const nextStatus = hasNextStatus ? record.status : undefined
+      const currentRank = existingStatus ? (statusPriority[existingStatus] ?? -1) : -1
+      const nextRank = nextStatus ? (statusPriority[nextStatus] ?? -1) : -1
       const statusProgressed = hasNextStatus && (
         !hasExistingStatus ||
         nextRank > currentRank ||
-        (nextRank === currentRank && existing.status === record.status)
+        (nextRank === currentRank && existingStatus === nextStatus)
       )
-      const mergedStatus = statusProgressed ? record.status : existing.status
+      const mergedStatus = statusProgressed ? nextStatus : existingStatus
       const protectStatus = mergedStatus !== record.status
 
       // 确定是否需要保护 provider（避免 pending/unknown 覆盖已有的正确值）
@@ -372,8 +378,8 @@ export function useUsageData(options: UseUsageDataOptions) {
   }
 
   // 刷新所有数据
-  async function refreshData(dateRange?: DateRangeParams) {
-    await loadStats(dateRange)
+  async function refreshData(dateRange?: DateRangeParams, options?: LoadStatsOptions) {
+    await loadStats(dateRange, options)
   }
 
   return {

@@ -86,6 +86,10 @@ export interface UsageFilters {
   page_size?: number
 }
 
+interface UsageRequestOptions {
+  bypassCache?: boolean
+}
+
 export const usageApi = {
   async getUsageRecords(filters?: UsageFilters): Promise<{
     records: UsageRecord[]
@@ -93,21 +97,31 @@ export const usageApi = {
     page: number
     page_size: number
   }> {
-    const response = await apiClient.get('/api/usage', { params: filters })
+    const response = await apiClient.get<{
+      records: UsageRecord[]
+      total: number
+      page: number
+      page_size: number
+    }>('/api/usage', { params: filters })
     return response.data
   },
 
-  async getUsageStats(filters?: UsageFilters): Promise<UsageStats> {
+  async getUsageStats(
+    filters?: UsageFilters,
+    options?: UsageRequestOptions
+  ): Promise<UsageStats> {
+    const fetcher = async () => {
+      const response = await apiClient.get<UsageStats>('/api/admin/usage/stats', { params: filters })
+      return response.data
+    }
+
+    if (options?.bypassCache) {
+      return fetcher()
+    }
+
     // 为统计数据添加30秒缓存
     const cacheKey = `usage-stats-${JSON.stringify(filters || {})}`
-    return cachedRequest(
-      cacheKey,
-      async () => {
-        const response = await apiClient.get<UsageStats>('/api/admin/usage/stats', { params: filters })
-        return response.data
-      },
-      30000 // 30秒缓存
-    )
+    return cachedRequest(cacheKey, fetcher, 30000)
   },
 
   /**
@@ -117,48 +131,66 @@ export const usageApi = {
    */
   async getUsageAggregation<T = UsageByModel[] | UsageByUser[] | UsageByProvider[] | UsageByApiFormat[]>(
     groupBy: 'model' | 'user' | 'provider' | 'api_format',
-    filters?: UsageFilters & { limit?: number }
+    filters?: UsageFilters & { limit?: number },
+    options?: UsageRequestOptions
   ): Promise<T> {
+    const fetcher = async () => {
+      const response = await apiClient.get<T>('/api/admin/usage/aggregation/stats', {
+        params: { group_by: groupBy, ...filters }
+      })
+      return response.data
+    }
+
+    if (options?.bypassCache) {
+      return fetcher()
+    }
+
     const cacheKey = `usage-aggregation-${groupBy}-${JSON.stringify(filters || {})}`
-    return cachedRequest(
-      cacheKey,
-      async () => {
-        const response = await apiClient.get<T>('/api/admin/usage/aggregation/stats', {
-          params: { group_by: groupBy, ...filters }
-        })
-        return response.data
-      },
-      30000 // 30秒缓存
-    )
+    return cachedRequest(cacheKey, fetcher, 30000)
   },
 
   // Shorthand methods using getUsageAggregation
-  async getUsageByModel(filters?: UsageFilters & { limit?: number }): Promise<UsageByModel[]> {
-    return this.getUsageAggregation<UsageByModel[]>('model', filters)
+  async getUsageByModel(
+    filters?: UsageFilters & { limit?: number },
+    options?: UsageRequestOptions
+  ): Promise<UsageByModel[]> {
+    return this.getUsageAggregation<UsageByModel[]>('model', filters, options)
   },
 
-  async getUsageByUser(filters?: UsageFilters & { limit?: number }): Promise<UsageByUser[]> {
-    return this.getUsageAggregation<UsageByUser[]>('user', filters)
+  async getUsageByUser(
+    filters?: UsageFilters & { limit?: number },
+    options?: UsageRequestOptions
+  ): Promise<UsageByUser[]> {
+    return this.getUsageAggregation<UsageByUser[]>('user', filters, options)
   },
 
-  async getUsageByProvider(filters?: UsageFilters & { limit?: number }): Promise<UsageByProvider[]> {
-    return this.getUsageAggregation<UsageByProvider[]>('provider', filters)
+  async getUsageByProvider(
+    filters?: UsageFilters & { limit?: number },
+    options?: UsageRequestOptions
+  ): Promise<UsageByProvider[]> {
+    return this.getUsageAggregation<UsageByProvider[]>('provider', filters, options)
   },
 
-  async getUsageByApiFormat(filters?: UsageFilters & { limit?: number }): Promise<UsageByApiFormat[]> {
-    return this.getUsageAggregation<UsageByApiFormat[]>('api_format', filters)
+  async getUsageByApiFormat(
+    filters?: UsageFilters & { limit?: number },
+    options?: UsageRequestOptions
+  ): Promise<UsageByApiFormat[]> {
+    return this.getUsageAggregation<UsageByApiFormat[]>('api_format', filters, options)
   },
 
   async getUserUsage(userId: string, filters?: UsageFilters): Promise<{
     records: UsageRecord[]
     stats: UsageStats
   }> {
-    const response = await apiClient.get(`/api/users/${userId}/usage`, { params: filters })
+    const response = await apiClient.get<{
+      records: UsageRecord[]
+      stats: UsageStats
+    }>(`/api/users/${userId}/usage`, { params: filters })
     return response.data
   },
 
   async exportUsage(format: 'csv' | 'json', filters?: UsageFilters): Promise<Blob> {
-    const response = await apiClient.get('/api/usage/export', {
+    const response = await apiClient.get<Blob>('/api/usage/export', {
       params: { ...filters, format },
       responseType: 'blob'
     })
@@ -187,7 +219,53 @@ export const usageApi = {
     limit: number
     offset: number
   }> {
-    const response = await apiClient.get('/api/admin/usage/records', { params })
+    const response = await apiClient.get<{
+      records: Array<Record<string, unknown>>
+      total: number
+      limit: number
+      offset: number
+    }>('/api/admin/usage/records', { params })
+    return response.data
+  },
+
+  async deleteFilteredUsageRecords(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    granularity?: 'hour' | 'day' | 'week' | 'month'
+    timezone?: string
+    tz_offset_minutes?: number
+    search?: string
+    user_id?: string
+    username?: string
+    model?: string
+    provider?: string
+    api_format?: string
+    status?: string
+  }): Promise<{
+    message: string
+    deleted: {
+      usage_records: number
+      request_candidates: number
+    }
+    updated: {
+      users: number
+      api_keys: number
+      user_model_usage_counts_rebuilt_users: number
+    }
+  }> {
+    const response = await apiClient.delete<{
+      message: string
+      deleted: {
+        usage_records: number
+        request_candidates: number
+      }
+      updated: {
+        users: number
+        api_keys: number
+        user_model_usage_counts_rebuilt_users: number
+      }
+    }>('/api/admin/usage/records', { params })
     return response.data
   },
 
@@ -217,7 +295,27 @@ export const usageApi = {
     }>
   }> {
     const params = ids?.length ? { ids: ids.join(',') } : {}
-    const response = await apiClient.get('/api/admin/usage/active', { params })
+    const response = await apiClient.get<{
+      requests: Array<{
+        id: string
+        status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
+        input_tokens: number
+        output_tokens: number
+        cache_creation_input_tokens?: number | null
+        cache_read_input_tokens?: number | null
+        cost: number
+        actual_cost?: number | null
+        rate_multiplier?: number | null
+        response_time_ms: number | null
+        first_byte_time_ms: number | null
+        provider?: string | null
+        api_key_name?: string | null
+        api_format?: string | null
+        endpoint_api_format?: string | null
+        has_format_conversion?: boolean | null
+        target_model?: string | null
+      }>
+    }>('/api/admin/usage/active', { params })
     return response.data
   },
 

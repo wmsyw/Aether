@@ -6,7 +6,7 @@
       </h3>
     </div>
     <div class="overflow-auto max-h-[320px]">
-      <Table class="text-sm">
+      <Table class="text-sm whitespace-nowrap">
         <TableHeader>
           <TableRow>
             <TableHead class="h-8 px-2">
@@ -39,8 +39,11 @@
             v-for="model in data"
             :key="model.model"
           >
-            <TableCell class="font-medium py-2 px-2">
-              {{ model.model.replace('claude-', '') }}
+            <TableCell class="font-medium py-2 px-2 max-w-[220px]">
+              <span
+                class="block truncate"
+                :title="model.model"
+              >{{ model.model.replace('claude-', '') }}</span>
             </TableCell>
             <TableCell class="text-right py-2 px-2">
               {{ model.request_count }}

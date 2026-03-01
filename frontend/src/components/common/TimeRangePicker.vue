@@ -3,7 +3,7 @@
     <Select
       v-model="selectedPreset"
     >
-      <SelectTrigger class="h-8 w-32 text-xs border-border/60">
+      <SelectTrigger class="h-9 w-32 text-xs border-border/60">
         <SelectValue placeholder="选择时间段" />
       </SelectTrigger>
       <SelectContent>
@@ -50,13 +50,13 @@
       <Input
         v-model="startDate"
         type="date"
-        class="h-8 w-36 text-xs border-border/60"
+        class="h-9 w-36 text-xs border-border/60"
       />
       <span class="text-xs text-muted-foreground">至</span>
       <Input
         v-model="endDate"
         type="date"
-        class="h-8 w-36 text-xs border-border/60"
+        class="h-9 w-36 text-xs border-border/60"
       />
     </div>
 
@@ -64,7 +64,7 @@
       v-if="showGranularity"
       v-model="selectedGranularity"
     >
-      <SelectTrigger class="h-8 w-24 text-xs border-border/60">
+      <SelectTrigger class="h-9 w-24 text-xs border-border/60">
         <SelectValue placeholder="粒度" />
       </SelectTrigger>
       <SelectContent>
