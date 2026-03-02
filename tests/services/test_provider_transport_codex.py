@@ -64,3 +64,17 @@ def test_codex_openai_cli_uses_compact_suffix_when_context_marked_compact() -> N
     )
     assert url == "https://chatgpt.com/backend-api/codex/responses/compact"
     set_codex_request_context(None)
+
+
+def test_codex_openai_compact_uses_compact_path_without_v1_prefix() -> None:
+    endpoint = _DummyEndpoint(
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_format="openai:compact",
+        provider=SimpleNamespace(provider_type="codex"),
+    )
+    url = build_provider_url(
+        endpoint,  # type: ignore[arg-type]
+        path_params={"model": "ignored"},
+        is_stream=False,
+    )
+    assert url == "https://chatgpt.com/backend-api/codex/responses/compact"

@@ -62,6 +62,10 @@ def _detect_data_format(
             return EndpointSignature(api_family=ApiFamily.CLAUDE, endpoint_kind=EndpointKind.CLI)
         return EndpointSignature(api_family=ApiFamily.CLAUDE, endpoint_kind=EndpointKind.CHAT)
 
+    # OpenAI compact: /responses/compact
+    if "/responses/compact" in normalized:
+        return EndpointSignature(api_family=ApiFamily.OPENAI, endpoint_kind=EndpointKind.COMPACT)
+
     # OpenAI CLI: /responses
     if "/responses" in normalized:
         return EndpointSignature(api_family=ApiFamily.OPENAI, endpoint_kind=EndpointKind.CLI)

@@ -123,6 +123,19 @@ _ENDPOINT_DEFINITIONS: dict[tuple[ApiFamily, EndpointKind], EndpointDefinition] 
         protected_keys=frozenset({"authorization", "content-type"}),
         data_format_id="openai_responses",
     ),
+    (ApiFamily.OPENAI, EndpointKind.COMPACT): EndpointDefinition(
+        api_family=ApiFamily.OPENAI,
+        endpoint_kind=EndpointKind.COMPACT,
+        aliases=("openai_compact", "responses_compact"),
+        default_path="/v1/responses/compact",
+        auth_method=AuthMethod.BEARER,
+        auth_header="Authorization",
+        auth_type="bearer",
+        protected_keys=frozenset({"authorization", "content-type"}),
+        # compact endpoint is non-streaming by design.
+        stream_in_body=False,
+        data_format_id="openai_responses",
+    ),
     (ApiFamily.OPENAI, EndpointKind.VIDEO): EndpointDefinition(
         api_family=ApiFamily.OPENAI,
         endpoint_kind=EndpointKind.VIDEO,

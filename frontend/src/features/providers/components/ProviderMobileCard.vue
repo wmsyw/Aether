@@ -239,6 +239,7 @@ import Badge from '@/components/ui/badge.vue'
 import { type ProviderWithEndpointsSummary, API_FORMAT_SHORT } from '@/api/endpoints'
 import { formatBillingType } from '@/utils/format'
 import { sortEndpoints, isEndpointAvailable, getEndpointDotColor, getEndpointTooltip } from '@/features/providers/composables/useEndpointStatus'
+import { isKeyManagedProviderType } from '../utils/providerTypeUtils'
 
 const props = defineProps<{
   provider: ProviderWithEndpointsSummary
@@ -304,7 +305,6 @@ function handleDescriptionKeydown(event: KeyboardEvent) {
 }
 
 function getCredentialLabel(provider: ProviderWithEndpointsSummary): '账号' | '密钥' {
-  const providerType = String(provider.provider_type || '').trim().toLowerCase()
-  return providerType && providerType !== 'custom' ? '账号' : '密钥'
+  return isKeyManagedProviderType(provider.provider_type) ? '密钥' : '账号'
 }
 </script>

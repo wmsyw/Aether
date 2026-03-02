@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from src.core.crypto import crypto_service
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
+from src.core.provider_types import ProviderType
 from src.models.database import Provider, ProviderAPIKey
 from src.models.endpoint_models import (
     EndpointAPIKeyCreate,
@@ -30,6 +31,37 @@ from src.services.provider_keys.key_side_effects import (
     run_update_key_side_effects,
 )
 from src.services.provider_keys.response_builder import build_key_response
+
+
+def _validate_vertex_api_formats(
+    provider_type: str | None,
+    auth_type: str,
+    api_formats: list[str] | None,
+) -> None:
+    """校验 Vertex Provider 的 key.api_formats 与 auth_type 是否匹配。"""
+    if str(provider_type or "").strip().lower() != ProviderType.VERTEX_AI.value:
+        return
+
+    formats = [
+        str(fmt or "").strip().lower() for fmt in (api_formats or []) if str(fmt or "").strip()
+    ]
+    if not formats:
+        return
+
+    if auth_type == "api_key":
+        allowed = {"gemini:chat"}
+    elif auth_type in {"service_account", "vertex_ai"}:
+        allowed = {"gemini:chat", "claude:chat"}
+    else:
+        return
+
+    invalid = sorted({fmt for fmt in formats if fmt not in allowed})
+    if invalid:
+        allowed_text = ", ".join(sorted(allowed))
+        invalid_text = ", ".join(invalid)
+        raise InvalidRequestException(
+            f"Vertex {auth_type} 不支持以下 API 格式: {invalid_text}；允许: {allowed_text}"
+        )
 
 
 @dataclass
@@ -154,14 +186,14 @@ def _prepare_update_key_payload(
             raise InvalidRequestException("API Key 认证模式下 api_key 不能为空")
         # 切换回 API Key：清理非本模式配置
         update_data["auth_config"] = None
-    elif target_auth_type == "vertex_ai":
+    elif target_auth_type == "service_account":
         if is_auth_type_switch and not update_data.get("auth_config"):
             raise InvalidRequestException(
-                "从 API Key 切换到 Vertex AI 认证模式时，必须提供 Service Account JSON"
+                "切换到 Service Account 认证模式时，必须提供 Service Account JSON"
             )
-        # Vertex AI 不允许手工写入 api_key，仅保留占位符
+        # Service Account 不允许手工写入 api_key，仅保留占位符
         if api_key_in_payload and api_key_value not in {None, "__placeholder__"}:
-            raise InvalidRequestException("Vertex AI 认证模式下不允许直接填写 api_key")
+            raise InvalidRequestException("Service Account 认证模式下不允许直接填写 api_key")
         if is_auth_type_switch or api_key_in_payload:
             update_data["api_key"] = "__placeholder__"
     elif target_auth_type == "oauth":
@@ -184,6 +216,15 @@ def _prepare_update_key_payload(
         new_api_key=update_data.get("api_key"),
         new_auth_config=update_data.get("auth_config"),
         exclude_key_id=key_id,
+    )
+
+    # Vertex Provider: auth_type 与 api_formats 的组合必须合法
+    provider = getattr(key, "provider", None)
+    effective_api_formats = update_data.get("api_formats", key.api_formats)
+    _validate_vertex_api_formats(
+        getattr(provider, "provider_type", None),
+        target_auth_type,
+        effective_api_formats,
     )
 
     if "api_key" in update_data:
@@ -261,7 +302,7 @@ def _prepare_create_key_payload(
     if auth_type == "api_key":
         if not key_data.api_key:
             raise InvalidRequestException("API Key 认证模式下 api_key 为必填字段")
-    elif auth_type == "vertex_ai":
+    elif auth_type == "service_account":
         if not key_data.auth_config:
             raise InvalidRequestException("Service Account 认证模式下 auth_config 为必填字段")
     elif auth_type == "oauth":
@@ -384,10 +425,17 @@ async def create_provider_key_response(
     if not key_data.api_formats:
         raise InvalidRequestException("api_formats 为必填字段")
 
-    _, new_key = _prepare_create_key_payload(
+    auth_type, new_key = _prepare_create_key_payload(
         db=db,
         provider_id=provider_id,
         key_data=key_data,
+    )
+
+    # Vertex Provider: auth_type 与 api_formats 的组合必须合法
+    _validate_vertex_api_formats(
+        getattr(provider, "provider_type", None),
+        auth_type,
+        key_data.api_formats,
     )
 
     db.add(new_key)

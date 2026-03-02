@@ -36,6 +36,7 @@ class EndpointKind(str, Enum):
 
     CHAT = "chat"
     CLI = "cli"
+    COMPACT = "compact"
     VIDEO = "video"
     IMAGE = "image"
 

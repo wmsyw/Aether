@@ -1263,6 +1263,7 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
         all_formats = [
             "openai:chat",
             "openai:cli",
+            "openai:compact",
             "claude:chat",
             "claude:cli",
             "gemini:chat",

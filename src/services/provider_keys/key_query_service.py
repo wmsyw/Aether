@@ -59,7 +59,7 @@ def get_keys_grouped_by_format(db: Session) -> dict:
             continue  # 跳过没有 API 格式的 Key
 
         auth_type = normalize_auth_type(getattr(key, "auth_type", "api_key"))
-        if auth_type == "vertex_ai":
+        if auth_type in ("service_account", "vertex_ai"):
             masked_key = "[Service Account]"
         elif auth_type == "oauth":
             masked_key = "[OAuth Token]"
@@ -166,15 +166,15 @@ def reveal_endpoint_key_payload(
 
     auth_type = normalize_auth_type(getattr(key, "auth_type", "api_key"))
 
-    # Vertex AI 类型返回 auth_config（需要解密）
-    if auth_type == "vertex_ai":
+    # Service Account 类型返回 auth_config（需要解密）
+    if auth_type in ("service_account", "vertex_ai"):
         encrypted_auth_config = getattr(key, "auth_config", None)
         if encrypted_auth_config:
             try:
                 decrypted_config = crypto_service.decrypt(encrypted_auth_config)
                 auth_config = json.loads(decrypted_config)
                 logger.info(f"[REVEAL] 查看 Auth Config: ID={key_id}, Name={key.name}")
-                return {"auth_type": "vertex_ai", "auth_config": auth_config}
+                return {"auth_type": auth_type, "auth_config": auth_config}
             except Exception as e:
                 logger.error(f"解密 Auth Config 失败: ID={key_id}, Error={e}")
                 raise InvalidRequestException(
@@ -184,12 +184,11 @@ def reveal_endpoint_key_payload(
         # 兼容：auth_config 为空时尝试从 api_key 解密（仅对迁移前的旧数据有效）
         try:
             decrypted_key = crypto_service.decrypt(key.api_key)
-            # 检查是否是新格式的占位符（表示 auth_config 丢失）
             if decrypted_key == "__placeholder__":
-                logger.error(f"Vertex AI Key 缺少 auth_config: ID={key_id}")
+                logger.error(f"Service Account Key 缺少 auth_config: ID={key_id}")
                 raise InvalidRequestException("认证配置丢失，请重新添加该密钥。")
-            logger.info(f"[REVEAL] 查看完整 Key (legacy vertex_ai): ID={key_id}, Name={key.name}")
-            return {"auth_type": "vertex_ai", "auth_config": decrypted_key}
+            logger.info(f"[REVEAL] 查看完整 Key (legacy SA): ID={key_id}, Name={key.name}")
+            return {"auth_type": auth_type, "auth_config": decrypted_key}
         except InvalidRequestException:
             raise
         except Exception as e:

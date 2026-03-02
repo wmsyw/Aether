@@ -422,6 +422,7 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
             preferred_order = [
                 "openai:chat",
                 "openai:cli",
+                "openai:compact",
                 "openai:video",
                 "claude:chat",
                 "claude:cli",

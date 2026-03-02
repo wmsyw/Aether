@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.api.base.pipeline import ApiRequestPipeline
 from src.api.handlers.openai import OpenAIChatAdapter
-from src.api.handlers.openai_cli import OpenAICliAdapter
+from src.api.handlers.openai_cli import OpenAICliAdapter, OpenAICompactAdapter
 from src.database import get_db
 
 router = APIRouter(tags=["OpenAI API"])
@@ -68,7 +68,7 @@ async def create_responses_compact(
 
     **认证方式**: Bearer Token（API Key 或 JWT Token）
     """
-    adapter = OpenAICliAdapter(compact=True)
+    adapter = OpenAICompactAdapter()
     return await pipeline.run(
         adapter=adapter,
         http_request=http_request,

@@ -197,9 +197,9 @@ class NekoCodeArchitecture(ProviderArchitecture):
 
             proxy, tunnel_node_id = resolve_ops_proxy_config(config)
             if tunnel_node_id:
-                from src.services.proxy_node.tunnel_transport import TunnelTransport
+                from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-                client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=10.0)
+                client_kwargs["transport"] = create_tunnel_transport(tunnel_node_id, timeout=10.0)
             elif proxy:
                 client_kwargs["proxy"] = proxy
 

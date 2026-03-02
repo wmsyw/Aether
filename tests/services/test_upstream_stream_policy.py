@@ -59,6 +59,15 @@ def test_get_upstream_stream_policy_codex_compact_forces_non_stream() -> None:
         set_codex_request_context(None)
 
 
+def test_get_upstream_stream_policy_codex_openai_compact_defaults_to_auto() -> None:
+    ep = _DummyEndpoint(
+        api_format="openai:compact",
+        config=None,
+        provider=SimpleNamespace(provider_type="codex"),
+    )
+    assert get_upstream_stream_policy(ep) == UpstreamStreamPolicy.AUTO
+
+
 def test_enforce_stream_mode_for_upstream_openai_chat_sets_stream_options_usage() -> None:
     body = {"stream": False}
     out = enforce_stream_mode_for_upstream(
@@ -77,5 +86,32 @@ def test_enforce_stream_mode_for_upstream_gemini_drops_stream_field() -> None:
         provider_api_format="gemini:chat",
         upstream_is_stream=False,
     )
+    assert "stream" not in out
+    assert out["foo"] == "bar"
+
+
+def test_enforce_stream_mode_for_upstream_openai_compact_drops_stream_field() -> None:
+    body = {"stream": True, "foo": "bar"}
+    out = enforce_stream_mode_for_upstream(
+        body,
+        provider_api_format="openai:compact",
+        upstream_is_stream=True,
+    )
+    assert "stream" not in out
+    assert out["foo"] == "bar"
+
+
+def test_enforce_stream_mode_for_upstream_codex_compact_keeps_stream_absent() -> None:
+    body = {"stream": True, "foo": "bar"}
+    try:
+        set_codex_request_context(CodexRequestContext(is_compact=True))
+        out = enforce_stream_mode_for_upstream(
+            body,
+            provider_api_format="openai:cli",
+            upstream_is_stream=False,
+        )
+    finally:
+        set_codex_request_context(None)
+
     assert "stream" not in out
     assert out["foo"] == "bar"

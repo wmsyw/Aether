@@ -733,6 +733,7 @@ const emit = defineEmits<{
 const AVAILABLE_API_FORMATS = [
   { value: 'openai:chat', label: 'OpenAI Chat' },
   { value: 'openai:cli', label: 'OpenAI CLI' },
+  { value: 'openai:compact', label: 'OpenAI Compact' },
   { value: 'openai:video', label: 'OpenAI Video' },
   { value: 'claude:chat', label: 'Claude Chat' },
   { value: 'claude:cli', label: 'Claude CLI' },

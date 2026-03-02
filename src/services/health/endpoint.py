@@ -481,6 +481,7 @@ class EndpointHealthService:
         kind_label = {
             "chat": "Chat",
             "cli": "CLI",
+            "compact": "Compact",
             "video": "Video",
             "image": "Image",
         }.get(kind, kind)

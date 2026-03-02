@@ -36,7 +36,7 @@ router = APIRouter(tags=["System Catalog"])
 
 # 各格式对应的 API 格式列表（包括对应的 CLI 格式）
 _CLAUDE_FORMATS = ["claude:chat", "claude:cli"]
-_OPENAI_FORMATS = ["openai:chat", "openai:cli"]
+_OPENAI_FORMATS = ["openai:chat", "openai:cli", "openai:compact"]
 _GEMINI_FORMATS = ["gemini:chat", "gemini:cli"]
 
 # 所有格式（用于格式转换时的查询）

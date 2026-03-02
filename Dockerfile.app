@@ -2,14 +2,21 @@
 # 运行镜像：从 base 提取产物到精简运行时
 # 构建命令: docker build -f Dockerfile.app -t aether-app:latest .
 # 用于 GitHub Actions CI（官方源）
+
 FROM aether-base:latest AS builder
 WORKDIR /app
 # 复制前端源码并构建（CI 通过 no-cache-filters=builder 确保每次重建）
 COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
+
 # ==================== 运行时镜像 ====================
 FROM python:3.13-slim
 WORKDIR /app
+
+ARG HUB_RELEASE_REPO=fawney19/Aether
+ARG HUB_TAG
+ARG TARGETARCH
+
 # 运行时依赖（无 gcc/nodejs/npm，使用 BuildKit 缓存加速）
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -24,6 +31,32 @@ COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/alembic /usr/local/bin/
+# Hub 预编译二进制（构建时从 GitHub Release 下载）
+RUN set -eux; \
+    tag="${HUB_TAG:-}"; \
+    if [ -z "$tag" ]; then \
+        tag="$(curl -sL "https://api.github.com/repos/${HUB_RELEASE_REPO}/releases" | python3 -c "import json,sys;print(next((r['tag_name'] for r in json.load(sys.stdin) if r.get('tag_name','').startswith('hub-v') and not r.get('draft') and not r.get('prerelease')),''))")"; \
+    fi; \
+    if [ -z "$tag" ]; then \
+        echo "Failed to resolve hub release tag"; \
+        exit 1; \
+    fi; \
+    arch="${TARGETARCH:-}"; \
+    if [ -z "$arch" ]; then \
+        arch="$(dpkg --print-architecture)"; \
+    fi; \
+    case "$arch" in \
+        amd64|arm64) ;; \
+        x86_64) arch="amd64" ;; \
+        aarch64) arch="arm64" ;; \
+        *) echo "Unsupported architecture: $arch"; exit 1 ;; \
+    esac; \
+    echo "Using Hub release tag: $tag"; \
+    url="https://github.com/${HUB_RELEASE_REPO}/releases/download/${tag}/aether-hub-linux-${arch}.tar.gz"; \
+    curl -L --fail -o /tmp/aether-hub.tar.gz "$url"; \
+    tar xzf /tmp/aether-hub.tar.gz -C /usr/local/bin; \
+    chmod +x /usr/local/bin/aether-hub; \
+    rm -f /tmp/aether-hub.tar.gz
 # 从 builder 阶段复制前端构建产物
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 RUN chmod -R 755 /usr/share/nginx/html
@@ -77,7 +110,7 @@ RUN printf '%s\n' \
     '' \
     '    # WebSocket 隧道端点（aether-proxy tunnel 模式）' \
     '    location = /api/internal/proxy-tunnel {' \
-    '        proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;' \
+    '        proxy_pass http://127.0.0.1:8085/proxy;' \
     '        proxy_http_version 1.1;' \
     '        proxy_set_header Host $host;' \
     '        proxy_set_header X-Real-IP $real_ip;' \
@@ -151,7 +184,16 @@ RUN printf '%s\n' \
     'stdout_logfile_maxbytes=0' \
     'stderr_logfile=/dev/stderr' \
     'stderr_logfile_maxbytes=0' \
-    'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true' > /etc/supervisor/conf.d/supervisord.conf
+    'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true' \
+    '' \
+    '[program:tunnel-hub]' \
+    'command=/usr/local/bin/aether-hub --bind 0.0.0.0:8085' \
+    'autostart=true' \
+    'autorestart=true' \
+    'stdout_logfile=/dev/stdout' \
+    'stdout_logfile_maxbytes=0' \
+    'stderr_logfile=/dev/stderr' \
+    'stderr_logfile_maxbytes=0' > /etc/supervisor/conf.d/supervisord.conf
 # 创建目录
 RUN mkdir -p /var/log/supervisor /app/logs /app/data
 # 入口脚本（启动前执行迁移）
@@ -164,7 +206,7 @@ ENV PYTHONUNBUFFERED=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PORT=8084 \
-    GUNICORN_WORKERS=4 \
+    GUNICORN_WORKERS=2 \
     MAX_REQUESTS=4000
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

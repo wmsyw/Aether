@@ -15,6 +15,7 @@ env:
   REGISTRY: ghcr.io
   BASE_IMAGE_NAME: fawney19/aether-base
   APP_IMAGE_NAME: fawney19/aether
+  GITHUB_REPO: fawney19/Aether
   # Base image hash inputs:
   # - Dockerfile.base
   # - pyproject.toml (dependency fingerprint only; ignores tool/optional deps)
@@ -174,9 +175,38 @@ jobs:
           cache-to: type=gha,mode=max,scope=base
           platforms: linux/amd64,linux/arm64
 
+  download-hub:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      hub_tag: ${{ steps.hub-tag.outputs.tag }}
+    steps:
+      - name: Get latest hub release tag
+        id: hub-tag
+        run: |
+          TAG=$(
+            curl -sL "https://api.github.com/repos/${{ env.GITHUB_REPO }}/releases" | \
+            python3 - <<'PY'
+          import json, sys
+          releases = json.load(sys.stdin)
+          for r in releases:
+              tag = r.get('tag_name', '')
+              if tag.startswith('hub-v') and not r.get('draft') and not r.get('prerelease'):
+                  print(tag)
+                  break
+          PY
+          )
+          if [ -z "$TAG" ]; then
+            echo "No hub release found"
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Hub release tag: $TAG"
+
   build-app:
-    needs: [check-base-changes, build-base]
-    if: always() && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped')
+    needs: [check-base-changes, build-base, download-hub]
+    if: always() && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped') && needs.download-hub.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -243,7 +273,11 @@ jobs:
           version_tuple = __version_tuple__
           EOF
 
-      - name: Build and push app image
+      - name: Resolve hub release for build args
+        run: |
+          echo "Hub release tag: ${{ needs.download-hub.outputs.hub_tag }}"
+
+      - name: Build and push app image (amd64)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -252,6 +286,25 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           no-cache-filters: builder
-          cache-from: type=gha,scope=app
-          cache-to: type=gha,mode=min,scope=app
-          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=app-amd64
+          cache-to: type=gha,mode=min,scope=app-amd64
+          build-args: |
+            HUB_RELEASE_REPO=${{ env.GITHUB_REPO }}
+            HUB_TAG=${{ needs.download-hub.outputs.hub_tag }}
+          platforms: linux/amd64
+
+      - name: Build and push app image (arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          no-cache-filters: builder
+          cache-from: type=gha,scope=app-arm64
+          cache-to: type=gha,mode=min,scope=app-arm64
+          build-args: |
+            HUB_RELEASE_REPO=${{ env.GITHUB_REPO }}
+            HUB_TAG=${{ needs.download-hub.outputs.hub_tag }}
+          platforms: linux/arm64

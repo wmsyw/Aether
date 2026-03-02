@@ -26,14 +26,14 @@ def check_duplicate_key(
 
     对于不同的认证类型，使用不同的比较方式：
     - api_key: 比较 API Key 的哈希值
-    - vertex_ai: 比较 Service Account 的 client_email
+    - service_account: 比较 Service Account 的 client_email
 
     Args:
         db: 数据库会话
         provider_id: Provider ID
-        auth_type: 认证类型 (api_key, vertex_ai, oauth)
+        auth_type: 认证类型 (api_key, service_account, oauth)
         new_api_key: 新的 API Key（用于 api_key 类型）
-        new_auth_config: 新的认证配置（用于 vertex_ai 类型）
+        new_auth_config: 新的认证配置（用于 service_account 类型）
         exclude_key_id: 要排除的 Key ID（用于更新场景）
     """
     if auth_type == "api_key" and new_api_key:
@@ -66,7 +66,7 @@ def check_duplicate_key(
                 # 解密失败时跳过该 Key
                 continue
 
-    elif auth_type == "vertex_ai" and new_auth_config:
+    elif auth_type in ("service_account", "vertex_ai") and new_auth_config:
         new_client_email = (
             new_auth_config.get("client_email") if isinstance(new_auth_config, dict) else None
         )
@@ -76,7 +76,7 @@ def check_duplicate_key(
         # 仅查询同 auth_type 且有 auth_config 的 Keys
         query = db.query(ProviderAPIKey).filter(
             ProviderAPIKey.provider_id == provider_id,
-            ProviderAPIKey.auth_type == "vertex_ai",
+            ProviderAPIKey.auth_type.in_(["service_account", "vertex_ai"]),
             ProviderAPIKey.auth_config.isnot(None),
         )
         if exclude_key_id:

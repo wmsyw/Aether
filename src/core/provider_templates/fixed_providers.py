@@ -72,7 +72,7 @@ FIXED_PROVIDERS: dict[ProviderType, FixedProviderTemplate] = {
         provider_type=ProviderType.CODEX,
         display_name="Codex",
         api_base_url="https://chatgpt.com/backend-api/codex",
-        endpoint_signatures=["openai:cli"],
+        endpoint_signatures=["openai:cli", "openai:compact"],
         oauth=FixedProviderOAuth(
             authorize_url="https://auth.openai.com/oauth/authorize",
             token_url="https://auth.openai.com/oauth/token",
@@ -118,6 +118,23 @@ FIXED_PROVIDERS: dict[ProviderType, FixedProviderTemplate] = {
                 "https://www.googleapis.com/auth/userinfo.profile",
             ],
             redirect_uri="http://localhost:8085/oauth2callback",
+            use_pkce=False,
+        ),
+    ),
+    ProviderType.VERTEX_AI: FixedProviderTemplate(
+        provider_type=ProviderType.VERTEX_AI,
+        display_name="Vertex AI",
+        # Vertex uses fixed global base URL; concrete upstream path is selected by transport hook.
+        api_base_url="https://aiplatform.googleapis.com",
+        endpoint_signatures=["gemini:chat", "claude:chat"],
+        # Vertex does not use this OAuth flow (it uses API Key / Service Account).
+        oauth=FixedProviderOAuth(
+            authorize_url="",
+            token_url="",
+            client_id="",
+            client_secret="",
+            scopes=[],
+            redirect_uri="",
             use_pkce=False,
         ),
     ),

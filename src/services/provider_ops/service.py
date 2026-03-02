@@ -1045,9 +1045,9 @@ class ProviderOpsService:
                 "verify": get_ssl_context(),
             }
             if tunnel_node_id:
-                from src.services.proxy_node.tunnel_transport import TunnelTransport
+                from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-                client_kwargs["transport"] = TunnelTransport(tunnel_node_id, timeout=30.0)
+                client_kwargs["transport"] = create_tunnel_transport(tunnel_node_id, timeout=30.0)
                 logger.debug("使用 tunnel 代理: node_id={}", tunnel_node_id)
             elif proxy:
                 client_kwargs["proxy"] = proxy

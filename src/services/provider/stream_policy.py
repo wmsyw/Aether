@@ -55,13 +55,15 @@ def get_upstream_stream_policy(
 
     Defaults:
     - Codex + openai:cli: FORCE_STREAM (Codex upstream requires stream=true).
+    - Codex + openai:compact: follow endpoint/client policy (no hard force).
     """
 
     provider_obj = getattr(endpoint, "provider", None)
     pt = str(provider_type or getattr(provider_obj, "provider_type", "") or "").strip().lower()
     sig = str(endpoint_sig or getattr(endpoint, "api_format", "") or "").strip().lower()
-    is_codex_compact = False
-    if pt == ProviderType.CODEX and sig == "openai:cli":
+    is_codex_cli = pt == ProviderType.CODEX and sig == "openai:cli"
+    is_codex_compact = pt == ProviderType.CODEX and sig == "openai:compact"
+    if is_codex_cli:
         try:
             from src.services.provider.adapters.codex.context import get_codex_request_context
 
@@ -82,8 +84,7 @@ def get_upstream_stream_policy(
         if parsed != UpstreamStreamPolicy.AUTO:
             # Codex upstream requires streaming; do not allow forcing non-stream.
             if (
-                pt == ProviderType.CODEX
-                and sig == "openai:cli"
+                is_codex_cli
                 and parsed == UpstreamStreamPolicy.FORCE_NON_STREAM
                 and not is_codex_compact
             ):
@@ -93,7 +94,7 @@ def get_upstream_stream_policy(
             return parsed
 
     # Safe-by-default: Codex Responses OAuth behaves like SSE-only.
-    if pt == ProviderType.CODEX and sig == "openai:cli":
+    if is_codex_cli:
         return (
             UpstreamStreamPolicy.FORCE_NON_STREAM
             if is_codex_compact
@@ -134,13 +135,30 @@ def enforce_stream_mode_for_upstream(
     meta = resolve_endpoint_definition(provider_api_format)
     provider_uses_stream = meta.stream_in_body if meta is not None else True
 
+    provider_fmt = str(provider_api_format or "").strip().lower()
+    # OpenAI compact endpoint: keep request body stream field absent.
+    if provider_fmt == "openai:compact":
+        request_body.pop("stream", None)
+        return request_body
+
+    # Backward compatibility: Codex compact routed through openai:cli + context marker.
+    if provider_fmt == "openai:cli":
+        try:
+            from src.services.provider.adapters.codex.context import get_codex_request_context
+
+            ctx = get_codex_request_context()
+            if ctx and ctx.is_compact:
+                request_body.pop("stream", None)
+                return request_body
+        except Exception:
+            pass
+
     if provider_uses_stream:
         request_body["stream"] = bool(upstream_is_stream)
     else:
         request_body.pop("stream", None)
 
     # OpenAI Chat Completions: request usage in streaming mode.
-    provider_fmt = str(provider_api_format or "").strip().lower()
     if upstream_is_stream and provider_fmt == "openai:chat":
         stream_options = request_body.get("stream_options")
         if not isinstance(stream_options, dict):

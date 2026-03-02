@@ -21,7 +21,7 @@ MAX_CONCURRENT_REQUESTS = 5
 
 # 模型获取格式优先级：同族内优先使用 chat 端点，若无则回退到 cli 端点
 MODEL_FETCH_FORMAT_PRIORITY: list[tuple[str, ...]] = [
-    ("openai:chat", "openai:cli"),
+    ("openai:chat", "openai:cli", "openai:compact"),
     ("claude:chat", "claude:cli"),
     ("gemini:chat", "gemini:cli"),
 ]

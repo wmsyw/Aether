@@ -37,6 +37,7 @@ def build_codex_url(
     *,
     is_stream: bool,
     effective_query_params: dict[str, Any],
+    **_kwargs: Any,
 ) -> str:
     """构建 Codex OAuth URL。
 
@@ -48,7 +49,8 @@ def build_codex_url(
     from src.services.provider.adapters.codex.context import get_codex_request_context
 
     ctx = get_codex_request_context()
-    is_compact = ctx.is_compact if ctx else False
+    endpoint_sig = str(getattr(endpoint, "api_format", "") or "").strip().lower()
+    is_compact = bool((ctx.is_compact if ctx else False) or endpoint_sig == "openai:compact")
 
     base = str(endpoint.base_url).rstrip("/")
     # 如果用户已在 base_url 中包含了 /responses，不要重复追加
@@ -110,10 +112,12 @@ def register_all() -> None:
 
     # Envelope
     register_envelope("codex", "openai:cli", codex_oauth_envelope)
+    register_envelope("codex", "openai:compact", codex_oauth_envelope)
     register_envelope("codex", "", codex_oauth_envelope)
 
     # Transport
     register_transport_hook("codex", "openai:cli", build_codex_url)
+    register_transport_hook("codex", "openai:compact", build_codex_url)
 
     # Auth
     register_auth_enricher("codex", enrich_codex)

@@ -8,6 +8,7 @@ const ENDPOINT_SORT_ORDER = [
   'claude:cli',
   'openai:chat',
   'openai:cli',
+  'openai:compact',
   'gemini:chat',
   'gemini:cli',
   'openai:video',

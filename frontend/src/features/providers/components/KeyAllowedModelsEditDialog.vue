@@ -72,7 +72,7 @@
           <div class="max-h-96 overflow-y-auto">
             <!-- 加载中 -->
             <div
-              v-if="loadingGlobalModels"
+              v-if="loadingProviderModels"
               class="flex items-center justify-center py-12"
             >
               <Loader2 class="w-6 h-6 animate-spin text-primary" />
@@ -152,7 +152,7 @@
               </div>
 
               <!-- 提供商模型 -->
-              <template v-if="filteredGlobalModels.length > 0">
+              <template v-if="filteredProviderModels.length > 0">
                 <!-- 标题 sticky top -->
                 <div
                   class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors"
@@ -164,14 +164,14 @@
                       :class="collapsedGroups.has('global') ? '-rotate-90' : ''"
                     />
                     <span class="text-xs font-medium">提供商模型</span>
-                    <span class="text-xs text-muted-foreground">({{ filteredGlobalModels.length }})</span>
+                    <span class="text-xs text-muted-foreground">({{ filteredProviderModels.length }})</span>
                   </div>
                   <button
                     type="button"
                     class="text-xs text-primary hover:underline"
-                    @click.stop="toggleAllGlobalModels"
+                    @click.stop="toggleAllProviderModels"
                   >
-                    {{ isAllGlobalModelsSelected ? '取消全选' : '全选' }}
+                    {{ isAllProviderModelsSelected ? '取消全选' : '全选' }}
                   </button>
                 </div>
                 <!-- 内容 -->
@@ -180,7 +180,7 @@
                   class="space-y-1 p-2"
                 >
                   <div
-                    v-for="model in filteredGlobalModels"
+                    v-for="model in filteredProviderModels"
                     :key="model.name"
                     class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer"
                     @click="toggleModel(model.name)"
@@ -196,10 +196,13 @@
                     </div>
                     <div class="flex-1 min-w-0">
                       <p class="text-sm font-medium truncate">
-                        {{ model.display_name }}
-                      </p>
-                      <p class="text-xs text-muted-foreground truncate font-mono">
                         {{ model.name }}
+                      </p>
+                      <p
+                        v-if="model.global_model_display_name || model.global_model_name"
+                        class="text-xs text-muted-foreground truncate font-mono"
+                      >
+                        {{ model.global_model_display_name || model.global_model_name }}
                       </p>
                     </div>
                     <button
@@ -366,17 +369,19 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { parseApiError } from '@/utils/errorParser'
 import {
+  getProviderModels,
   updateProviderKey,
   type EndpointAPIKey,
   type AllowedModels,
 } from '@/api/endpoints'
-import { getGlobalModels, type GlobalModelResponse } from '@/api/global-models'
 import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
 import { API_FORMAT_SHORT, type UpstreamModel } from '@/api/endpoints/types'
 
 interface AvailableModel {
   name: string
   display_name: string
+  global_model_name?: string
+  global_model_display_name?: string
 }
 
 const props = defineProps<{
@@ -396,7 +401,7 @@ const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
 
 const isOpen = computed(() => props.open)
 const saving = ref(false)
-const loadingGlobalModels = ref(false)
+const loadingProviderModels = ref(false)
 const fetchingUpstreamModels = ref(false)
 const upstreamModelsLoaded = ref(false)
 
@@ -406,8 +411,8 @@ let loadingCancelled = false
 // 搜索
 const searchQuery = ref('')
 
-// 可用模型列表（全局模型）
-const allGlobalModels = ref<AvailableModel[]>([])
+// 可用模型列表（该 Provider 已关联的模型）
+const allProviderModels = ref<AvailableModel[]>([])
 // 上游模型列表（从 API 查询获取）
 const upstreamModels = ref<UpstreamModel[]>([])
 
@@ -427,7 +432,7 @@ const isAutoFetchMode = computed(() => props.apiKey?.auto_fetch_models ?? false)
 
 // 空状态判断
 const showEmptyState = computed(() => {
-  return filteredGlobalModels.value.length === 0 &&
+  return filteredProviderModels.value.length === 0 &&
          filteredUpstreamModels.value.length === 0 &&
          customModels.value.length === 0
 })
@@ -450,22 +455,22 @@ const hasChanges = computed(() => {
   return sortedLocked1.some((v, i) => v !== sortedLocked2[i])
 })
 
-// 所有已知模型的集合（全局 + 上游模型）
+// 所有已知模型的集合（提供商模型 + 上游模型）
 const allKnownModels = computed(() => {
   const set = new Set<string>()
-  allGlobalModels.value.forEach(m => set.add(m.name))
+  allProviderModels.value.forEach(m => set.add(m.name))
   upstreamModels.value.forEach(m => set.add(m.id))
   return set
 })
 
-// 全局模型名称集合（用于判断模型是否为全局模型）
-const globalModelNamesSet = computed(() => {
-  return new Set(allGlobalModels.value.map(m => m.name))
+// 提供商模型名称集合（用于判断模型是否为“提供商模型”分组项）
+const providerModelNamesSet = computed(() => {
+  return new Set(allProviderModels.value.map(m => m.name))
 })
 
-// 判断模型是否为全局模型（提供商模型）
-function isGlobalModel(modelId: string): boolean {
-  return globalModelNamesSet.value.has(modelId)
+// 判断模型是否为“提供商模型”分组项
+function isProviderModel(modelId: string): boolean {
+  return providerModelNamesSet.value.has(modelId)
 }
 
 // 上游模型列表（后端已按 id 聚合，包含 api_formats 数组）
@@ -541,27 +546,29 @@ const canAddAsCustom = computed(() => {
   if (selectedModels.value.includes(search)) return false
   // 已经在自定义模型列表中就不显示
   if (allCustomModels.value.includes(search)) return false
-  // 精确匹配全局模型就不显示
-  if (allGlobalModels.value.some(m => m.name === search)) return false
+  // 精确匹配提供商模型就不显示
+  if (allProviderModels.value.some(m => m.name === search)) return false
   // 精确匹配上游模型就不显示
   if (upstreamModelNames.value.includes(search)) return false
   return true
 })
 
-// 搜索过滤后的全局模型
-const filteredGlobalModels = computed(() => {
-  if (!searchQuery.value.trim()) return allGlobalModels.value
+// 搜索过滤后的提供商模型
+const filteredProviderModels = computed(() => {
+  if (!searchQuery.value.trim()) return allProviderModels.value
   const query = searchQuery.value.toLowerCase()
-  return allGlobalModels.value.filter(m =>
+  return allProviderModels.value.filter(m =>
     m.name.toLowerCase().includes(query) ||
-    m.display_name.toLowerCase().includes(query)
+    m.display_name.toLowerCase().includes(query) ||
+    (m.global_model_name || '').toLowerCase().includes(query) ||
+    (m.global_model_display_name || '').toLowerCase().includes(query)
   )
 })
 
-// 全局模型是否全选
-const isAllGlobalModelsSelected = computed(() => {
-  if (filteredGlobalModels.value.length === 0) return false
-  return filteredGlobalModels.value.every(m => selectedModels.value.includes(m.name))
+// 提供商模型是否全选
+const isAllProviderModelsSelected = computed(() => {
+  if (filteredProviderModels.value.length === 0) return false
+  return filteredProviderModels.value.every(m => selectedModels.value.includes(m.name))
 })
 
 // 切换模型选中状态
@@ -569,9 +576,9 @@ function toggleModel(modelId: string) {
   const idx = selectedModels.value.indexOf(modelId)
   if (idx === -1) {
     selectedModels.value.push(modelId)
-    // 自动获取模式下，勾选全局模型时自动锁定
+    // 自动获取模式下，勾选提供商模型时自动锁定
     // 防止下次刷新时被覆盖（即使全局模型与上游模型同名）
-    if (isAutoFetchMode.value && isGlobalModel(modelId)) {
+    if (isAutoFetchMode.value && isProviderModel(modelId)) {
       if (!lockedModels.value.includes(modelId)) {
         lockedModels.value.push(modelId)
       }
@@ -618,10 +625,10 @@ function addCustomModel() {
   }
 }
 
-// 全选/取消全选全局模型
-function toggleAllGlobalModels() {
-  const allNames = filteredGlobalModels.value.map(m => m.name)
-  if (isAllGlobalModelsSelected.value) {
+// 全选/取消全选提供商模型
+function toggleAllProviderModels() {
+  const allNames = filteredProviderModels.value.map(m => m.name)
+  if (isAllProviderModelsSelected.value) {
     // 取消全选
     selectedModels.value = selectedModels.value.filter(id => !allNames.includes(id))
     // 同时取消锁定
@@ -631,7 +638,7 @@ function toggleAllGlobalModels() {
     allNames.forEach(name => {
       if (!selectedModels.value.includes(name)) {
         selectedModels.value.push(name)
-        // 自动获取模式下，勾选全局模型时自动锁定
+        // 自动获取模式下，勾选提供商模型时自动锁定
         if (isAutoFetchMode.value && !lockedModels.value.includes(name)) {
           lockedModels.value.push(name)
         }
@@ -650,21 +657,23 @@ function toggleGroupCollapse(group: string) {
   collapsedGroups.value = new Set(collapsedGroups.value)
 }
 
-// 加载全局模型
-async function loadGlobalModels() {
-  loadingGlobalModels.value = true
+// 加载该 Provider 已关联的模型
+async function loadProviderModels() {
+  loadingProviderModels.value = true
   try {
-    const response = await getGlobalModels({ limit: 1000 })
+    const response = await getProviderModels(props.providerId, { limit: 1000 })
     if (loadingCancelled) return
-    allGlobalModels.value = response.models.map((m: GlobalModelResponse) => ({
-      name: m.name,
-      display_name: m.display_name
+    allProviderModels.value = response.map(m => ({
+      name: m.provider_model_name,
+      display_name: m.global_model_display_name || m.global_model_name || m.provider_model_name,
+      global_model_name: m.global_model_name,
+      global_model_display_name: m.global_model_display_name
     }))
   } catch {
     if (loadingCancelled) return
-    showError('加载全局模型失败', '错误')
+    showError('加载提供商模型失败', '错误')
   } finally {
-    loadingGlobalModels.value = false
+    loadingProviderModels.value = false
   }
 }
 
@@ -734,8 +743,8 @@ watch(() => props.open, async (open) => {
       collapsedGroups.value = new Set()
     }
 
-    // 加载全局模型
-    await loadGlobalModels()
+    // 加载该 Provider 已关联模型
+    await loadProviderModels()
 
     // 自动获取模式下，获取上游模型用于显示（但选中状态使用已保存的 allowed_models）
     if (props.apiKey.auto_fetch_models) {
@@ -745,11 +754,11 @@ watch(() => props.open, async (open) => {
       // selectedModels 已在上面从 props.apiKey.allowed_models 初始化
     }
 
-    // 提取自定义模型（不在全局模型和上游模型中的）
+    // 提取自定义模型（不在提供商模型和上游模型中的）
     const upstreamModelIdsSet = new Set(upstreamModels.value.map(m => m.id))
     // 自定义模型是用户手动添加的、不在已知模型列表中的
     allCustomModels.value = selectedModels.value.filter(m =>
-      !globalModelNamesSet.value.has(m) && !upstreamModelIdsSet.has(m)
+      !providerModelNamesSet.value.has(m) && !upstreamModelIdsSet.has(m)
     )
   } else {
     loadingCancelled = true

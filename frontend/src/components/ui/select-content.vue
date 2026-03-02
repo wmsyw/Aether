@@ -1,5 +1,5 @@
 <template>
-  <SelectPortal>
+  <SelectPortal :disabled="shouldDisablePortal">
     <SelectContentPrimitive
       v-bind="$attrs"
       :class="contentClass"
@@ -23,7 +23,8 @@ import {
   SelectViewport,
 } from 'radix-vue'
 import { cn } from '@/lib/utils'
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
+import { DIALOG_CONTEXT_KEY } from './dialog/context'
 
 interface Props {
   class?: string
@@ -32,6 +33,7 @@ interface Props {
   sideOffset?: number
   align?: 'start' | 'center' | 'end'
   alignOffset?: number
+  disablePortal?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -41,7 +43,11 @@ const props = withDefaults(defineProps<Props>(), {
   sideOffset: 4,
   align: undefined,
   alignOffset: undefined,
+  disablePortal: false,
 })
+
+const isInsideDialog = inject(DIALOG_CONTEXT_KEY, false)
+const shouldDisablePortal = computed(() => props.disablePortal || isInsideDialog)
 
 const contentClass = computed(() =>
   cn(

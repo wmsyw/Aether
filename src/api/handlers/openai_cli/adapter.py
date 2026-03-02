@@ -15,7 +15,7 @@ from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
 from src.api.handlers.openai.adapter import OpenAIChatAdapter
 from src.config.settings import config
-from src.core.api_format import ApiFamily
+from src.core.api_format import ApiFamily, EndpointKind
 from src.utils.url_utils import is_codex_url
 
 
@@ -166,3 +166,18 @@ class OpenAICliAdapter(CliAdapterBase):
 
 
 __all__ = ["OpenAICliAdapter"]
+
+
+@register_cli_adapter
+class OpenAICompactAdapter(OpenAICliAdapter):
+    """OpenAI Compact Responses adapter (/v1/responses/compact)."""
+
+    FORMAT_ID = "openai:compact"
+    ENDPOINT_KIND = EndpointKind.COMPACT
+    name = "openai.compact"
+
+    def __init__(self, allowed_api_formats: list[str] | None = None):
+        super().__init__(allowed_api_formats=allowed_api_formats, compact=True)
+
+
+__all__.append("OpenAICompactAdapter")

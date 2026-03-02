@@ -5,6 +5,7 @@ export const API_FORMATS = {
   CLAUDE_CLI: 'claude:cli',
   OPENAI: 'openai:chat',
   OPENAI_CLI: 'openai:cli',
+  OPENAI_COMPACT: 'openai:compact',
   OPENAI_VIDEO: 'openai:video',
   GEMINI: 'gemini:chat',
   GEMINI_CLI: 'gemini:cli',
@@ -19,6 +20,7 @@ export const API_FORMAT_LABELS: Record<string, string> = {
   [API_FORMATS.CLAUDE_CLI]: 'Claude CLI',
   [API_FORMATS.OPENAI]: 'OpenAI Chat',
   [API_FORMATS.OPENAI_CLI]: 'OpenAI CLI',
+  [API_FORMATS.OPENAI_COMPACT]: 'OpenAI Compact',
   [API_FORMATS.OPENAI_VIDEO]: 'OpenAI Video',
   [API_FORMATS.GEMINI]: 'Gemini Chat',
   [API_FORMATS.GEMINI_CLI]: 'Gemini CLI',
@@ -28,6 +30,7 @@ export const API_FORMAT_LABELS: Record<string, string> = {
   CLAUDE_CLI: 'Claude CLI',
   OPENAI: 'OpenAI Chat',
   OPENAI_CLI: 'OpenAI CLI',
+  OPENAI_COMPACT: 'OpenAI Compact',
   OPENAI_VIDEO: 'OpenAI Video',
   GEMINI: 'Gemini Chat',
   GEMINI_CLI: 'Gemini CLI',
@@ -38,6 +41,7 @@ export const API_FORMAT_LABELS: Record<string, string> = {
 export const API_FORMAT_SHORT: Record<string, string> = {
   [API_FORMATS.OPENAI]: 'O',
   [API_FORMATS.OPENAI_CLI]: 'OC',
+  [API_FORMATS.OPENAI_COMPACT]: 'OCP',
   [API_FORMATS.OPENAI_VIDEO]: 'OV',
   [API_FORMATS.CLAUDE]: 'C',
   [API_FORMATS.CLAUDE_CLI]: 'CC',
@@ -47,6 +51,7 @@ export const API_FORMAT_SHORT: Record<string, string> = {
   // legacy 兼容（仅用于展示历史数据）
   OPENAI: 'O',
   OPENAI_CLI: 'OC',
+  OPENAI_COMPACT: 'OCP',
   OPENAI_VIDEO: 'OV',
   CLAUDE: 'C',
   CLAUDE_CLI: 'CC',
@@ -59,6 +64,7 @@ export const API_FORMAT_SHORT: Record<string, string> = {
 export const API_FORMAT_ORDER: string[] = [
   API_FORMATS.OPENAI,
   API_FORMATS.OPENAI_CLI,
+  API_FORMATS.OPENAI_COMPACT,
   API_FORMATS.OPENAI_VIDEO,
   API_FORMATS.CLAUDE,
   API_FORMATS.CLAUDE_CLI,

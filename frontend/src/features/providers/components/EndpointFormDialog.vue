@@ -57,7 +57,7 @@
                   size="icon"
                   :class="getUpstreamStreamButtonClass(endpoint)"
                   :title="getUpstreamStreamTooltip(endpoint)"
-                  :disabled="savingEndpointId === endpoint.id"
+                  :disabled="savingEndpointId === endpoint.id || isUpstreamStreamPolicyLocked(endpoint)"
                   @click="handleCycleUpstreamStream(endpoint)"
                 >
                   <Radio class="w-3.5 h-3.5" />
@@ -2029,12 +2029,21 @@ async function handleToggleFormatConversion(endpoint: ProviderEndpoint) {
 
 // 获取上游流式按钮的当前状态（优先使用编辑状态）
 function getCurrentUpstreamStreamPolicy(endpoint: ProviderEndpoint): string {
+  if (isUpstreamStreamPolicyLocked(endpoint)) return 'force_stream'
   const state = endpointEditStates.value[endpoint.id]
   return state?.upstreamStreamPolicy ?? getEndpointUpstreamStreamPolicy(endpoint)
 }
 
+function isUpstreamStreamPolicyLocked(endpoint: ProviderEndpoint): boolean {
+  return (props.provider?.provider_type || '').toLowerCase() === 'codex'
+    && endpoint.api_format === 'openai:cli'
+}
+
 // 获取上游流式按钮的样式类
 function getUpstreamStreamButtonClass(endpoint: ProviderEndpoint): string {
+  if (isUpstreamStreamPolicyLocked(endpoint)) {
+    return 'h-7 w-7 text-primary/70 cursor-not-allowed'
+  }
   const policy = getCurrentUpstreamStreamPolicy(endpoint)
   const base = 'h-7 w-7'
   if (policy === 'force_stream') return `${base} text-primary`
@@ -2044,6 +2053,7 @@ function getUpstreamStreamButtonClass(endpoint: ProviderEndpoint): string {
 
 // 获取上游流式按钮的提示文字
 function getUpstreamStreamTooltip(endpoint: ProviderEndpoint): string {
+  if (isUpstreamStreamPolicyLocked(endpoint)) return '固定流式（Codex OpenAI CLI，已锁定）'
   const policy = getCurrentUpstreamStreamPolicy(endpoint)
   if (policy === 'force_stream') return '固定流式（点击切换为固定非流）'
   if (policy === 'force_non_stream') return '固定非流（点击切换为跟随请求）'
@@ -2052,6 +2062,8 @@ function getUpstreamStreamTooltip(endpoint: ProviderEndpoint): string {
 
 // 循环切换上游流式策略并直接保存
 async function handleCycleUpstreamStream(endpoint: ProviderEndpoint) {
+  if (isUpstreamStreamPolicyLocked(endpoint)) return
+
   const currentPolicy = getCurrentUpstreamStreamPolicy(endpoint)
   let nextPolicy: string
   let nextLabel: string

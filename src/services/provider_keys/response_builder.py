@@ -19,8 +19,8 @@ def build_key_response(
     """构建 Key 响应对象。"""
     auth_type = normalize_auth_type(getattr(key, "auth_type", "api_key"))
 
-    if auth_type == "vertex_ai":
-        # Vertex AI 使用 Service Account，不显示占位符
+    if auth_type in ("service_account", "vertex_ai"):
+        # Service Account 不显示占位符
         masked_key = "[Service Account]"
     elif auth_type == "oauth":
         masked_key = "[OAuth Token]"

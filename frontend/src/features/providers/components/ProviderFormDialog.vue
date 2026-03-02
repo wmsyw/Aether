@@ -42,6 +42,9 @@
                   <SelectItem value="custom">
                     自定义
                   </SelectItem>
+                  <SelectItem value="vertex_ai">
+                    Vertex AI
+                  </SelectItem>
                   <SelectItem value="claude_code">
                     ClaudeCode
                   </SelectItem>
@@ -59,6 +62,9 @@
                 <template v-else>
                   <SelectItem value="custom">
                     自定义
+                  </SelectItem>
+                  <SelectItem value="vertex_ai">
+                    Vertex AI
                   </SelectItem>
                   <SelectItem value="claude_code">
                     ClaudeCode
@@ -322,7 +328,7 @@ const defaultPriority = computed(() => {
 // 表单数据
 const form = ref({
   name: '',
-  provider_type: 'custom' as 'custom' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity' | 'kiro',
+  provider_type: 'custom' as 'custom' | 'vertex_ai' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity' | 'kiro',
   description: '',
   website: '',
   // 计费配置
@@ -414,10 +420,10 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   resetForm,
 })
 
-// 新建模式下切换 provider_type 时自动设置号池模式：非自定义类型默认开启
-watch(() => form.value.provider_type, (newType) => {
+// 新建模式下切换 provider_type 时不自动开启号池模式
+watch(() => form.value.provider_type, () => {
   if (!isEditMode.value) {
-    form.value.pool_mode_enabled = newType !== 'custom'
+    form.value.pool_mode_enabled = false
   }
 })
 

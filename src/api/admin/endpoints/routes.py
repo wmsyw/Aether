@@ -21,6 +21,7 @@ from src.api.base.pipeline import ApiRequestPipeline
 from src.core.api_format.signature import parse_signature_key
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
+from src.core.provider_templates.fixed_providers import FIXED_PROVIDERS
 from src.core.provider_types import ProviderType
 from src.database import get_db
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
@@ -29,6 +30,7 @@ from src.models.endpoint_models import (
     ProviderEndpointResponse,
     ProviderEndpointUpdate,
 )
+from src.services.provider.stream_policy import UpstreamStreamPolicy, parse_upstream_stream_policy
 
 router = APIRouter(tags=["Endpoint Management"])
 pipeline = ApiRequestPipeline()
@@ -42,6 +44,17 @@ def mask_proxy_password(proxy_config: dict | None) -> dict | None:
     if masked.get("password"):
         masked["password"] = "***"
     return masked
+
+
+def _is_fixed_provider(provider_type: str | None) -> bool:
+    """Whether this provider_type is managed by fixed-provider templates."""
+    normalized = (provider_type or "custom").strip().lower()
+    if normalized == ProviderType.CUSTOM.value:
+        return False
+    try:
+        return ProviderType(normalized) in FIXED_PROVIDERS
+    except Exception:
+        return False
 
 
 @router.get("/providers/{provider_id}/endpoints", response_model=list[ProviderEndpointResponse])
@@ -283,8 +296,8 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             raise NotFoundException(f"Provider {self.provider_id} 不存在")
 
         # 固定类型 Provider：禁止通过该接口新增 Endpoints（端点由模板自动创建并锁定）
-        provider_type = (getattr(provider, "provider_type", "custom") or "custom").strip()
-        if provider_type != ProviderType.CUSTOM:
+        provider_type = getattr(provider, "provider_type", "custom")
+        if _is_fixed_provider(provider_type):
             raise InvalidRequestException("固定类型 Provider 不允许手动新增 Endpoint")
 
         if self.endpoint_data.provider_id != self.provider_id:
@@ -424,12 +437,43 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
         # 固定类型 Provider 的 endpoint：锁定 base_url/custom_path（前端禁用仅是 UX，后端必须强校验）
         provider = db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
         if provider:
-            provider_type = (getattr(provider, "provider_type", "custom") or "custom").strip()
-            if provider_type != ProviderType.CUSTOM:
+            provider_type = getattr(provider, "provider_type", "custom")
+            if _is_fixed_provider(provider_type):
                 if "base_url" in update_data or "custom_path" in update_data:
                     raise InvalidRequestException(
                         "固定类型 Provider 的 Endpoint 不允许修改 base_url/custom_path"
                     )
+                normalized_provider_type = str(provider_type or "custom").strip().lower()
+                endpoint_sig = str(getattr(endpoint, "api_format", "") or "").strip().lower()
+                if (
+                    normalized_provider_type == ProviderType.CODEX.value
+                    and endpoint_sig == "openai:cli"
+                ):
+                    has_config_in_payload = "config" in update_data
+                    cfg_payload = (
+                        update_data.get("config")
+                        if has_config_in_payload
+                        else getattr(endpoint, "config", None)
+                    )
+                    cfg = dict(cfg_payload) if isinstance(cfg_payload, dict) else {}
+                    requested = (
+                        cfg.get("upstream_stream_policy")
+                        or cfg.get("upstreamStreamPolicy")
+                        or cfg.get("upstream_stream")
+                    )
+                    if (
+                        has_config_in_payload
+                        and requested is not None
+                        and parse_upstream_stream_policy(requested)
+                        != UpstreamStreamPolicy.FORCE_STREAM
+                    ):
+                        raise InvalidRequestException(
+                            "Codex OpenAI CLI 端点固定为强制流式，不允许修改"
+                        )
+                    cfg.pop("upstreamStreamPolicy", None)
+                    cfg.pop("upstream_stream", None)
+                    cfg["upstream_stream_policy"] = "force_stream"
+                    update_data["config"] = cfg
 
         # 把 proxy 转换为 dict 存储，支持显式设置为 None 清除代理
         if "proxy" in update_data:

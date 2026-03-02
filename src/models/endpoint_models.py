@@ -261,7 +261,7 @@ class ProviderEndpointCreate(BaseModel):
     api_format: str = Field(
         ...,
         description=(
-            "Endpoint signature（例如: claude:chat/claude:cli, openai:chat/openai:cli/openai:video, gemini:chat/gemini:cli/gemini:video）"
+            "Endpoint signature（例如: claude:chat/claude:cli, openai:chat/openai:cli/openai:compact/openai:video, gemini:chat/gemini:cli/gemini:video）"
         ),
     )
     base_url: str = Field(..., min_length=1, max_length=500, description="API 基础 URL")
@@ -435,14 +435,14 @@ class EndpointAPIKeyCreate(BaseModel):
     api_key: str = Field(
         default="", max_length=10000, description="API Key（标准认证时必填，将自动加密）"
     )
-    auth_type: Literal["api_key", "vertex_ai", "oauth"] = Field(
+    auth_type: Literal["api_key", "service_account", "oauth"] = Field(
         default="api_key",
-        description="认证类型：api_key（标准 API Key）/ vertex_ai（Vertex AI Service Account）/ oauth（OAuth access_token）",
+        description="认证类型：api_key（标准 API Key）/ service_account（GCP Service Account）/ oauth（OAuth access_token）",
     )
     auth_config: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "认证配置（JSON）：vertex_ai 时存储完整 Service Account JSON；"
+            "认证配置（JSON）：service_account 时存储完整 Service Account JSON；"
             "oauth 时存储 token/refresh/expires_at 等（后端加密存储，不在响应中返回）"
         ),
     )
@@ -590,14 +590,14 @@ class EndpointAPIKeyUpdate(BaseModel):
         max_length=10000,
         description="API Key（标准认证时使用，将自动加密）",
     )
-    auth_type: Literal["api_key", "vertex_ai", "oauth"] | None = Field(
+    auth_type: Literal["api_key", "service_account", "oauth"] | None = Field(
         default=None,
-        description="认证类型：api_key（标准 API Key）/ vertex_ai（Vertex AI Service Account）/ oauth（OAuth access_token）",
+        description="认证类型：api_key（标准 API Key）/ service_account（GCP Service Account）/ oauth（OAuth access_token）",
     )
     auth_config: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "认证配置（JSON）：vertex_ai 时存储完整 Service Account JSON；"
+            "认证配置（JSON）：service_account 时存储完整 Service Account JSON；"
             "oauth 时存储 token/refresh/expires_at 等（后端加密存储，不在响应中返回）"
         ),
     )
@@ -719,7 +719,9 @@ class EndpointAPIKeyResponse(BaseModel):
     # Key 信息（脱敏）
     api_key_masked: str = Field(..., description="脱敏后的 Key")
     api_key_plain: str | None = Field(default=None, description="完整的 Key")
-    auth_type: str = Field(default="api_key", description="认证类型：api_key 或 vertex_ai")
+    auth_type: str = Field(
+        default="api_key", description="认证类型：api_key / service_account / oauth"
+    )
     # auth_config 不在响应中返回（包含敏感信息），前端通过 auth_type 判断类型
     name: str = Field(..., description="密钥名称")
 

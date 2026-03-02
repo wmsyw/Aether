@@ -92,8 +92,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, useSlots, type Component } from 'vue'
+import { computed, provide, useSlots, type Component } from 'vue'
 import { useEscapeKey } from '@/composables/useEscapeKey'
+import { DIALOG_CONTEXT_KEY } from './context'
 
 // Props 定义
 const props = defineProps<{
@@ -115,6 +116,8 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
   'update:modelValue': [value: boolean]
 }>()
+
+provide(DIALOG_CONTEXT_KEY, true)
 
 // 获取 slots 以便在模板中使用
 const slots = useSlots()

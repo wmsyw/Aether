@@ -924,14 +924,11 @@ class AdminGetApiFormatsAdapter(AdminApiAdapter):
 
         def _label_for(sig: str) -> str:
             fam, kind = (sig.split(":", 1) + [""])[:2]
-            fam_title = {
-                "claude": "Claude",
-                "openai": "OpenAI",
-                "gemini": "Gemini",
-            }.get(fam, fam)
+            fam_title = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}.get(fam, fam)
             kind_title = {
                 "chat": "Chat",
                 "cli": "CLI",
+                "compact": "Compact",
                 "video": "Video",
                 "image": "Image",
             }.get(kind, kind)
@@ -941,6 +938,7 @@ class AdminGetApiFormatsAdapter(AdminApiAdapter):
         preferred_order = [
             "openai:chat",
             "openai:cli",
+            "openai:compact",
             "openai:video",
             "claude:chat",
             "claude:cli",

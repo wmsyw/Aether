@@ -199,24 +199,18 @@ class OpenAICliNormalizer(FormatNormalizer):
 
         return internal
 
-    # Codex 需要的 include 项
-    _CODEX_REQUIRED_INCLUDE = "reasoning.encrypted_content"
-
     def request_from_internal(
         self,
         internal: InternalRequest,
         *,
         target_variant: str | None = None,
     ) -> dict[str, Any]:
+        _ = target_variant
         openai_cli_extra = internal.extra.get("openai_cli", {})
-        is_compact = bool(openai_cli_extra.get("_aether_compact"))
-        is_codex = str(target_variant or "").lower() == "codex" and not is_compact
 
         result: dict[str, Any] = {
             "model": internal.model,
-            "input": self._internal_messages_to_input(
-                internal.messages, system_to_developer=is_codex
-            ),
+            "input": self._internal_messages_to_input(internal.messages, system_to_developer=False),
         }
 
         # 合并 instructions，如果没有则使用 system
@@ -229,20 +223,17 @@ class OpenAICliNormalizer(FormatNormalizer):
         # 统一添加该字段以确保兼容性
         result["instructions"] = instructions_text or ""
 
-        # max_output_tokens/temperature/top_p: Codex 不支持，标准 API 可选
-        if not is_codex:
-            if internal.max_tokens is not None:
-                # Responses API 使用 max_output_tokens
-                result["max_output_tokens"] = internal.max_tokens
-            if internal.temperature is not None:
-                result["temperature"] = internal.temperature
-            if internal.top_p is not None:
-                result["top_p"] = internal.top_p
+        if internal.max_tokens is not None:
+            # Responses API 使用 max_output_tokens
+            result["max_output_tokens"] = internal.max_tokens
+        if internal.temperature is not None:
+            result["temperature"] = internal.temperature
+        if internal.top_p is not None:
+            result["top_p"] = internal.top_p
 
         if internal.stop_sequences:
             result["stop"] = list(internal.stop_sequences)
-        # Codex 强制要求 stream=true；其他情况尊重客户端请求
-        result["stream"] = True if is_codex else bool(internal.stream)
+        result["stream"] = bool(internal.stream)
 
         if internal.tools:
             # Responses API 使用扁平结构: {type, name, description, parameters}
@@ -308,25 +299,9 @@ class OpenAICliNormalizer(FormatNormalizer):
             if key not in handled_keys and key not in result:
                 result[key] = value
 
-        # 统一设置 store=false（Codex 强制要求，标准 API 兼容）
+        # 标准 Responses API 默认设置 store=false
         if "store" not in result:
             result["store"] = False
-
-        # Codex 特定设置（覆盖/删除不支持的字段）
-        if is_codex:
-            result["parallel_tool_calls"] = True
-            # 和 codex passthrough patch 保持一致：固定 include 列表
-            result["include"] = [self._CODEX_REQUIRED_INCLUDE]
-            # 删除 Codex 不支持的字段
-            for key in (
-                "previous_response_id",
-                "service_tier",
-                "max_completion_tokens",
-                "truncation",
-                "context_management",
-                "user",
-            ):
-                result.pop(key, None)
 
         return result
 

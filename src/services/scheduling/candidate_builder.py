@@ -415,9 +415,12 @@ class CandidateBuilder:
                 if isinstance(raw, int) and raw > 0:
                     output_limit = raw
 
-        # chat/cli 互相可回退（用于同协议族下的端点变体），video/image 等不跨类回退
+        # chat/cli 互相可回退（用于同协议族下的端点变体），compact 可回退到 cli。
+        # video/image 等不跨类回退。
         if client_kind in {EndpointKind.CHAT, EndpointKind.CLI}:
             allowed_kinds = {EndpointKind.CHAT, EndpointKind.CLI}
+        elif client_kind == EndpointKind.COMPACT:
+            allowed_kinds = {EndpointKind.COMPACT, EndpointKind.CLI}
         else:
             allowed_kinds = {client_kind}
 

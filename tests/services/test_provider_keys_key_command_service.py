@@ -65,6 +65,8 @@ def _build_key(**overrides: Any) -> SimpleNamespace:
         "model_exclude_patterns": None,
         "provider_id": "provider-1",
         "auth_type": "api_key",
+        "api_formats": [],
+        "provider": None,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
