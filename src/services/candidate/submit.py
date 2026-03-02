@@ -20,7 +20,7 @@ class ExtractExternalTaskIdFunc(Protocol):
 
 
 class UpstreamClientRequestError(RuntimeError):
-    """可判定为客户端请求问题（不应 failover）的上游错误。"""
+    """命中上游终止规则（不应继续 failover）的错误。"""
 
     def __init__(
         self,
@@ -30,7 +30,7 @@ class UpstreamClientRequestError(RuntimeError):
     ) -> None:
         self.response = response
         self.candidate_keys = candidate_keys
-        super().__init__(f"Upstream client error: HTTP {response.status_code}")
+        super().__init__(f"Upstream stop rule matched: HTTP {response.status_code}")
 
 
 class AllCandidatesFailedError(RuntimeError):

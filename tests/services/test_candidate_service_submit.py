@@ -14,6 +14,7 @@ def _make_candidate(
     *,
     provider_id: str = "p1",
     provider_name: str = "prov",
+    provider_config: dict[str, Any] | None = None,
     endpoint_id: str = "e1",
     key_id: str = "k1",
     key_name: str = "key",
@@ -24,7 +25,7 @@ def _make_candidate(
     skip_reason: str | None = None,
     needs_conversion: bool = False,
 ) -> SimpleNamespace:
-    provider = SimpleNamespace(id=provider_id, name=provider_name)
+    provider = SimpleNamespace(id=provider_id, name=provider_name, config=provider_config or {})
     endpoint = SimpleNamespace(id=endpoint_id)
     key = SimpleNamespace(id=key_id, name=key_name, auth_type=auth_type, priority=priority)
     return SimpleNamespace(
@@ -39,7 +40,7 @@ def _make_candidate(
 
 
 @pytest.mark.asyncio
-async def test_submit_with_failover_skips_http_500_then_succeeds(
+async def test_submit_with_failover_continues_on_http_400_without_stop_rule_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = MagicMock()
@@ -65,13 +66,8 @@ async def test_submit_with_failover_skips_http_500_then_succeeds(
             )
         ),
     )
-    monkeypatch.setattr(
-        "src.services.orchestration.error_classifier.ErrorClassifier.is_client_error",
-        lambda _self, _text: False,
-    )
-
     responses = [
-        httpx.Response(500, text='{"error": {"message": "server"}}'),
+        httpx.Response(400, json={"error": {"type": "invalid_request_error", "message": "bad"}}),
         httpx.Response(200, json={"id": "task-123"}),
     ]
     submit = AsyncMock(side_effect=responses)
@@ -97,7 +93,9 @@ async def test_submit_with_failover_skips_http_500_then_succeeds(
 
 
 @pytest.mark.asyncio
-async def test_submit_with_failover_stops_on_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_submit_with_failover_stops_on_provider_error_stop_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db = MagicMock()
     svc = TaskService(db)
 
@@ -111,11 +109,22 @@ async def test_submit_with_failover_stops_on_client_error(monkeypatch: pytest.Mo
     )
     monkeypatch.setattr(
         "src.services.candidate.resolver.CandidateResolver.fetch_candidates",
-        AsyncMock(return_value=([_make_candidate()], "gm1")),
-    )
-    monkeypatch.setattr(
-        "src.services.orchestration.error_classifier.ErrorClassifier.is_client_error",
-        lambda _self, _text: True,
+        AsyncMock(
+            return_value=(
+                [
+                    _make_candidate(
+                        provider_config={
+                            "failover_rules": {
+                                "error_stop_patterns": [
+                                    {"pattern": "invalid_request_error", "status_codes": [400]}
+                                ]
+                            }
+                        }
+                    )
+                ],
+                "gm1",
+            )
+        ),
     )
 
     response = httpx.Response(
@@ -141,6 +150,68 @@ async def test_submit_with_failover_stops_on_client_error(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_submit_with_failover_continues_on_provider_success_failover_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    svc = TaskService(db)
+
+    monkeypatch.setattr(
+        "src.services.system.config.SystemConfigService.get_config",
+        lambda *_args, **_kwargs: "provider",
+    )
+    monkeypatch.setattr(
+        "src.services.scheduling.aware_scheduler.get_cache_aware_scheduler",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.candidate.resolver.CandidateResolver.fetch_candidates",
+        AsyncMock(
+            return_value=(
+                [
+                    _make_candidate(
+                        provider_id="p1",
+                        endpoint_id="e1",
+                        key_id="k1",
+                        provider_config={
+                            "failover_rules": {
+                                "success_failover_patterns": [{"pattern": "fallback_me"}]
+                            }
+                        },
+                    ),
+                    _make_candidate(provider_id="p2", endpoint_id="e2", key_id="k2"),
+                ],
+                "gm1",
+            )
+        ),
+    )
+
+    responses = [
+        httpx.Response(200, json={"id": "task-should-not-be-used", "message": "fallback_me"}),
+        httpx.Response(200, json={"id": "task-123"}),
+    ]
+    submit = AsyncMock(side_effect=responses)
+
+    outcome = await svc.submit_with_failover(
+        api_format="openai:video",
+        model_name="sora",
+        affinity_key="a1",
+        user_api_key=MagicMock(),
+        request_id=None,
+        task_type="video",
+        submit_func=submit,
+        extract_external_task_id=lambda payload: payload.get("id"),
+        supported_auth_types={"api_key"},
+        allow_format_conversion=False,
+        max_candidates=10,
+    )
+
+    assert outcome.external_task_id == "task-123"
+    assert outcome.candidate.provider.id == "p2"
+    assert submit.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_submit_with_failover_no_eligible_candidates_due_to_auth_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,10 +229,6 @@ async def test_submit_with_failover_no_eligible_candidates_due_to_auth_type(
     monkeypatch.setattr(
         "src.services.candidate.resolver.CandidateResolver.fetch_candidates",
         AsyncMock(return_value=([_make_candidate(auth_type="vertex_ai")], "gm1")),
-    )
-    monkeypatch.setattr(
-        "src.services.orchestration.error_classifier.ErrorClassifier.is_client_error",
-        lambda _self, _text: False,
     )
 
     with pytest.raises(AllCandidatesFailedError) as excinfo:
@@ -209,11 +276,6 @@ async def test_submit_with_failover_filters_missing_billing_rule(
             )
         ),
     )
-    monkeypatch.setattr(
-        "src.services.orchestration.error_classifier.ErrorClassifier.is_client_error",
-        lambda _self, _text: False,
-    )
-
     # enable require_rule
     old = config.billing_require_rule
     try:

@@ -18,6 +18,7 @@ from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.models_service import invalidate_models_list_cache
 from src.api.base.pipeline import ApiRequestPipeline
+from src.core.api_format.metadata import get_default_body_rules_for_endpoint
 from src.core.api_format.signature import parse_signature_key
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
@@ -133,6 +134,17 @@ async def create_provider_endpoint(
         provider_id=provider_id,
         endpoint_data=endpoint_data,
     )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.get("/defaults/{api_format}/body-rules")
+async def get_default_endpoint_body_rules(
+    api_format: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """获取指定 endpoint signature 的默认 body_rules。"""
+    adapter = AdminGetDefaultBodyRulesAdapter(api_format=api_format)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
@@ -324,6 +336,9 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
         endpoint_kind = sig.endpoint_kind.value
         # 使用归一化后的 signature key，确保格式一致性
         normalized_api_format = sig.key
+        body_rules = self.endpoint_data.body_rules
+        if body_rules is None:
+            body_rules = get_default_body_rules_for_endpoint(normalized_api_format) or None
 
         new_endpoint = ProviderEndpoint(
             id=str(uuid.uuid4()),
@@ -334,7 +349,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             base_url=self.endpoint_data.base_url,
             custom_path=self.endpoint_data.custom_path,
             header_rules=self.endpoint_data.header_rules,
-            body_rules=self.endpoint_data.body_rules,
+            body_rules=body_rules,
             max_retries=self.endpoint_data.max_retries,
             is_active=True,
             config=self.endpoint_data.config,
@@ -592,4 +607,20 @@ class AdminDeleteProviderEndpointAdapter(AdminApiAdapter):
         return {
             "message": f"Endpoint {self.endpoint_id} 已删除",
             "affected_keys_count": affected_keys_count,
+        }
+
+
+@dataclass
+class AdminGetDefaultBodyRulesAdapter(AdminApiAdapter):
+    api_format: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        try:
+            normalized_api_format = parse_signature_key(self.api_format).key
+        except Exception as exc:
+            raise InvalidRequestException(f"无效的 api_format: {self.api_format}") from exc
+
+        return {
+            "api_format": normalized_api_format,
+            "body_rules": get_default_body_rules_for_endpoint(normalized_api_format),
         }

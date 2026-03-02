@@ -99,13 +99,14 @@ class CliStreamMixin:
         # 使用子类实现的方法提取 model（不同 API 格式的 model 位置不同）
         # 注意：使用 original_request_body，因为整流只修改 messages，不影响 model 字段
         model = self.extract_model_from_request(original_request_body, path_params)
+        client_api_format = self.primary_api_format
 
         # 提前创建 pending 记录，让前端可以立即看到"处理中"
         self._create_pending_usage(
             model=model,
             is_stream=True,
             request_type="chat",
-            api_format=self.FORMAT_ID,
+            api_format=client_api_format,
             request_headers=original_headers,
             request_body=original_request_body,
         )
@@ -113,7 +114,7 @@ class CliStreamMixin:
         # 创建流上下文
         ctx = StreamContext(
             model=model,
-            api_format=self.allowed_api_formats[0],
+            api_format=client_api_format,
             api_family=self.api_family,
             endpoint_kind=self.endpoint_kind,
             request_id=self.request_id,

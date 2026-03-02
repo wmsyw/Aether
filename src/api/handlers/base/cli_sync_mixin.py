@@ -78,7 +78,7 @@ class CliSyncMixin:
 
         # 使用子类实现的方法提取 model（不同 API 格式的 model 位置不同）
         model = self.extract_model_from_request(original_request_body, path_params)
-        api_format = self.allowed_api_formats[0]
+        api_format = self.primary_api_format
         sync_start_time = time.time()
 
         # 提前创建 pending 记录，让前端可以立即看到"处理中"
@@ -86,7 +86,7 @@ class CliSyncMixin:
             model=model,
             is_stream=False,
             request_type="chat",
-            api_format=self.FORMAT_ID,
+            api_format=api_format,
             request_headers=original_headers,
             request_body=original_request_body,
         )

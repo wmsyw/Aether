@@ -1211,7 +1211,8 @@ class TaskService:
         Behavior notes:
         - sequentially try candidates (no per-candidate retries at submit stage)
         - record RequestCandidate audit rows
-        - stop on "client error" (raise UpstreamClientRequestError)
+        - stop only when provider failover_rules.error_stop_patterns matches
+        - continue on provider failover_rules.success_failover_patterns matches (2xx body)
         - if all failed, raise AllCandidatesFailedError
         """
         from datetime import datetime, timezone
@@ -1230,16 +1231,38 @@ class TaskService:
                 return "request_failed"
             return _SENSITIVE_PATTERN.sub("[REDACTED]", message)[:max_length]
 
-        def _should_stop_on_http_error(
-            *, status_code: int, error_text: str, classifier: ErrorClassifier
-        ) -> bool:
-            # Keep rules aligned with previous behavior:
-            # - 401/403/429 should not hard-stop the traversal at submit stage
-            if status_code in (401, 403, 429):
-                return False
-            if 400 <= status_code < 500:
-                return classifier.is_client_error(error_text)
-            return False
+        def _extract_response_text(response: httpx.Response) -> str:
+            try:
+                return response.text or ""
+            except Exception:
+                return ""
+
+        def _match_provider_failover_rule(
+            candidate: Any,
+            *,
+            is_success: bool,
+            response_text: str,
+            status_code: int | None = None,
+        ) -> str | None:
+            from src.services.candidate.failover import FailoverEngine
+
+            provider_config = getattr(candidate.provider, "config", None) or {}
+            rules = provider_config.get("failover_rules")
+            if not rules or not isinstance(rules, dict):
+                return None
+
+            compiled = FailoverEngine._get_compiled_patterns(rules)
+            key = "success" if is_success else "error"
+
+            for regex, rule in compiled.get(key, []):
+                if not is_success:
+                    rule_status_codes = rule.get("status_codes")
+                    if rule_status_codes and status_code not in rule_status_codes:
+                        continue
+                if regex.search(response_text):
+                    return rule.get("pattern", "")
+
+            return None
 
         # IMPORTANT:
         # This method awaits upstream HTTP calls. If we have an open DB transaction before awaiting,
@@ -1268,7 +1291,6 @@ class TaskService:
                 scheduling_mode=scheduling_mode,
             )
             resolver = CandidateResolver(db=self.db, cache_scheduler=cache_scheduler)
-            error_classifier = ErrorClassifier(db=self.db, cache_scheduler=cache_scheduler)
 
             candidates, _global_model_id = await resolver.fetch_candidates(
                 api_format=api_format,
@@ -1463,10 +1485,7 @@ class TaskService:
 
                 if response.status_code >= 400:
                     finished_at = datetime.now(timezone.utc)
-                    try:
-                        error_text = response.text or ""
-                    except Exception:
-                        error_text = ""
+                    error_text = _extract_response_text(response)
                     error_msg = _sanitize(error_text)
                     candidate_info.update(
                         {
@@ -1488,11 +1507,20 @@ class TaskService:
                             )
                         )
 
-                    if _should_stop_on_http_error(
+                    stop_pattern = _match_provider_failover_rule(
+                        cand,
+                        is_success=False,
+                        response_text=error_text,
                         status_code=response.status_code,
-                        error_text=error_text,
-                        classifier=error_classifier,
-                    ):
+                    )
+                    if stop_pattern:
+                        logger.info(
+                            "[TaskService] 错误终止规则命中: pattern={}, status_code={}, provider={}",
+                            stop_pattern,
+                            response.status_code,
+                            cand.provider.name,
+                        )
+                        candidate_info["stop_rule_pattern"] = stop_pattern
                         try:
                             self.db.commit()
                         except Exception:
@@ -1500,6 +1528,44 @@ class TaskService:
                         raise UpstreamClientRequestError(
                             response=response,
                             candidate_keys=candidate_keys,
+                        )
+                    continue
+
+                success_text = _extract_response_text(response)
+                success_continue_pattern = _match_provider_failover_rule(
+                    cand,
+                    is_success=True,
+                    response_text=success_text,
+                    status_code=response.status_code,
+                )
+                if success_continue_pattern:
+                    logger.info(
+                        "[TaskService] 成功转移规则命中: pattern={}, status_code={}, provider={}",
+                        success_continue_pattern,
+                        response.status_code,
+                        cand.provider.name,
+                    )
+                    finished_at = datetime.now(timezone.utc)
+                    failover_reason = f"success_failover_rule_matched:{success_continue_pattern}"
+                    candidate_info.update(
+                        {
+                            "attempt_status": "success_failover",
+                            "status_code": response.status_code,
+                            "error_message": failover_reason,
+                            "success_rule_pattern": success_continue_pattern,
+                        }
+                    )
+                    if record_id:
+                        self.db.execute(
+                            update(RequestCandidate)
+                            .where(RequestCandidate.id == record_id)
+                            .values(
+                                status="failed",
+                                status_code=response.status_code,
+                                error_type="success_failover_pattern",
+                                error_message=failover_reason,
+                                finished_at=finished_at,
+                            )
                         )
                     continue
 

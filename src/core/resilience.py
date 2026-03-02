@@ -128,19 +128,27 @@ class ResilienceManager:
         # 数据库连接错误 - 只捕获特定的数据库相关异常
         try:
             from sqlalchemy.exc import (
-                DatabaseError,
                 DisconnectionError,
                 OperationalError,
-                StatementError,
+                ProgrammingError,
             )
             from sqlalchemy.exc import TimeoutError as SQLTimeoutError
+
+            # SQL/Schema 编程错误（如缺列/缺表）不应误判为“连接异常重试”。
+            self.add_error_pattern(
+                ErrorPattern(
+                    error_types=[ProgrammingError],
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=RecoveryStrategy.USER_NOTIFY,
+                    user_message="数据库结构与当前版本不兼容，请执行 alembic upgrade head 后重试",
+                    auto_recover=False,
+                )
+            )
 
             db_exceptions = [
                 OperationalError,
                 DisconnectionError,
                 SQLTimeoutError,
-                StatementError,
-                DatabaseError,
             ]
         except ImportError:
             # 如果SQLAlchemy不可用，使用通用异常类型

@@ -5,6 +5,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.config.settings import config
@@ -199,6 +200,12 @@ class ApiRequestPipeline:
         except Exception as exc:
             handle_duration = PerfRecorder.stop(handle_start, "pipeline_handle", labels=perf_labels)
             _record_perf_metric("handle_ms", handle_duration)
+            if isinstance(exc, SQLAlchemyError):
+                # SQL 执行失败后事务会进入 aborted 状态；先回滚，避免审计写入二次报错。
+                try:
+                    context.db.rollback()
+                except Exception as rollback_exc:
+                    logger.debug(f"[Pipeline] 回滚失败（可忽略）: {rollback_exc}")
             self._record_audit_event(
                 context,
                 adapter,

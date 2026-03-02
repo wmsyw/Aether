@@ -9,8 +9,10 @@ API endpoint metadata (new mode).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from typing import Any
 
 from src.core.api_format.enums import ApiFamily, AuthMethod, EndpointKind
 from src.core.api_format.signature import EndpointSignature, make_signature_key, parse_signature_key
@@ -47,6 +49,7 @@ class EndpointDefinition:
     stream_in_body: bool = True
 
     data_format_id: str = ""
+    default_body_rules: Sequence[dict[str, Any]] = field(default_factory=tuple)
 
     @property
     def signature(self) -> EndpointSignature:
@@ -64,6 +67,19 @@ class EndpointDefinition:
             if value:
                 yield value
 
+
+_CODEX_DEFAULT_BODY_RULES: tuple[dict[str, Any], ...] = (
+    {"action": "drop", "path": "max_output_tokens"},
+    {"action": "drop", "path": "temperature"},
+    {"action": "drop", "path": "top_p"},
+    {"action": "set", "path": "store", "value": False},
+    {
+        "action": "set",
+        "path": "instructions",
+        "value": "You are GPT-5.",
+        "condition": {"path": "instructions", "op": "not_exists"},
+    },
+)
 
 _ENDPOINT_DEFINITIONS: dict[tuple[ApiFamily, EndpointKind], EndpointDefinition] = {
     # Claude
@@ -122,6 +138,7 @@ _ENDPOINT_DEFINITIONS: dict[tuple[ApiFamily, EndpointKind], EndpointDefinition] 
         auth_type="bearer",
         protected_keys=frozenset({"authorization", "content-type"}),
         data_format_id="openai_responses",
+        default_body_rules=_CODEX_DEFAULT_BODY_RULES,
     ),
     (ApiFamily.OPENAI, EndpointKind.COMPACT): EndpointDefinition(
         api_family=ApiFamily.OPENAI,
@@ -135,6 +152,7 @@ _ENDPOINT_DEFINITIONS: dict[tuple[ApiFamily, EndpointKind], EndpointDefinition] 
         # compact endpoint is non-streaming by design.
         stream_in_body=False,
         data_format_id="openai_responses",
+        default_body_rules=_CODEX_DEFAULT_BODY_RULES,
     ),
     (ApiFamily.OPENAI, EndpointKind.VIDEO): EndpointDefinition(
         api_family=ApiFamily.OPENAI,
@@ -292,6 +310,15 @@ def get_data_format_id_for_endpoint(
     return ""
 
 
+def get_default_body_rules_for_endpoint(
+    value: str | EndpointSignature | tuple[ApiFamily, EndpointKind],
+) -> list[dict[str, Any]]:
+    definition = resolve_endpoint_definition(value)
+    if not definition or not definition.default_body_rules:
+        return []
+    return deepcopy(list(definition.default_body_rules))
+
+
 def can_passthrough_endpoint(
     client: str | EndpointSignature | tuple[ApiFamily, EndpointKind],
     provider: str | EndpointSignature | tuple[ApiFamily, EndpointKind],
@@ -336,6 +363,7 @@ __all__ = [
     "get_extra_headers_for_endpoint",
     "get_protected_keys_for_endpoint",
     "get_data_format_id_for_endpoint",
+    "get_default_body_rules_for_endpoint",
     "can_passthrough_endpoint",
     "make_endpoint_signature",
 ]

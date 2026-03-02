@@ -49,6 +49,7 @@ class CliHandlerProtocol(Protocol):
     user_agent: str
     start_time: float
     allowed_api_formats: list[str]
+    primary_api_format: str
     redis: Redis  # type: ignore[type-arg]
     telemetry: MessageTelemetry
     perf_metrics: dict[str, Any] | None

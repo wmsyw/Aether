@@ -20,7 +20,7 @@ from starlette.websockets import WebSocket, WebSocketState
 
 from src.core.logger import logger
 
-from .tunnel_protocol import Frame, FrameFlags, MsgType
+from .tunnel_protocol import Frame, FrameFlags, MsgType, normalize_heartbeat_id
 
 # 隧道帧压缩的最小 payload 大小（字节）
 # 小于此值的帧压缩收益不大，反而增加 CPU 开销
@@ -463,10 +463,14 @@ class TunnelManager:
             data = json.loads(frame.payload) if frame.payload else {}
         except Exception:
             data = {}
+        heartbeat_id = normalize_heartbeat_id(data.get("heartbeat_id"))
+        ack: dict[str, Any] = {}
+        if heartbeat_id is not None:
+            ack["heartbeat_id"] = heartbeat_id
 
         def _sync_heartbeat() -> dict[str, Any]:
             from src.database import create_session
-            from src.services.proxy_node.service import ProxyNodeService
+            from src.services.proxy_node.service import ProxyNodeService, build_heartbeat_ack
 
             db = create_session()
             try:
@@ -479,20 +483,17 @@ class TunnelManager:
                     failed_requests=data.get("failed_requests"),
                     dns_failures=data.get("dns_failures"),
                     stream_errors=data.get("stream_errors"),
+                    proxy_metadata=data.get("proxy_metadata"),
+                    proxy_version=data.get("proxy_version"),
                 )
-                result: dict[str, Any] = {}
-                if node.remote_config:
-                    result["remote_config"] = node.remote_config
-                    result["config_version"] = node.config_version or 0
-                return result
+                return build_heartbeat_ack(node)
             finally:
                 db.close()
 
         try:
-            ack = await asyncio.to_thread(_sync_heartbeat)
+            ack.update(await asyncio.to_thread(_sync_heartbeat))
         except Exception as e:
             logger.warning("tunnel heartbeat DB update failed: {}", e)
-            ack = {}
 
         try:
             await conn.send_frame(Frame(0, MsgType.HEARTBEAT_ACK, 0, json.dumps(ack).encode()))

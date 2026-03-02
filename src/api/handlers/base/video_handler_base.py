@@ -305,7 +305,7 @@ class VideoHandlerBase(ABC):
 
         返回：
         - 成功：SubmitOutcome
-        - 上游客户端错误：直接返回脱敏后的 JSONResponse（保留 API 格式差异）
+        - 命中上游终止规则：直接返回脱敏后的 JSONResponse（保留 API 格式差异）
 
         失败时：
         - 无可用候选 / 全部失败：抛 HTTPException(503)

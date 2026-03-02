@@ -51,6 +51,7 @@ from src.core.api_format.metadata import (
     can_passthrough_endpoint,
     get_auth_config_for_endpoint,
     get_data_format_id_for_endpoint,
+    get_default_body_rules_for_endpoint,
     get_default_path_for_endpoint,
     get_endpoint_definition,
     get_extra_headers_for_endpoint,
@@ -98,6 +99,7 @@ __all__ = [
     "get_extra_headers_for_endpoint",
     "get_protected_keys_for_endpoint",
     "get_data_format_id_for_endpoint",
+    "get_default_body_rules_for_endpoint",
     "can_passthrough_endpoint",
     # Utils
     "is_cli_format",

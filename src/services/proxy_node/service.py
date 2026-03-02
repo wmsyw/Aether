@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from src.core.exceptions import InvalidRequestException, NotFoundException
@@ -61,6 +62,7 @@ def node_to_dict(node: ProxyNode) -> dict[str, Any]:
         "failed_requests": node.failed_requests,
         "dns_failures": node.dns_failures,
         "stream_errors": node.stream_errors,
+        "proxy_metadata": node.proxy_metadata,
         "hardware_info": node.hardware_info,
         "estimated_max_concurrency": node.estimated_max_concurrency,
         "remote_config": node.remote_config,
@@ -92,6 +94,40 @@ def _parse_host_port(proxy_url: str) -> tuple[str, int]:
 def _sanitize_proxy_error(err: Exception) -> str:
     """去除异常消息中可能包含的代理 URL 凭据（如 HMAC 签名）"""
     return re.sub(r"://[^@/]+@", "://***@", str(err))
+
+
+def _normalize_proxy_metadata(
+    proxy_metadata: Any | None, proxy_version: str | None = None
+) -> dict[str, Any] | None:
+    """规范化 proxy 元数据，兼容旧版单独上报 proxy_version。"""
+    normalized: dict[str, Any] = {}
+    if isinstance(proxy_metadata, dict):
+        normalized = {str(k): v for k, v in proxy_metadata.items() if k is not None}
+
+    version: str | None = None
+    raw_version = normalized.pop("version", None)
+    if isinstance(raw_version, str) and raw_version.strip():
+        version = raw_version.strip()[:20]
+    if proxy_version is not None and proxy_version.strip():
+        version = proxy_version.strip()[:20]
+    if version is not None:
+        normalized["version"] = version
+
+    return normalized or None
+
+
+def build_heartbeat_ack(node: ProxyNode) -> dict[str, Any]:
+    """从心跳后的节点构建 ACK 响应 payload（供 hub_transport / tunnel_manager 使用）。"""
+    result: dict[str, Any] = {}
+    if not node.remote_config:
+        return result
+    result["remote_config"] = node.remote_config
+    result["config_version"] = node.config_version or 0
+    if isinstance(node.remote_config, dict):
+        raw_upgrade = node.remote_config.get("upgrade_to")
+        if isinstance(raw_upgrade, str) and raw_upgrade.strip():
+            result["upgrade_to"] = raw_upgrade.strip()
+    return result
 
 
 async def _test_proxy_connectivity(proxy_url: str) -> dict[str, Any]:
@@ -249,11 +285,14 @@ class ProxyNodeService:
         active_connections: int | None = None,
         total_requests: int | None = None,
         avg_latency_ms: float | None = None,
+        proxy_metadata: dict[str, Any] | None = None,
+        proxy_version: str | None = None,
         registered_by: str | None = None,
     ) -> ProxyNode:
         """注册或更新 aether-proxy 节点（tunnel 模式）"""
 
         now = datetime.now(timezone.utc)
+        normalized_proxy_metadata = _normalize_proxy_metadata(proxy_metadata, proxy_version)
 
         node = (
             db.query(ProxyNode)
@@ -282,6 +321,8 @@ class ProxyNodeService:
                 node.total_requests = total_requests
             if avg_latency_ms is not None:
                 node.avg_latency_ms = avg_latency_ms
+            if normalized_proxy_metadata is not None:
+                node.proxy_metadata = normalized_proxy_metadata
         else:
             node = ProxyNode(
                 id=str(uuid.uuid4()),
@@ -297,6 +338,7 @@ class ProxyNodeService:
                 active_connections=active_connections or 0,
                 total_requests=total_requests or 0,
                 avg_latency_ms=avg_latency_ms,
+                proxy_metadata=normalized_proxy_metadata,
                 hardware_info=hardware_info,
                 estimated_max_concurrency=estimated_max_concurrency,
                 tunnel_mode=True,
@@ -321,6 +363,8 @@ class ProxyNodeService:
         failed_requests: int | None = None,
         dns_failures: int | None = None,
         stream_errors: int | None = None,
+        proxy_metadata: dict[str, Any] | None = None,
+        proxy_version: str | None = None,
     ) -> ProxyNode:
         """处理节点心跳（仅 tunnel 模式节点，更新指标并修正状态不一致）
 
@@ -338,36 +382,46 @@ class ProxyNodeService:
             )
 
         now = datetime.now(timezone.utc)
+        values: dict[str, Any] = {"last_heartbeat_at": now}
+
         # 心跳通过 tunnel 连接传输，能收到心跳说明 tunnel 一定连通。
-        # 如果状态不是 ONLINE 或 tunnel_connected 不一致（例如并发写入覆盖），修正状态。
+        # 若状态不一致（例如并发写入覆盖），修正为 ONLINE。
         if node.status != ProxyNodeStatus.ONLINE or not node.tunnel_connected:
-            node.status = ProxyNodeStatus.ONLINE
-            node.tunnel_connected = True
-            node.tunnel_connected_at = now
-            node.updated_at = now
-        node.last_heartbeat_at = now
+            values["status"] = ProxyNodeStatus.ONLINE
+            values["tunnel_connected"] = True
+            values["tunnel_connected_at"] = now
+            values["updated_at"] = now
+
         if heartbeat_interval is not None:
-            node.heartbeat_interval = heartbeat_interval
+            values["heartbeat_interval"] = heartbeat_interval
 
         # 实时快照指标 -- 直接覆盖
         if active_connections is not None:
-            node.active_connections = active_connections
+            values["active_connections"] = active_connections
         if avg_latency_ms is not None:
-            node.avg_latency_ms = avg_latency_ms
+            values["avg_latency_ms"] = avg_latency_ms
+        normalized_proxy_metadata = _normalize_proxy_metadata(proxy_metadata, proxy_version)
+        if normalized_proxy_metadata is not None:
+            values["proxy_metadata"] = normalized_proxy_metadata
 
-        # 区间增量指标 -- 累加到累计值
+        # 区间增量指标 -- 使用数据库原子自增，避免并发心跳读改写丢增量
         if total_requests is not None and total_requests > 0:
-            node.total_requests = (node.total_requests or 0) + total_requests
+            values["total_requests"] = ProxyNode.total_requests + int(total_requests)
         if failed_requests is not None and failed_requests > 0:
-            node.failed_requests = (node.failed_requests or 0) + failed_requests
+            values["failed_requests"] = ProxyNode.failed_requests + int(failed_requests)
         if dns_failures is not None and dns_failures > 0:
-            node.dns_failures = (node.dns_failures or 0) + dns_failures
+            values["dns_failures"] = ProxyNode.dns_failures + int(dns_failures)
         if stream_errors is not None and stream_errors > 0:
-            node.stream_errors = (node.stream_errors or 0) + stream_errors
+            values["stream_errors"] = ProxyNode.stream_errors + int(stream_errors)
 
+        db.execute(update(ProxyNode).where(ProxyNode.id == node_id).values(**values))
         db.commit()
-        db.refresh(node)
-        return node
+        db.expire_all()
+
+        refreshed = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
+        if not refreshed:
+            raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
+        return refreshed
 
     @staticmethod
     def unregister_node(db: Session, *, node_id: str) -> ProxyNode:
@@ -618,7 +672,11 @@ class ProxyNodeService:
         # Merge with existing config (so partial updates are preserved)
         # Copy to a new dict so SQLAlchemy detects the change on the JSON column
         existing = dict(node.remote_config) if node.remote_config else {}
-        existing.update(config_updates)
+        for key, value in config_updates.items():
+            if key == "upgrade_to" and value is None:
+                existing.pop("upgrade_to", None)
+                continue
+            existing[key] = value
 
         node.remote_config = existing
         node.config_version = (node.config_version or 0) + 1
@@ -627,3 +685,44 @@ class ProxyNodeService:
         db.commit()
         db.refresh(node)
         return node
+
+    @staticmethod
+    def batch_upgrade_online_nodes(db: Session, *, version: str) -> dict[str, Any]:
+        """批量向在线 tunnel 节点下发 upgrade_to。"""
+        normalized = version.strip()
+        if not normalized:
+            raise InvalidRequestException("version 不能为空")
+
+        nodes = (
+            db.query(ProxyNode)
+            .filter(
+                ProxyNode.is_manual == False,  # noqa: E712
+                ProxyNode.tunnel_mode == True,  # noqa: E712
+                ProxyNode.status == ProxyNodeStatus.ONLINE,
+            )
+            .all()
+        )
+
+        updated_node_ids: list[str] = []
+        skipped = 0
+        now = datetime.now(timezone.utc)
+        for node in nodes:
+            existing = dict(node.remote_config) if node.remote_config else {}
+            if existing.get("upgrade_to") == normalized:
+                skipped += 1
+                continue
+            existing["upgrade_to"] = normalized
+            node.remote_config = existing
+            node.config_version = (node.config_version or 0) + 1
+            node.updated_at = now
+            updated_node_ids.append(node.id)
+
+        if updated_node_ids:
+            db.commit()
+
+        return {
+            "version": normalized,
+            "updated": len(updated_node_ids),
+            "skipped": skipped,
+            "node_ids": updated_node_ids,
+        }

@@ -204,16 +204,52 @@
                       <Plus class="w-3 h-3 mr-1" />
                       请求体
                     </Button>
+                    <Button
+                      v-if="isFixedProvider"
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 text-xs px-2"
+                      title="重置请求体"
+                      :disabled="resettingDefaultRulesEndpointId === endpoint.id"
+                      @click="handleResetBodyRulesToDefault(endpoint)"
+                    >
+                      <RotateCcw class="w-3 h-3 mr-1" />
+                      重置请求体
+                    </Button>
                   </div>
                 </div>
                 <CollapsibleContent class="pt-3">
                   <div class="space-y-2">
+                    <div
+                      v-if="getEndpointRulesCount(endpoint) > 1 || getEndpointBodyRulesCount(endpoint) > 1"
+                      class="flex items-center gap-1.5 text-xs text-muted-foreground px-2"
+                    >
+                      <GripVertical class="w-3.5 h-3.5" />
+                      <span>拖拽左侧手柄可调整规则执行顺序</span>
+                    </div>
                     <!-- 请求头规则列表 - 主题色边框 -->
                     <div
                       v-for="(rule, index) in getEndpointEditRules(endpoint.id)"
                       :key="`header-${index}`"
                       class="flex items-center gap-1.5 px-2 py-1.5 rounded-md border-l-4 border-primary/60 bg-muted/30"
+                      :class="[
+                        isHeaderRuleDragging(endpoint.id, index) ? 'opacity-60 border-primary bg-primary/5' : '',
+                        isHeaderRuleDragOver(endpoint.id, index) ? 'ring-1 ring-primary/40 bg-primary/10' : ''
+                      ]"
+                      @dragover.prevent="handleHeaderRuleDragOver(endpoint.id, index)"
+                      @dragleave="handleHeaderRuleDragLeave(endpoint.id, index)"
+                      @drop.prevent="handleHeaderRuleDrop(endpoint.id, index)"
                     >
+                      <button
+                        type="button"
+                        class="h-7 w-6 shrink-0 inline-flex items-center justify-center rounded-sm text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted cursor-grab active:cursor-grabbing"
+                        title="拖拽排序"
+                        draggable="true"
+                        @dragstart="(e) => handleHeaderRuleDragStart(endpoint.id, index, e)"
+                        @dragend="() => handleHeaderRuleDragEnd(endpoint.id)"
+                      >
+                        <GripVertical class="w-3.5 h-3.5" />
+                      </button>
                       <span
                         class="text-[10px] font-semibold text-primary shrink-0"
                         title="请求头"
@@ -382,7 +418,24 @@
                     >
                       <div
                         class="flex items-center gap-1.5 px-2 py-1.5 rounded-md border-l-4 border-muted-foreground/40 bg-muted/30"
+                        :class="[
+                          isBodyRuleDragging(endpoint.id, index) ? 'opacity-60 border-muted-foreground/70 bg-muted/50' : '',
+                          isBodyRuleDragOver(endpoint.id, index) ? 'ring-1 ring-muted-foreground/40 bg-muted/40' : ''
+                        ]"
+                        @dragover.prevent="handleBodyRuleDragOver(endpoint.id, index)"
+                        @dragleave="handleBodyRuleDragLeave(endpoint.id, index)"
+                        @drop.prevent="handleBodyRuleDrop(endpoint.id, index)"
                       >
+                        <button
+                          type="button"
+                          class="h-7 w-6 shrink-0 inline-flex items-center justify-center rounded-sm text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted cursor-grab active:cursor-grabbing"
+                          title="拖拽排序"
+                          draggable="true"
+                          @dragstart="(e) => handleBodyRuleDragStart(endpoint.id, index, e)"
+                          @dragend="() => handleBodyRuleDragEnd(endpoint.id)"
+                        >
+                          <GripVertical class="w-3.5 h-3.5" />
+                        </button>
                         <span
                           class="text-[10px] font-semibold text-muted-foreground shrink-0"
                           title="请求体"
@@ -781,13 +834,14 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from '@/components/ui'
-import { Settings, Trash2, Check, X, Power, ChevronRight, Plus, Shuffle, RotateCcw, Radio, CheckCircle, Save, Filter, HelpCircle } from 'lucide-vue-next'
+import { Settings, Trash2, Check, X, Power, ChevronRight, Plus, Shuffle, RotateCcw, Radio, CheckCircle, Save, Filter, HelpCircle, GripVertical } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 import AlertDialog from '@/components/common/AlertDialog.vue'
 import {
   createEndpoint,
+  getDefaultBodyRules,
   updateEndpoint,
   deleteEndpoint,
   type ProviderEndpoint,
@@ -916,9 +970,134 @@ function handleBodyRuleSelectOpen(endpointId: string, index: number, open: boole
   bodyRuleSelectOpen.value[`${endpointId}-${index}`] = open
 }
 
+function clearHeaderRuleSelectOpen(endpointId: string) {
+  Object.keys(ruleSelectOpen.value).forEach((key) => {
+    if (key.startsWith(`${endpointId}-`)) {
+      delete ruleSelectOpen.value[key]
+    }
+  })
+}
+
+function clearBodyRuleSelectOpen(endpointId: string) {
+  Object.keys(bodyRuleSelectOpen.value).forEach((key) => {
+    if (key.startsWith(`${endpointId}-`)) {
+      delete bodyRuleSelectOpen.value[key]
+    }
+  })
+}
+
+function isHeaderRuleDragging(endpointId: string, index: number): boolean {
+  return headerRuleDraggedIndex.value[endpointId] === index
+}
+
+function isHeaderRuleDragOver(endpointId: string, index: number): boolean {
+  return headerRuleDragOverIndex.value[endpointId] === index
+}
+
+function isBodyRuleDragging(endpointId: string, index: number): boolean {
+  return bodyRuleDraggedIndex.value[endpointId] === index
+}
+
+function isBodyRuleDragOver(endpointId: string, index: number): boolean {
+  return bodyRuleDragOverIndex.value[endpointId] === index
+}
+
+function clearHeaderRuleDragState(endpointId: string) {
+  headerRuleDraggedIndex.value[endpointId] = null
+  headerRuleDragOverIndex.value[endpointId] = null
+}
+
+function clearBodyRuleDragState(endpointId: string) {
+  bodyRuleDraggedIndex.value[endpointId] = null
+  bodyRuleDragOverIndex.value[endpointId] = null
+}
+
+function handleHeaderRuleDragStart(endpointId: string, index: number, event: DragEvent) {
+  const rules = getEndpointEditRules(endpointId)
+  if (!rules[index]) return
+
+  headerRuleDraggedIndex.value[endpointId] = index
+  headerRuleDragOverIndex.value[endpointId] = null
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', `header:${endpointId}:${index}`)
+  }
+}
+
+function handleHeaderRuleDragOver(endpointId: string, index: number) {
+  const dragged = headerRuleDraggedIndex.value[endpointId]
+  if (dragged === null || dragged === undefined || dragged === index) return
+  headerRuleDragOverIndex.value[endpointId] = index
+}
+
+function handleHeaderRuleDragLeave(endpointId: string, index: number) {
+  if (headerRuleDragOverIndex.value[endpointId] === index) {
+    headerRuleDragOverIndex.value[endpointId] = null
+  }
+}
+
+function handleHeaderRuleDrop(endpointId: string, targetIndex: number) {
+  const dragIndex = headerRuleDraggedIndex.value[endpointId]
+  clearHeaderRuleDragState(endpointId)
+  if (dragIndex === null || dragIndex === undefined || dragIndex === targetIndex) return
+
+  const rules = getEndpointEditRules(endpointId)
+  if (dragIndex < 0 || dragIndex >= rules.length || targetIndex < 0 || targetIndex >= rules.length) return
+
+  const [draggedRule] = rules.splice(dragIndex, 1)
+  rules.splice(targetIndex, 0, draggedRule)
+  clearHeaderRuleSelectOpen(endpointId)
+}
+
+function handleHeaderRuleDragEnd(endpointId: string) {
+  clearHeaderRuleDragState(endpointId)
+}
+
+function handleBodyRuleDragStart(endpointId: string, index: number, event: DragEvent) {
+  const rules = getEndpointEditBodyRules(endpointId)
+  if (!rules[index]) return
+
+  bodyRuleDraggedIndex.value[endpointId] = index
+  bodyRuleDragOverIndex.value[endpointId] = null
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', `body:${endpointId}:${index}`)
+  }
+}
+
+function handleBodyRuleDragOver(endpointId: string, index: number) {
+  const dragged = bodyRuleDraggedIndex.value[endpointId]
+  if (dragged === null || dragged === undefined || dragged === index) return
+  bodyRuleDragOverIndex.value[endpointId] = index
+}
+
+function handleBodyRuleDragLeave(endpointId: string, index: number) {
+  if (bodyRuleDragOverIndex.value[endpointId] === index) {
+    bodyRuleDragOverIndex.value[endpointId] = null
+  }
+}
+
+function handleBodyRuleDrop(endpointId: string, targetIndex: number) {
+  const dragIndex = bodyRuleDraggedIndex.value[endpointId]
+  clearBodyRuleDragState(endpointId)
+  if (dragIndex === null || dragIndex === undefined || dragIndex === targetIndex) return
+
+  const rules = getEndpointEditBodyRules(endpointId)
+  if (dragIndex < 0 || dragIndex >= rules.length || targetIndex < 0 || targetIndex >= rules.length) return
+
+  const [draggedRule] = rules.splice(dragIndex, 1)
+  rules.splice(targetIndex, 0, draggedRule)
+  clearBodyRuleSelectOpen(endpointId)
+}
+
+function handleBodyRuleDragEnd(endpointId: string) {
+  clearBodyRuleDragState(endpointId)
+}
+
 // 状态
 const addingEndpoint = ref(false)
 const savingEndpointId = ref<string | null>(null)
+const resettingDefaultRulesEndpointId = ref<string | null>(null)
 const deletingEndpointId = ref<string | null>(null)
 const togglingEndpointId = ref<string | null>(null)
 const togglingFormatEndpointId = ref<string | null>(null)
@@ -937,12 +1116,21 @@ const bodyRuleSelectOpen = ref<Record<string, boolean>>({})
 // 请求体规则说明 Popover 的展开状态
 const bodyRuleHelpOpenEndpointId = ref<string | null>(null)
 
+// 规则拖拽状态（按 endpoint 维度）
+const headerRuleDraggedIndex = ref<Record<string, number | null>>({})
+const headerRuleDragOverIndex = ref<Record<string, number | null>>({})
+const bodyRuleDraggedIndex = ref<Record<string, number | null>>({})
+const bodyRuleDragOverIndex = ref<Record<string, number | null>>({})
+
 function setBodyRuleHelpOpen(endpointId: string, open: boolean) {
   bodyRuleHelpOpenEndpointId.value = open ? endpointId : null
 }
 
 // 每个端点的编辑状态（内联编辑）
 const endpointEditStates = ref<Record<string, EndpointEditState>>({})
+const defaultBodyRulesByFormat = ref<Record<string, BodyRule[]>>({})
+const defaultBodyRulesLoaded = ref<Record<string, boolean>>({})
+const loadingDefaultBodyRulesByFormat = ref<Record<string, boolean>>({})
 
 // 系统保留的 header 名称（不允许用户设置）
 const RESERVED_HEADERS = new Set([
@@ -1090,6 +1278,40 @@ const deleteConfirmDescription = computed(() => {
   return `确定要删除 ${formatLabel} 端点吗？关联密钥将移除对该 API 格式的支持。`
 })
 
+async function loadDefaultBodyRulesForFormat(apiFormat: string, force = false): Promise<BodyRule[]> {
+  if (!apiFormat) return []
+  if (!force && defaultBodyRulesLoaded.value[apiFormat]) {
+    return defaultBodyRulesByFormat.value[apiFormat] || []
+  }
+  if (loadingDefaultBodyRulesByFormat.value[apiFormat]) {
+    return defaultBodyRulesByFormat.value[apiFormat] || []
+  }
+
+  loadingDefaultBodyRulesByFormat.value[apiFormat] = true
+  try {
+    const response = await getDefaultBodyRules(apiFormat)
+    const normalized = response.api_format || apiFormat
+    const rules = response.body_rules || []
+    defaultBodyRulesByFormat.value[normalized] = rules
+    defaultBodyRulesByFormat.value[apiFormat] = rules
+    defaultBodyRulesLoaded.value[normalized] = true
+    defaultBodyRulesLoaded.value[apiFormat] = true
+    return rules
+  } catch (error: unknown) {
+    defaultBodyRulesByFormat.value[apiFormat] = []
+    defaultBodyRulesLoaded.value[apiFormat] = true
+    log.warn('加载默认请求体规则失败', apiFormat, error)
+    return []
+  } finally {
+    loadingDefaultBodyRulesByFormat.value[apiFormat] = false
+  }
+}
+
+async function preloadDefaultBodyRules(endpoints: ProviderEndpoint[]): Promise<void> {
+  const formats = Array.from(new Set(endpoints.map(e => e.api_format).filter(Boolean)))
+  await Promise.all(formats.map(fmt => loadDefaultBodyRulesForFormat(fmt)))
+}
+
 // 获取指定 API 格式的默认路径
 function getDefaultPath(apiFormat: string, baseUrl?: string): string {
   const format = apiFormats.value.find(f => f.value === apiFormat)
@@ -1230,6 +1452,8 @@ function handleAddEndpointRule(endpointId: string) {
 function removeEndpointRule(endpointId: string, index: number) {
   const rules = getEndpointEditRules(endpointId)
   rules.splice(index, 1)
+  clearHeaderRuleDragState(endpointId)
+  clearHeaderRuleSelectOpen(endpointId)
 }
 
 // 更新规则类型
@@ -1368,6 +1592,8 @@ function handleAddEndpointBodyRule(endpointId: string) {
 function removeEndpointBodyRule(endpointId: string, index: number) {
   const rules = getEndpointEditBodyRules(endpointId)
   rules.splice(index, 1)
+  clearBodyRuleDragState(endpointId)
+  clearBodyRuleSelectOpen(endpointId)
 }
 
 // 更新请求体规则类型
@@ -1877,6 +2103,37 @@ function resetEndpointChanges(endpoint: ProviderEndpoint) {
   endpointEditStates.value[endpoint.id] = initEndpointEditState(endpoint)
 }
 
+async function handleResetBodyRulesToDefault(endpoint: ProviderEndpoint) {
+  resettingDefaultRulesEndpointId.value = endpoint.id
+  try {
+    const defaultRules = await loadDefaultBodyRulesForFormat(endpoint.api_format, true)
+    if (!defaultRules.length) {
+      showError('该端点没有默认请求体规则')
+      return
+    }
+
+    if (!endpointEditStates.value[endpoint.id]) {
+      endpointEditStates.value[endpoint.id] = initEndpointEditState(endpoint)
+    }
+    const state = endpointEditStates.value[endpoint.id]
+    if (!state) return
+
+    const resetState = initEndpointEditState({
+      ...endpoint,
+      body_rules: defaultRules,
+    })
+    state.bodyRules = resetState.bodyRules
+    endpointRulesExpanded.value[endpoint.id] = (state.rules.length + state.bodyRules.length) > 0
+    clearBodyRuleDragState(endpoint.id)
+    clearBodyRuleSelectOpen(endpoint.id)
+    success('已重置请求体为默认规则，请点击保存生效')
+  } catch (error: unknown) {
+    showError(parseApiError(error, '重置失败'), '错误')
+  } finally {
+    resettingDefaultRulesEndpointId.value = null
+  }
+}
+
 // 将可编辑规则数组转换为 API 需要的 HeaderRule[]
 function rulesToHeaderRules(rules: EditableRule[]): HeaderRule[] | null {
   const result: HeaderRule[] = []
@@ -1933,6 +2190,12 @@ onMounted(() => {
 // 监听 props 变化
 watch(() => props.modelValue, (open) => {
   bodyRuleHelpOpenEndpointId.value = null
+  ruleSelectOpen.value = {}
+  bodyRuleSelectOpen.value = {}
+  headerRuleDraggedIndex.value = {}
+  headerRuleDragOverIndex.value = {}
+  bodyRuleDraggedIndex.value = {}
+  bodyRuleDragOverIndex.value = {}
   if (open) {
     localEndpoints.value = [...(props.endpoints || [])]
     // 清空编辑状态，重新从端点加载
@@ -1945,6 +2208,7 @@ watch(() => props.modelValue, (open) => {
       const hasRules = (endpoint.header_rules?.length || 0) + (endpoint.body_rules?.length || 0) > 0
       endpointRulesExpanded.value[endpoint.id] = hasRules
     }
+    void preloadDefaultBodyRules(localEndpoints.value)
   } else {
     // 关闭对话框时完全清空新端点表单
     newEndpoint.value = { api_format: '', base_url: '', custom_path: '' }
@@ -1959,6 +2223,12 @@ watch(() => props.endpoints, (endpoints) => {
       if (!endpointEditStates.value[endpoint.id]) {
         endpointEditStates.value[endpoint.id] = initEndpointEditState(endpoint)
       }
+    }
+    const newFormats = localEndpoints.value
+      .filter(e => e.api_format && !defaultBodyRulesLoaded.value[e.api_format])
+      .map(e => ({ api_format: e.api_format }) as ProviderEndpoint)
+    if (newFormats.length) {
+      void preloadDefaultBodyRules(newFormats)
     }
   }
 }, { deep: true })

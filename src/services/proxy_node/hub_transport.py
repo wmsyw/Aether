@@ -20,7 +20,7 @@ from src.core.logger import logger
 
 from .hub_config import HubConfig, get_hub_config
 from .tunnel_manager import TunnelStreamError, _StreamState
-from .tunnel_protocol import Frame, FrameFlags, MsgType
+from .tunnel_protocol import Frame, FrameFlags, MsgType, normalize_heartbeat_id
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Coroutine
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 _TUNNEL_COMPRESS_MIN_SIZE = 512
 _RECONNECT_DELAYS_SECONDS: tuple[float, ...] = (0.0, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0)
+_HEARTBEAT_DEDUP_TTL_SECONDS = 600
 
 _HOP_BY_HOP_HEADERS = frozenset(
     {
@@ -317,10 +318,40 @@ class HubConnectionManager:
             data = {}
 
         node_id = str(data.get("node_id") or "").strip()
+        heartbeat_session_id = str(data.get("heartbeat_session_id") or "").strip()
+        if len(heartbeat_session_id) > 128:
+            heartbeat_session_id = heartbeat_session_id[:128]
+        heartbeat_id = normalize_heartbeat_id(data.get("heartbeat_id"))
+        ack: dict[str, object] = {}
+        if heartbeat_id is not None:
+            ack["heartbeat_id"] = heartbeat_id
+
+        should_process = True
+        if node_id and heartbeat_id is not None:
+            if heartbeat_session_id:
+                dedup_key = f"hub:heartbeat:{node_id}:{heartbeat_session_id}:{heartbeat_id}"
+            else:
+                dedup_key = f"hub:heartbeat:{node_id}:{heartbeat_id}"
+            try:
+                from src.clients import get_redis_client
+
+                redis = await get_redis_client()
+                if redis:
+                    acquired = await redis.set(
+                        dedup_key,
+                        "1",
+                        ex=_HEARTBEAT_DEDUP_TTL_SECONDS,
+                        nx=True,
+                    )
+                    if not acquired:
+                        should_process = False
+            except Exception:
+                # Redis 不可用时降级为不去重，避免心跳链路阻塞
+                pass
 
         def _sync_heartbeat() -> dict[str, object]:
             from src.database import create_session
-            from src.services.proxy_node.service import ProxyNodeService
+            from src.services.proxy_node.service import ProxyNodeService, build_heartbeat_ack
 
             if not node_id:
                 return {}
@@ -336,20 +367,18 @@ class HubConnectionManager:
                     failed_requests=data.get("failed_requests"),
                     dns_failures=data.get("dns_failures"),
                     stream_errors=data.get("stream_errors"),
+                    proxy_metadata=data.get("proxy_metadata"),
+                    proxy_version=data.get("proxy_version"),
                 )
-                result: dict[str, object] = {}
-                if node.remote_config:
-                    result["remote_config"] = node.remote_config
-                    result["config_version"] = node.config_version or 0
-                return result
+                return build_heartbeat_ack(node)
             finally:
                 db.close()
 
-        try:
-            ack = await asyncio.to_thread(_sync_heartbeat)
-        except Exception as e:
-            logger.warning("hub heartbeat DB update failed: {}", e)
-            ack = {}
+        if should_process:
+            try:
+                ack.update(await asyncio.to_thread(_sync_heartbeat))
+            except Exception as e:
+                logger.warning("hub heartbeat DB update failed: {}", e)
 
         try:
             await self._send_frame(
