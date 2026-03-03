@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from src.core.exceptions import InvalidRequestException, NotFoundException
@@ -452,7 +452,7 @@ class ProxyNodeService:
                 raise InvalidRequestException(f"status 必须是以下之一: {sorted(allowed)}", "status")
             query = query.filter(ProxyNode.status == ProxyNodeStatus(normalized))
 
-        total = query.count()
+        total = int(query.with_entities(func.count(ProxyNode.id)).scalar() or 0)
         nodes = query.order_by(ProxyNode.name.asc()).offset(skip).limit(limit).all()
         return nodes, total
 

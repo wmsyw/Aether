@@ -1052,7 +1052,7 @@ class MaintenanceScheduler:
             # 获取配置参数
             detail_retention = SystemConfigService.get_config(db, "detail_log_retention_days", 7)
             compressed_retention = SystemConfigService.get_config(
-                db, "compressed_log_retention_days", 90
+                db, "compressed_log_retention_days", 30
             )
             header_retention = SystemConfigService.get_config(db, "header_retention_days", 90)
             log_retention = SystemConfigService.get_config(db, "log_retention_days", 365)

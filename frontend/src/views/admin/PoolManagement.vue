@@ -1158,7 +1158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import {
   Search,
   Upload,
@@ -1243,11 +1243,19 @@ const proxyNodesStore = useProxyNodesStore()
 // --- Overview ---
 const poolProviders = ref<PoolOverviewItem[]>([])
 const overviewLoading = ref(true)
+let overviewRequestId = 0
+let selectProviderRequestId = 0
+let providerDataRequestId = 0
+let keysRequestId = 0
+let keysSearchDebounceTimer: number | null = null
+let suppressFiltersWatch = false
 
 async function loadOverview() {
+  const requestId = ++overviewRequestId
   overviewLoading.value = true
   try {
     const res = await getPoolOverview()
+    if (requestId !== overviewRequestId) return
     const enabledProviders = res.items.filter(item => item.pool_enabled)
     poolProviders.value = enabledProviders
 
@@ -1266,9 +1274,12 @@ async function loadOverview() {
       }
     }
   } catch (err) {
+    if (requestId !== overviewRequestId) return
     showError(parseApiError(err))
   } finally {
-    overviewLoading.value = false
+    if (requestId === overviewRequestId) {
+      overviewLoading.value = false
+    }
   }
 }
 
@@ -1306,6 +1317,7 @@ const showAccountQuotaColumn = computed(() => {
 })
 
 async function selectProvider(id: string) {
+  const requestId = ++selectProviderRequestId
   selectedProviderId.value = id
   editingKeyDetail.value = null
   keyPermissionsDialogOpen.value = false
@@ -1315,16 +1327,27 @@ async function selectProvider(id: string) {
   proxyMobilePopoverOpenKeyId.value = null
   schedulingDetailDesktopPopoverOpenKeyId.value = null
   schedulingDetailMobilePopoverOpenKeyId.value = null
+  suppressFiltersWatch = true
   currentPage.value = 1
   searchQuery.value = ''
   statusFilter.value = 'all'
+  suppressFiltersWatch = false
+  if (keysSearchDebounceTimer !== null) {
+    clearTimeout(keysSearchDebounceTimer)
+    keysSearchDebounceTimer = null
+  }
   await Promise.all([loadKeys(), loadProviderData(id)])
+  if (requestId !== selectProviderRequestId) return
 }
 
 async function loadProviderData(id: string) {
+  const requestId = ++providerDataRequestId
   try {
-    selectedProviderData.value = await getProvider(id)
+    const providerData = await getProvider(id)
+    if (requestId !== providerDataRequestId || selectedProviderId.value !== id) return
+    selectedProviderData.value = providerData
   } catch {
+    if (requestId !== providerDataRequestId || selectedProviderId.value !== id) return
     selectedProviderData.value = null
   }
 }
@@ -1434,25 +1457,52 @@ async function refreshCurrentPage() {
 
 async function loadKeys() {
   if (!selectedProviderId.value) return
+  const requestId = ++keysRequestId
+  const providerId = selectedProviderId.value
+  const page = currentPage.value
+  const pageSizeValue = pageSize.value
+  const search = searchQuery.value || undefined
+  const status = statusFilter.value as 'all' | 'active' | 'cooldown' | 'inactive'
   keysLoading.value = true
   try {
-    keyPage.value = await listPoolKeys(selectedProviderId.value, {
-      page: currentPage.value,
-      page_size: pageSize.value,
-      search: searchQuery.value || undefined,
-      status: statusFilter.value as 'all' | 'active' | 'cooldown' | 'inactive',
+    const nextPage = await listPoolKeys(providerId, {
+      page,
+      page_size: pageSizeValue,
+      search,
+      status,
     })
+    if (requestId !== keysRequestId || selectedProviderId.value !== providerId) return
+    keyPage.value = nextPage
   } catch (err) {
+    if (requestId !== keysRequestId || selectedProviderId.value !== providerId) return
     showError(parseApiError(err))
   } finally {
-    keysLoading.value = false
+    if (requestId === keysRequestId) {
+      keysLoading.value = false
+    }
   }
 }
 
-watch([currentPage, pageSize], () => loadKeys())
-watch([searchQuery, statusFilter], () => {
+watch([currentPage, pageSize], () => {
+  void loadKeys()
+})
+
+watch(statusFilter, () => {
+  if (suppressFiltersWatch) return
   currentPage.value = 1
-  loadKeys()
+  void loadKeys()
+})
+
+watch(searchQuery, () => {
+  if (suppressFiltersWatch) return
+  currentPage.value = 1
+  if (keysSearchDebounceTimer !== null) {
+    clearTimeout(keysSearchDebounceTimer)
+  }
+  keysSearchDebounceTimer = window.setTimeout(() => {
+    keysSearchDebounceTimer = null
+    void loadKeys()
+  }, 300)
 })
 
 function normalizeAuthTypeForEdit(authType: string): EndpointAPIKey['auth_type'] {
@@ -2223,5 +2273,16 @@ onMounted(async () => {
   startCountdownTimer()
   await loadOverview()
   void refreshCurrentPageQuotaInBackground({ silent: true })
+})
+
+onBeforeUnmount(() => {
+  if (keysSearchDebounceTimer !== null) {
+    clearTimeout(keysSearchDebounceTimer)
+    keysSearchDebounceTimer = null
+  }
+  overviewRequestId += 1
+  selectProviderRequestId += 1
+  providerDataRequestId += 1
+  keysRequestId += 1
 })
 </script>

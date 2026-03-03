@@ -116,8 +116,8 @@ class SystemConfigService:
             "description": "详细日志保留天数，超过此天数后压缩 request_body 和 response_body 到压缩字段",
         },
         "compressed_log_retention_days": {
-            "value": 90,
-            "description": "压缩日志保留天数，超过此天数后删除压缩的 body 字段（保留headers和统计）",
+            "value": 30,
+            "description": "压缩记录保留天数，超过此天数后删除压缩的 body 字段（保留headers和统计）",
         },
         "header_retention_days": {
             "value": 90,
@@ -125,7 +125,7 @@ class SystemConfigService:
         },
         "log_retention_days": {
             "value": 365,
-            "description": "完整日志保留天数，超过此天数后删除整条记录（保留核心统计）",
+            "description": "请求记录保存天数，超过此天数后删除整条使用记录",
         },
         "enable_auto_cleanup": {
             "value": True,

@@ -7,11 +7,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, load_only
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.exceptions import InvalidRequestException, NotFoundException, translate_pydantic_error
 from src.core.logger import logger
 from src.database import get_db
@@ -21,6 +23,7 @@ from src.models.database import ApiKey, User, UserRole
 from src.services.system.config import SystemConfigService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.service import UserService
+from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/admin/users", tags=["Admin - Users"])
 pipeline = ApiRequestPipeline()
@@ -282,10 +285,43 @@ class AdminListUsersAdapter(AdminApiAdapter):
         self.role = role
         self.is_active = is_active
 
+    @cache_result(
+        key_prefix="admin:users:list",
+        ttl=CacheTTL.USER,
+        user_specific=False,
+        vary_by=["skip", "limit", "role", "is_active"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
-        role_enum = UserRole[self.role.upper()] if self.role else None
-        users = UserService.list_users(db, self.skip, self.limit, role_enum, self.is_active)
+        role_enum = None
+        if self.role:
+            try:
+                role_enum = UserRole[self.role.upper()]
+            except KeyError as exc:
+                raise InvalidRequestException("角色参数不合法") from exc
+
+        query = db.query(User).options(
+            load_only(
+                User.id,
+                User.email,
+                User.username,
+                User.role,
+                User.allowed_providers,
+                User.allowed_api_formats,
+                User.allowed_models,
+                User.quota_usd,
+                User.used_usd,
+                User.total_usd,
+                User.is_active,
+                User.created_at,
+            )
+        )
+        if role_enum:
+            query = query.filter(User.role == role_enum)
+        if self.is_active is not None:
+            query = query.filter(User.is_active == self.is_active)
+
+        users = query.order_by(User.created_at.desc()).offset(self.skip).limit(self.limit).all()
         return [
             {
                 "id": u.id,
@@ -416,7 +452,9 @@ class AdminDeleteUserAdapter(AdminApiAdapter):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
         if user.role == UserRole.ADMIN:
-            admin_count = db.query(User).filter(User.role == UserRole.ADMIN).count()
+            admin_count = int(
+                db.query(func.count(User.id)).filter(User.role == UserRole.ADMIN).scalar() or 0
+            )
             if admin_count <= 1:
                 raise InvalidRequestException("不能删除最后一个管理员账户")
 

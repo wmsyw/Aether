@@ -793,6 +793,7 @@ const apiKeyInput = ref<HTMLInputElement>()
 // 用户统计
 const userStats = ref<Record<string, UsageByUser>>({})
 const loadingStats = ref(false)
+let userStatsRequestId = 0
 
 const searchQuery = ref('')
 const filterRole = ref('all')
@@ -846,13 +847,17 @@ watch([searchQuery, filterRole, filterStatus], () => {
 })
 
 onMounted(async () => {
-  await usersStore.fetchUsers()
-  await loadUserStats()
+  await Promise.all([
+    usersStore.fetchUsers(),
+    loadUserStats()
+  ])
 })
 
 async function refreshUsers() {
-  await usersStore.fetchUsers()
-  await loadUserStats()
+  await Promise.all([
+    usersStore.fetchUsers(),
+    loadUserStats()
+  ])
 }
 
 function formatDate(dateString: string) {
@@ -860,9 +865,11 @@ function formatDate(dateString: string) {
 }
 
 async function loadUserStats() {
+  const requestId = ++userStatsRequestId
   loadingStats.value = true
   try {
     const data = await usageApi.getUsageByUser()
+    if (requestId !== userStatsRequestId) return
     userStats.value = data.reduce((acc: Record<string, UsageByUser>, stat: UsageByUser) => {
       acc[stat.user_id] = stat
       return acc
@@ -870,7 +877,9 @@ async function loadUserStats() {
   } catch (err) {
     log.error('加载用户统计失败:', err)
   } finally {
-    loadingStats.value = false
+    if (requestId === userStatsRequestId) {
+      loadingStats.value = false
+    }
   }
 }
 

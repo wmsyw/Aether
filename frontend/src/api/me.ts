@@ -1,6 +1,7 @@
 import apiClient from './client'
 import type { ActivityHeatmap } from '@/types/activity'
 import type { TieredPricingConfig } from './endpoints/types'
+import { cachedRequest, buildCacheKey } from '@/utils/cache'
 
 export interface Profile {
   id: string // UUID
@@ -328,8 +329,15 @@ export const meApi = {
     points: Array<{ x: string; y: number; model?: string }>
     models?: string[]
   }> {
-    const response = await apiClient.get('/api/users/me/usage/interval-timeline', { params })
-    return response.data
+    const cacheKey = buildCacheKey('me:interval-timeline', params as Record<string, unknown> | undefined)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get('/api/users/me/usage/interval-timeline', { params })
+        return response.data
+      },
+      30000
+    )
   },
 
   /**
@@ -337,7 +345,13 @@ export const meApi = {
    * 后端已缓存5分钟
    */
   async getActivityHeatmap(): Promise<ActivityHeatmap> {
-    const response = await apiClient.get<ActivityHeatmap>('/api/users/me/usage/heatmap')
-    return response.data
+    return cachedRequest(
+      'me-activity-heatmap',
+      async () => {
+        const response = await apiClient.get<ActivityHeatmap>('/api/users/me/usage/heatmap')
+        return response.data
+      },
+      60000
+    )
   }
 }

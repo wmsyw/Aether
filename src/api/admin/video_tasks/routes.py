@@ -18,11 +18,13 @@ from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import ApiRequestPipeline
 from src.api.dashboard.routes import DashboardAdapter
 from src.clients.http_client import HTTPClientPool
+from src.config.constants import CacheTTL
 from src.core.crypto import crypto_service
 from src.core.enums import UserRole
 from src.core.logger import logger
 from src.database import get_db
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, User, VideoTask
+from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/admin/video-tasks", tags=["Admin - Video Tasks"])
 pipeline = ApiRequestPipeline()
@@ -247,6 +249,12 @@ class VideoTaskListAdapter(DashboardAdapter):
     page: int
     page_size: int
 
+    @cache_result(
+        key_prefix="admin:video_tasks:list",
+        ttl=min(5, CacheTTL.ADMIN_USAGE_RECORDS),
+        user_specific=True,
+        vary_by=["status", "user_id", "model", "page", "page_size"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:
         db = context.db
         user = context.user
@@ -270,8 +278,8 @@ class VideoTaskListAdapter(DashboardAdapter):
             escaped = self.model.replace("%", "\\%").replace("_", "\\_")
             query = query.filter(VideoTask.model.ilike(f"%{escaped}%"))
 
-        # 统计总数
-        total = query.count()
+        # 统计总数（避免 Query.count() 生成大子查询）
+        total = int(query.with_entities(func.count(VideoTask.id)).scalar() or 0)
 
         # 分页
         offset = (self.page - 1) * self.page_size
@@ -341,6 +349,11 @@ class VideoTaskListAdapter(DashboardAdapter):
 class VideoTaskStatsAdapter(DashboardAdapter):
     """视频任务统计适配器"""
 
+    @cache_result(
+        key_prefix="admin:video_tasks:stats",
+        ttl=min(5, CacheTTL.ADMIN_USAGE_RECORDS),
+        user_specific=True,
+    )
     async def handle(self, context: ApiRequestContext) -> Any:
         db = context.db
         user = context.user
@@ -350,8 +363,8 @@ class VideoTaskStatsAdapter(DashboardAdapter):
         if not is_admin:
             base_query = base_query.filter(VideoTask.user_id == user.id)
 
-        # 总数
-        total = base_query.count()
+        # 总数（避免 Query.count() 生成大子查询）
+        total = int(base_query.with_entities(func.count(VideoTask.id)).scalar() or 0)
 
         # 按状态分组
         status_stats = (
@@ -379,7 +392,12 @@ class VideoTaskStatsAdapter(DashboardAdapter):
 
         # 今日任务数
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_count = base_query.filter(VideoTask.created_at >= today).count()
+        today_count = int(
+            base_query.filter(VideoTask.created_at >= today)
+            .with_entities(func.count(VideoTask.id))
+            .scalar()
+            or 0
+        )
 
         # 管理员额外统计
         result = {

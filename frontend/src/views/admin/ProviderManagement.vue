@@ -226,6 +226,7 @@ const { confirmDanger } = useConfirm()
 // 状态
 const loading = ref(false)
 const providers = ref<ProviderWithEndpointsSummary[]>([])
+let providersRequestId = 0
 const providerDialogOpen = ref(false)
 const providerToEdit = ref<ProviderWithEndpointsSummary | null>(null)
 const priorityDialogOpen = ref(false)
@@ -350,15 +351,21 @@ async function loadGlobalModelList() {
 
 // 加载提供商列表
 async function loadProviders() {
+  const requestId = ++providersRequestId
   loading.value = true
   try {
-    providers.value = await getProvidersSummary()
+    const nextProviders = await getProvidersSummary()
+    if (requestId !== providersRequestId) return
+    providers.value = nextProviders
     // 异步加载配置了 ops 的 provider 的余额数据
     loadBalances(providers.value)
   } catch (err: unknown) {
+    if (requestId !== providersRequestId) return
     showError(parseApiError(err, '加载提供商列表失败'), '错误')
   } finally {
-    loading.value = false
+    if (requestId === providersRequestId) {
+      loading.value = false
+    }
   }
 }
 

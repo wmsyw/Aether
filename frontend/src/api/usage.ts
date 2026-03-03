@@ -1,5 +1,5 @@
 import apiClient from './client'
-import { cachedRequest } from '@/utils/cache'
+import { cachedRequest, dedupedRequest, buildCacheKey } from '@/utils/cache'
 import type { ActivityHeatmap } from '@/types/activity'
 
 export interface UsageRecord {
@@ -187,8 +187,11 @@ export const usageApi = {
     limit: number
     offset: number
   }> {
-    const response = await apiClient.get('/api/admin/usage/records', { params })
-    return response.data
+    const key = buildCacheKey('usage:records', params as Record<string, unknown> | undefined)
+    return dedupedRequest(key, async () => {
+      const response = await apiClient.get('/api/admin/usage/records', { params })
+      return response.data
+    })
   },
 
   /**
@@ -226,7 +229,13 @@ export const usageApi = {
    * 后端已缓存5分钟
    */
   async getActivityHeatmap(): Promise<ActivityHeatmap> {
-    const response = await apiClient.get<ActivityHeatmap>('/api/admin/usage/heatmap')
-    return response.data
+    return cachedRequest(
+      'admin-usage-activity-heatmap',
+      async () => {
+        const response = await apiClient.get<ActivityHeatmap>('/api/admin/usage/heatmap')
+        return response.data
+      },
+      60000
+    )
   }
 }

@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -251,7 +252,7 @@ class BillingRuleListAdapter(AdminApiAdapter):
         if self.is_enabled is not None:
             q = q.filter(BillingRule.is_enabled == self.is_enabled)
 
-        total = q.count()
+        total = int(q.with_entities(func.count(BillingRule.id)).scalar() or 0)
         items = (
             q.order_by(BillingRule.updated_at.desc())
             .offset((self.page - 1) * self.page_size)
@@ -365,7 +366,7 @@ class DimensionCollectorListAdapter(AdminApiAdapter):
         if self.is_enabled is not None:
             q = q.filter(DimensionCollector.is_enabled == self.is_enabled)
 
-        total = q.count()
+        total = int(q.with_entities(func.count(DimensionCollector.id)).scalar() or 0)
         items = (
             q.order_by(DimensionCollector.updated_at.desc())
             .offset((self.page - 1) * self.page_size)

@@ -767,7 +767,7 @@ const hasActiveRecords = computed(() => {
 // 使用 VueUse 的 useIntervalFn 管理计时器（自动清理）
 const { pause: stopTimer, resume: startTimer } = useIntervalFn(
   () => { now.value = Date.now() },
-  100,
+  500,
   { immediate: false }
 )
 

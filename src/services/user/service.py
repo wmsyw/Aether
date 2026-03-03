@@ -266,7 +266,9 @@ class UserService:
         db.query(AnnouncementRead).filter(AnnouncementRead.user_id == user_id).delete(
             synchronize_session=False
         )
-        api_key_count = db.query(ApiKey).filter(ApiKey.user_id == user_id).count()
+        api_key_count = int(
+            db.query(func.count(ApiKey.id)).filter(ApiKey.user_id == user_id).scalar() or 0
+        )
         db.query(ApiKey).filter(ApiKey.user_id == user_id).delete(synchronize_session=False)
 
         # 现在删除用户（Usage, AuditLog, RequestAttempt 会通过数据库 SET NULL 保留）

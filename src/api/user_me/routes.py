@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from src.api.base.authenticated_adapter import AuthenticatedApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.crypto import crypto_service
 from src.core.exceptions import (
     ForbiddenException,
@@ -45,6 +46,7 @@ from src.services.system.time_range import TimeRangeParams
 from src.services.usage.service import UsageService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.preference import PreferenceService
+from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/users/me", tags=["User Profile"])
 pipeline = ApiRequestPipeline()
@@ -259,7 +261,7 @@ async def get_my_active_requests(
 async def get_my_interval_timeline(
     request: Request,
     hours: int = Query(24, ge=1, le=720, description="分析最近多少小时的数据"),
-    limit: int = Query(5000, ge=100, le=20000, description="最大返回数据点数量"),
+    limit: int = Query(2000, ge=100, le=20000, description="最大返回数据点数量"),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -767,6 +769,21 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
     limit: int = 100
     offset: int = 0
 
+    @cache_result(
+        key_prefix="user:usage:records",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=True,
+        vary_by=[
+            "time_range.start_date",
+            "time_range.end_date",
+            "time_range.preset",
+            "time_range.timezone",
+            "time_range.tz_offset_minutes",
+            "search",
+            "limit",
+            "offset",
+        ],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy import or_
         from sqlalchemy.orm import load_only
@@ -954,17 +971,18 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             query.order_by(Usage.created_at.desc()).offset(self.offset).limit(self.limit).all()
         )
 
-        avg_resp_query = db.query(func.avg(Usage.response_time_ms)).filter(
-            Usage.user_id == user.id,
-            Usage.status_code == 200,
-            Usage.response_time_ms.isnot(None),
+        # 复用 summary 聚合中的成功请求响应时间，避免额外 AVG SQL
+        total_success_response_time_ms = sum(
+            float(item.get("success_response_time_sum_ms", 0.0) or 0.0) for item in summary_list
         )
-        if start_utc and end_utc:
-            avg_resp_query = avg_resp_query.filter(
-                Usage.created_at >= start_utc, Usage.created_at < end_utc
-            )
-        avg_response_ms = avg_resp_query.scalar() or 0
-        avg_response_time = float(avg_response_ms) / 1000.0 if avg_response_ms else 0
+        total_success_response_count = sum(
+            int(item.get("success_response_time_count", 0) or 0) for item in summary_list
+        )
+        avg_response_time = (
+            total_success_response_time_ms / total_success_response_count / 1000.0
+            if total_success_response_count > 0
+            else 0.0
+        )
 
         # 构建响应数据
         response_data = {
@@ -1100,6 +1118,12 @@ class GetMyIntervalTimelineAdapter(AuthenticatedApiAdapter):
     hours: int
     limit: int
 
+    @cache_result(
+        key_prefix="user:usage:interval_timeline",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=True,
+        vary_by=["hours", "limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user

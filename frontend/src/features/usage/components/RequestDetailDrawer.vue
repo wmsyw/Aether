@@ -657,7 +657,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import Button from '@/components/ui/button.vue'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useClipboard } from '@/composables/useClipboard'
@@ -716,10 +716,13 @@ const historicalPricing = ref<{
 } | null>(null)
 const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const autoRefreshing = ref(false)
+const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
 const curlCopying = ref(false)
 const curlCopied = ref(false)
 const replayDialogOpen = ref(false)
 const AUTO_REFRESH_INTERVAL_MS = 1000
+let loadDetailRequestId = 0
+let loadDetailInFlight = false
 
 // 监听标签页切换
 watch(activeTab, (newTab) => {
@@ -1097,13 +1100,20 @@ watch(() => props.isOpen, async (isOpen) => {
 })
 
 async function loadDetail(id: string, silent = false) {
+  if (silent && loadDetailInFlight) {
+    return
+  }
+  const requestId = ++loadDetailRequestId
+  loadDetailInFlight = true
   if (!silent) {
     loading.value = true
     historicalPricing.value = null
   }
   error.value = null
   try {
-    detail.value = await dashboardApi.getRequestDetail(id)
+    const response = await dashboardApi.getRequestDetail(id)
+    if (requestId !== loadDetailRequestId) return
+    detail.value = response
 
     // 首次加载时选择默认 tab
     if (!silent) {
@@ -1145,13 +1155,17 @@ async function loadDetail(id: string, silent = false) {
       }
     }
   } catch (err) {
+    if (requestId !== loadDetailRequestId) return
     log.error('Failed to load request detail:', err)
     if (!silent) {
       error.value = '加载请求详情失败'
     }
   } finally {
-    if (!silent) {
+    if (!silent && requestId === loadDetailRequestId) {
       loading.value = false
+    }
+    if (requestId === loadDetailRequestId) {
+      loadDetailInFlight = false
     }
   }
 }
@@ -1175,12 +1189,17 @@ function stopAutoRefresh() {
 }
 
 function startAutoRefresh() {
-  if (autoRefreshTimer.value || !props.requestId || !props.isOpen) {
+  if (autoRefreshTimer.value) {
+    autoRefreshing.value = true
+    return
+  }
+  if (!isPageVisible.value || !props.requestId || !props.isOpen) {
+    autoRefreshing.value = false
     return
   }
   autoRefreshing.value = true
   autoRefreshTimer.value = setInterval(async () => {
-    if (!props.requestId || !props.isOpen) {
+    if (!isPageVisible.value || !props.requestId || !props.isOpen) {
       stopAutoRefresh()
       return
     }
@@ -1218,8 +1237,26 @@ async function refreshDetail() {
   startAutoRefresh()
 }
 
+function handleVisibilityChange() {
+  isPageVisible.value = !document.hidden
+  if (!isPageVisible.value) {
+    stopAutoRefresh()
+    return
+  }
+  if (props.isOpen && props.requestId && !isRequestCompleted()) {
+    startAutoRefresh()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopAutoRefresh()
+  loadDetailRequestId += 1
+  loadDetailInFlight = false
 })
 
 function formatDateTime(dateStr: string | null | undefined): string {

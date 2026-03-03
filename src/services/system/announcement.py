@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.core.exceptions import ForbiddenException, NotFoundException
@@ -87,7 +87,7 @@ class AnnouncementService:
         )
 
         # 分页
-        total = query.count()
+        total = int(query.with_entities(func.count(Announcement.id)).scalar() or 0)
         announcements = query.offset(offset).limit(limit).all()
 
         # 获取已读状态

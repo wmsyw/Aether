@@ -25,6 +25,22 @@ def _is_api_context(obj: Any) -> bool:
     return hasattr(obj, "user") and hasattr(obj, "db")
 
 
+def _resolve_attr(obj: Any, dotted_name: str) -> tuple[bool, Any]:
+    """Resolve a possibly dotted attribute path (e.g. 'time_range.start_date').
+
+    Returns (found, value).  When any segment along the chain is missing or
+    the intermediate value is None the lookup stops and returns (False, None).
+    """
+    current = obj
+    for part in dotted_name.split("."):
+        if current is None:
+            return False, None
+        if not hasattr(current, part):
+            return False, None
+        current = getattr(current, part)
+    return True, current
+
+
 def _hash_vary(vary: dict[str, Any]) -> str:
     """Build a short stable hash for cache key variations."""
     try:
@@ -91,8 +107,9 @@ def cache_result(
                     if vary_by:
                         vary: dict[str, Any] = {}
                         for attr_name in vary_by:
-                            if hasattr(adapter_self, attr_name):
-                                vary[attr_name] = getattr(adapter_self, attr_name)
+                            found, value = _resolve_attr(adapter_self, attr_name)
+                            if found:
+                                vary[attr_name] = value
                         if vary:
                             cache_key += f":v:{_hash_vary(vary)}"
                     else:

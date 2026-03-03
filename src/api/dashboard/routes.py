@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import and_, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from src.api.base.adapter import ApiAdapter, ApiMode
@@ -661,95 +661,96 @@ class UserDashboardStatsAdapter(DashboardAdapter):
         month_start_local = today_local.replace(day=1)
         month_start = month_start_local.astimezone(timezone.utc)
 
-        user_api_keys = db.query(func.count(ApiKey.id)).filter(ApiKey.user_id == user.id).scalar()
-        active_keys = (
-            db.query(func.count(ApiKey.id))
-            .filter(and_(ApiKey.user_id == user.id, ApiKey.is_active.is_(True)))
-            .scalar()
-        )
-
-        # 全局 Token 统计
-        all_time_token_stats = (
+        api_key_stats = (
             db.query(
-                func.sum(Usage.input_tokens).label("input_tokens"),
-                func.sum(Usage.output_tokens).label("output_tokens"),
-                func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
-                func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
+                func.count(ApiKey.id).label("total"),
+                func.sum(case((ApiKey.is_active.is_(True), 1), else_=0)).label("active"),
+            )
+            .filter(ApiKey.user_id == user.id)
+            .first()
+        )
+        user_api_keys = int(api_key_stats.total or 0) if api_key_stats else 0
+        active_keys = int(api_key_stats.active or 0) if api_key_stats else 0
+
+        # 使用单次聚合查询返回全量 + 本月 + 今日 + 昨日统计
+        usage_stats = (
+            db.query(
+                # 全量 Token 统计
+                func.sum(Usage.input_tokens).label("all_time_input_tokens"),
+                func.sum(Usage.output_tokens).label("all_time_output_tokens"),
+                func.sum(Usage.cache_creation_input_tokens).label("all_time_cache_creation_tokens"),
+                func.sum(Usage.cache_read_input_tokens).label("all_time_cache_read_tokens"),
+                # 本月
+                func.sum(case((Usage.created_at >= month_start, 1), else_=0)).label(
+                    "monthly_requests"
+                ),
+                func.sum(
+                    case((Usage.created_at >= month_start, Usage.total_cost_usd), else_=0.0)
+                ).label("monthly_cost"),
+                func.sum(
+                    case(
+                        (Usage.created_at >= month_start, Usage.cache_creation_input_tokens),
+                        else_=0,
+                    )
+                ).label("monthly_cache_creation_tokens"),
+                func.sum(
+                    case((Usage.created_at >= month_start, Usage.cache_read_input_tokens), else_=0)
+                ).label("monthly_cache_read_tokens"),
+                func.sum(
+                    case((Usage.created_at >= month_start, Usage.input_tokens), else_=0)
+                ).label("monthly_input_tokens"),
+                # 今日
+                func.sum(case((Usage.created_at >= today, 1), else_=0)).label("today_requests"),
+                func.sum(case((Usage.created_at >= today, Usage.total_cost_usd), else_=0.0)).label(
+                    "today_cost"
+                ),
+                func.sum(case((Usage.created_at >= today, Usage.total_tokens), else_=0)).label(
+                    "today_tokens"
+                ),
+                func.sum(
+                    case((Usage.created_at >= today, Usage.cache_creation_input_tokens), else_=0)
+                ).label("today_cache_creation_tokens"),
+                func.sum(
+                    case((Usage.created_at >= today, Usage.cache_read_input_tokens), else_=0)
+                ).label("today_cache_read_tokens"),
+                # 昨日（用于变化趋势）
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                Usage.created_at >= yesterday,
+                                Usage.created_at < today,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("yesterday_requests"),
             )
             .filter(Usage.user_id == user.id)
             .first()
         )
-        all_time_input_tokens = (
-            int(all_time_token_stats.input_tokens or 0) if all_time_token_stats else 0
-        )
-        all_time_output_tokens = (
-            int(all_time_token_stats.output_tokens or 0) if all_time_token_stats else 0
-        )
+
+        all_time_input_tokens = int(usage_stats.all_time_input_tokens or 0) if usage_stats else 0
+        all_time_output_tokens = int(usage_stats.all_time_output_tokens or 0) if usage_stats else 0
         all_time_cache_creation = (
-            int(all_time_token_stats.cache_creation_tokens or 0) if all_time_token_stats else 0
+            int(usage_stats.all_time_cache_creation_tokens or 0) if usage_stats else 0
         )
-        all_time_cache_read = (
-            int(all_time_token_stats.cache_read_tokens or 0) if all_time_token_stats else 0
-        )
+        all_time_cache_read = int(usage_stats.all_time_cache_read_tokens or 0) if usage_stats else 0
 
-        # 本月请求统计
-        user_requests = (
-            db.query(func.count(Usage.id))
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= month_start))
-            .scalar()
-        )
-        user_cost = (
-            db.query(func.sum(Usage.total_cost_usd))
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= month_start))
-            .scalar()
-            or 0
-        )
+        user_requests = int(usage_stats.monthly_requests or 0) if usage_stats else 0
+        user_cost = float(usage_stats.monthly_cost or 0.0) if usage_stats else 0.0
 
-        # 今日统计
-        requests_today = (
-            db.query(func.count(Usage.id))
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= today))
-            .scalar()
-        )
-        cost_today = (
-            db.query(func.sum(Usage.total_cost_usd))
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= today))
-            .scalar()
-            or 0
-        )
-        tokens_today = (
-            db.query(func.sum(Usage.total_tokens))
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= today))
-            .scalar()
-            or 0
-        )
+        requests_today = int(usage_stats.today_requests or 0) if usage_stats else 0
+        cost_today = float(usage_stats.today_cost or 0.0) if usage_stats else 0.0
+        tokens_today = int(usage_stats.today_tokens or 0) if usage_stats else 0
+        requests_yesterday = int(usage_stats.yesterday_requests or 0) if usage_stats else 0
 
-        # 昨日统计（用于计算变化）
-        requests_yesterday = (
-            db.query(func.count(Usage.id))
-            .filter(
-                and_(
-                    Usage.user_id == user.id,
-                    Usage.created_at >= yesterday,
-                    Usage.created_at < today,
-                )
-            )
-            .scalar()
+        cache_creation_tokens = (
+            int(usage_stats.monthly_cache_creation_tokens or 0) if usage_stats else 0
         )
-
-        # 缓存统计（本月）
-        cache_stats = (
-            db.query(
-                func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
-                func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
-                func.sum(Usage.input_tokens).label("total_input_tokens"),
-            )
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= month_start))
-            .first()
-        )
-        cache_creation_tokens = int(cache_stats.cache_creation_tokens or 0) if cache_stats else 0
-        cache_read_tokens = int(cache_stats.cache_read_tokens or 0) if cache_stats else 0
-        monthly_input_tokens = int(cache_stats.total_input_tokens or 0) if cache_stats else 0
+        cache_read_tokens = int(usage_stats.monthly_cache_read_tokens or 0) if usage_stats else 0
+        monthly_input_tokens = int(usage_stats.monthly_input_tokens or 0) if usage_stats else 0
 
         # 计算本月缓存命中率：cache_read / (input_tokens + cache_read)
         # input_tokens 是实际发送给模型的输入（不含缓存读取），cache_read 是从缓存读取的
@@ -762,19 +763,11 @@ class UserDashboardStatsAdapter(DashboardAdapter):
         )
 
         # 今日缓存统计
-        cache_stats_today = (
-            db.query(
-                func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
-                func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
-            )
-            .filter(and_(Usage.user_id == user.id, Usage.created_at >= today))
-            .first()
-        )
         cache_creation_tokens_today = (
-            int(cache_stats_today.cache_creation_tokens or 0) if cache_stats_today else 0
+            int(usage_stats.today_cache_creation_tokens or 0) if usage_stats else 0
         )
         cache_read_tokens_today = (
-            int(cache_stats_today.cache_read_tokens or 0) if cache_stats_today else 0
+            int(usage_stats.today_cache_read_tokens or 0) if usage_stats else 0
         )
 
         # 配额状态
@@ -859,6 +852,12 @@ class UserDashboardStatsAdapter(DashboardAdapter):
 class DashboardRecentRequestsAdapter(DashboardAdapter):
     limit: int
 
+    @cache_result(
+        key_prefix="dashboard:recent:requests",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=True,
+        vary_by=["limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
@@ -1003,28 +1002,53 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
 
             # 补充 unique_models / unique_providers
             # query_time_series 使用小时粒度数据，不含这些维度统计
-            # 直接从 Usage 表按本地日 UTC 范围查询，避免 StatsDaily 历史数据未回填的问题
+            # 使用 CASE 一次性分桶，避免按天循环查询造成 N 次 SQL。
             granularity = (self.time_range.granularity or "day").lower()
-            if formatted and granularity == "day":
-                local_days = self.time_range.get_local_day_hours()
-                enrichment: dict[str, dict] = {}
+            local_days = self.time_range.get_local_day_hours()
+            range_start = local_days[0][1] if local_days else None
+            range_end = local_days[-1][2] if local_days else None
+            day_bucket = (
+                case(
+                    *[
+                        (
+                            and_(Usage.created_at >= day_start, Usage.created_at < day_end),
+                            local_date.isoformat(),
+                        )
+                        for local_date, day_start, day_end in local_days
+                    ],
+                    else_=None,
+                ).label("local_day")
+                if local_days
+                else None
+            )
 
-                for local_date, day_start_utc, day_end_utc in local_days:
-                    q = db.query(
-                        func.count(func.distinct(Usage.model)).label("um"),
-                        func.count(func.distinct(Usage.provider_name)).label("up"),
-                    ).filter(
-                        Usage.created_at >= day_start_utc,
-                        Usage.created_at < day_end_utc,
-                    )
-                    if not is_admin:
-                        q = q.filter(Usage.user_id == user.id)
-                    row = q.first()
-                    if row:
-                        enrichment[local_date.isoformat()] = {
-                            "unique_models": row.um or 0,
-                            "unique_providers": row.up or 0,
-                        }
+            if (
+                formatted
+                and granularity == "day"
+                and day_bucket is not None
+                and range_start
+                and range_end
+            ):
+                enrichment: dict[str, dict[str, int]] = {}
+                enrich_query = db.query(
+                    day_bucket,
+                    func.count(func.distinct(Usage.model)).label("um"),
+                    func.count(func.distinct(Usage.provider_name)).label("up"),
+                ).filter(
+                    Usage.created_at >= range_start,
+                    Usage.created_at < range_end,
+                )
+                if not is_admin:
+                    enrich_query = enrich_query.filter(Usage.user_id == user.id)
+                enrich_rows = enrich_query.group_by(day_bucket).all()
+
+                for local_day, unique_models, unique_providers in enrich_rows:
+                    if not local_day:
+                        continue
+                    enrichment[str(local_day)] = {
+                        "unique_models": int(unique_models or 0),
+                        "unique_providers": int(unique_providers or 0),
+                    }
 
                 for item in formatted:
                     date_key = item["date"][:10]  # YYYY-MM-DD
@@ -1062,26 +1086,35 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
 
             # Daily model breakdown (aligned to local days)
             breakdown_map: dict[str, list[dict]] = {}
-            for local_date, day_start, day_end in self.time_range.get_local_day_hours():
-                day_query = db.query(
+            if granularity == "day" and day_bucket is not None and range_start and range_end:
+                breakdown_query = db.query(
+                    day_bucket,
                     Usage.model,
                     func.count(Usage.id).label("requests"),
                     func.sum(Usage.total_tokens).label("tokens"),
                     func.sum(Usage.total_cost_usd).label("cost"),
-                ).filter(Usage.created_at >= day_start, Usage.created_at < day_end)
+                ).filter(
+                    Usage.created_at >= range_start,
+                    Usage.created_at < range_end,
+                )
                 if not is_admin:
-                    day_query = day_query.filter(Usage.user_id == user.id)
-                day_stats = day_query.group_by(Usage.model).all()
-                breakdown_map[local_date.isoformat()] = [
-                    {
-                        "model": stat.model,
-                        "requests": stat.requests or 0,
-                        "tokens": int(stat.tokens or 0),
-                        "cost": float(stat.cost or 0),
-                    }
-                    for stat in day_stats
-                    if stat.model
-                ]
+                    breakdown_query = breakdown_query.filter(Usage.user_id == user.id)
+                breakdown_rows = (
+                    breakdown_query.group_by(day_bucket, Usage.model)
+                    .order_by(day_bucket.asc(), func.sum(Usage.total_cost_usd).desc())
+                    .all()
+                )
+                for local_day, model_name, requests, tokens, cost in breakdown_rows:
+                    if not local_day or not model_name:
+                        continue
+                    breakdown_map.setdefault(str(local_day), []).append(
+                        {
+                            "model": model_name,
+                            "requests": int(requests or 0),
+                            "tokens": int(tokens or 0),
+                            "cost": float(cost or 0.0),
+                        }
+                    )
 
             for item in formatted:
                 item["model_breakdown"] = breakdown_map.get(item["date"], [])

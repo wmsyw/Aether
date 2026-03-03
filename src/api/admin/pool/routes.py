@@ -617,13 +617,68 @@ class AdminPoolOverviewAdapter(AdminApiAdapter):
             .all()
         )
 
+        # 先批量计算池化 Provider 的 Key 总数/启用数，避免每个 Provider 单独查询（N+1）。
+        pool_provider_ids: list[str] = []
+        pool_enabled_map: dict[str, bool] = {}
+        for p in providers:
+            pid = str(p.id)
+            enabled = parse_pool_config(getattr(p, "config", None)) is not None
+            pool_enabled_map[pid] = enabled
+            if enabled:
+                pool_provider_ids.append(pid)
+
+        key_ids_by_provider: dict[str, list[str]] = {pid: [] for pid in pool_provider_ids}
+        key_stats_by_provider: dict[str, dict[str, int]] = {
+            pid: {"total": 0, "active": 0} for pid in pool_provider_ids
+        }
+        if pool_provider_ids:
+            key_rows = (
+                db.query(
+                    ProviderAPIKey.provider_id,
+                    ProviderAPIKey.id,
+                    ProviderAPIKey.is_active,
+                )
+                .filter(ProviderAPIKey.provider_id.in_(pool_provider_ids))
+                .all()
+            )
+            for provider_id, key_id, is_active in key_rows:
+                pid = str(provider_id)
+                kid = str(key_id)
+                key_ids_by_provider.setdefault(pid, []).append(kid)
+                stats = key_stats_by_provider.setdefault(pid, {"total": 0, "active": 0})
+                stats["total"] += 1
+                if is_active:
+                    stats["active"] += 1
+
+        # Redis 冷却状态并发获取，避免逐 Provider 串行等待。
+        cooldown_count_by_provider: dict[str, int] = {}
+        cooldown_targets = [
+            (pid, key_ids) for pid, key_ids in key_ids_by_provider.items() if key_ids
+        ]
+        if cooldown_targets:
+            cooldown_results = await asyncio.gather(
+                *[
+                    pool_redis.batch_get_cooldowns(pid, key_ids)
+                    for pid, key_ids in cooldown_targets
+                ],
+                return_exceptions=True,
+            )
+            for (pid, _key_ids), result in zip(cooldown_targets, cooldown_results, strict=False):
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "池管理概览读取冷却状态失败",
+                        extra={"provider_id": pid, "error": str(result)},
+                    )
+                    cooldown_count_by_provider[pid] = 0
+                else:
+                    cooldown_count_by_provider[pid] = sum(
+                        1 for value in result.values() if value is not None
+                    )
+
         items: list[PoolOverviewItem] = []
         for p in providers:
             pid = str(p.id)
-            pcfg = parse_pool_config(getattr(p, "config", None))
-
-            # Non-pool providers: skip Redis + key queries entirely.
-            if pcfg is None:
+            if not pool_enabled_map.get(pid, False):
                 items.append(
                     PoolOverviewItem(
                         provider_id=pid,
@@ -634,22 +689,16 @@ class AdminPoolOverviewAdapter(AdminApiAdapter):
                 )
                 continue
 
-            keys = db.query(ProviderAPIKey).filter(ProviderAPIKey.provider_id == pid).all()
-            key_ids = [str(k.id) for k in keys]
-
-            cooldown_count = 0
-            if key_ids:
-                cooldowns = await pool_redis.batch_get_cooldowns(pid, key_ids)
-                cooldown_count = sum(1 for v in cooldowns.values() if v is not None)
+            key_stats = key_stats_by_provider.get(pid, {"total": 0, "active": 0})
 
             items.append(
                 PoolOverviewItem(
                     provider_id=pid,
                     provider_name=p.name,
                     provider_type=str(getattr(p, "provider_type", "custom") or "custom"),
-                    total_keys=len(keys),
-                    active_keys=sum(1 for k in keys if k.is_active),
-                    cooldown_count=cooldown_count,
+                    total_keys=key_stats["total"],
+                    active_keys=key_stats["active"],
+                    cooldown_count=cooldown_count_by_provider.get(pid, 0),
                     pool_enabled=True,
                 )
             )
@@ -688,7 +737,7 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
             q = q.filter(ProviderAPIKey.is_active.is_(False))
         # "cooldown" filtering is done post-query (Redis state)
 
-        total = q.count()
+        total = 0
 
         # For cooldown filtering we need to fetch all, then filter, then paginate.
         # Limit scan range to avoid loading the entire table into memory.
@@ -702,6 +751,7 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
             offset = (self.page - 1) * self.page_size
             keys = all_keys[offset : offset + self.page_size]
         else:
+            total = int(q.with_entities(func.count(ProviderAPIKey.id)).scalar() or 0)
             offset = (self.page - 1) * self.page_size
             keys = (
                 q.order_by(ProviderAPIKey.created_at.desc())

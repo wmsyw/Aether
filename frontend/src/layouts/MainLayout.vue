@@ -385,7 +385,6 @@ const isDemo = computed(() => isDemoMode())
 
 const showAuthError = ref(false)
 const mobileMenuOpen = ref(false)
-let authCheckInterval: number | null = null
 
 // 更新检查相关
 const showUpdateDialog = ref(false)
@@ -437,12 +436,35 @@ async function checkForUpdate() {
   }
 }
 
+function syncAuthNotice() {
+  authStore.syncToken()
+  showAuthError.value = !!authStore.user && !authStore.token
+}
+
+function handleStorageChange(event: StorageEvent) {
+  if (event.key === null || event.key === 'access_token') {
+    syncAuthNotice()
+  }
+}
+
+function handleVisibilityChange() {
+  if (!document.hidden) {
+    syncAuthNotice()
+  }
+}
+
+watch(
+  () => [authStore.user, authStore.token] as const,
+  () => {
+    showAuthError.value = !!authStore.user && !authStore.token
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
-  authCheckInterval = setInterval(() => {
-    if (authStore.user && !authStore.token) {
-      showAuthError.value = true
-    }
-  }, 5000)
+  window.addEventListener('storage', handleStorageChange)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  syncAuthNotice()
 
   // 管理员预加载模块状态（路由守卫会按需加载，这里提前加载以避免菜单闪烁）
   if (authStore.user?.role === 'admin' && !moduleStore.loaded && !moduleStore.loading) {
@@ -456,10 +478,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (authCheckInterval) {
-    clearInterval(authCheckInterval)
-    authCheckInterval = null
-  }
+  window.removeEventListener('storage', handleStorageChange)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 function handleRelogin() {

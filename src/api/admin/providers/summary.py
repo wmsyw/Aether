@@ -8,12 +8,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import case, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.models_service import invalidate_models_list_cache
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.enums import ProviderBillingType
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
@@ -39,6 +40,7 @@ from src.models.endpoint_models import (
 )
 from src.services.cache.model_cache import ModelCacheService
 from src.services.cache.provider_cache import ProviderCacheService
+from src.utils.cache_decorator import cache_result
 
 router = APIRouter(tags=["Provider Summary"])
 pipeline = ApiRequestPipeline()
@@ -130,11 +132,8 @@ async def get_provider_summary(
     - `created_at`: 创建时间
     - `updated_at`: 更新时间
     """
-    provider = db.query(Provider).filter(Provider.id == provider_id).first()
-    if not provider:
-        raise NotFoundException(f"Provider {provider_id} not found")
-
-    return _build_provider_summary(db, provider)
+    adapter = AdminProviderDetailAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/{provider_id}/health-monitor", response_model=ProviderEndpointHealthMonitorResponse)
@@ -319,12 +318,20 @@ def _extract_failover_rules_from_config(
 
 
 def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndpointsSummary:
-    endpoints = db.query(ProviderEndpoint).filter(ProviderEndpoint.provider_id == provider.id).all()
+    endpoints = (
+        db.query(ProviderEndpoint)
+        .options(
+            load_only(
+                ProviderEndpoint.id,
+                ProviderEndpoint.provider_id,
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.is_active,
+            )
+        )
+        .filter(ProviderEndpoint.provider_id == provider.id)
+        .all()
+    )
 
-    total_endpoints = len(endpoints)
-    active_endpoints = sum(1 for e in endpoints if e.is_active)
-
-    # Key 统计（合并为单个查询）
     key_stats = (
         db.query(
             func.count(ProviderAPIKey.id).label("total"),
@@ -333,10 +340,9 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         .filter(ProviderAPIKey.provider_id == provider.id)
         .first()
     )
-    total_keys = key_stats.total or 0
+    total_keys = int(key_stats.total or 0)
     active_keys = int(key_stats.active or 0)
 
-    # Model 统计（合并为单个查询）
     model_stats = (
         db.query(
             func.count(Model.id).label("total"),
@@ -345,25 +351,62 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         .filter(Model.provider_id == provider.id)
         .first()
     )
-    total_models = model_stats.total or 0
+    total_models = int(model_stats.total or 0)
     active_models = int(model_stats.active or 0)
 
-    # 活跃模型关联的全局模型 ID 列表
     global_model_ids = [
         row[0]
         for row in db.query(Model.global_model_id)
         .filter(
             Model.provider_id == provider.id,
             Model.is_active == True,
+            Model.global_model_id.isnot(None),
         )
         .distinct()
         .all()
     ]
 
-    api_formats = [e.api_format for e in endpoints]
+    all_keys = (
+        db.query(ProviderAPIKey)
+        .options(
+            load_only(
+                ProviderAPIKey.id,
+                ProviderAPIKey.provider_id,
+                ProviderAPIKey.is_active,
+                ProviderAPIKey.api_formats,
+                ProviderAPIKey.health_by_format,
+            )
+        )
+        .filter(ProviderAPIKey.provider_id == provider.id)
+        .all()
+    )
 
-    # 优化: 一次性加载 Provider 的 keys，避免 N+1 查询
-    all_keys = db.query(ProviderAPIKey).filter(ProviderAPIKey.provider_id == provider.id).all()
+    return _compose_provider_summary(
+        provider=provider,
+        endpoints=endpoints,
+        all_keys=all_keys,
+        total_keys=total_keys,
+        active_keys=active_keys,
+        total_models=total_models,
+        active_models=active_models,
+        global_model_ids=global_model_ids,
+    )
+
+
+def _compose_provider_summary(
+    *,
+    provider: Provider,
+    endpoints: list[ProviderEndpoint],
+    all_keys: list[ProviderAPIKey],
+    total_keys: int,
+    active_keys: int,
+    total_models: int,
+    active_models: int,
+    global_model_ids: list[Any],
+) -> ProviderWithEndpointsSummary:
+    total_endpoints = len(endpoints)
+    active_endpoints = sum(1 for e in endpoints if e.is_active)
+    api_formats = [e.api_format for e in endpoints]
 
     # 按 api_formats 分组 keys（通过 api_formats 关联）
     format_to_endpoint_id: dict[str, str] = {e.api_format: e.id for e in endpoints}
@@ -379,9 +422,8 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
     for endpoint in endpoints:
         keys = keys_by_endpoint.get(endpoint.id, [])
         if keys:
-            # 从 health_by_format 获取对应格式的健康度
             api_fmt = endpoint.api_format
-            health_scores = []
+            health_scores: list[float] = []
             for k in keys:
                 health_by_format = k.health_by_format or {}
                 if api_fmt in health_by_format:
@@ -389,7 +431,7 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
                     if score is not None:
                         health_scores.append(float(score))
                 else:
-                    health_scores.append(1.0)  # 默认健康度
+                    health_scores.append(1.0)
             avg_health = sum(health_scores) / len(health_scores) if health_scores else 1.0
             endpoint_health_map[endpoint.id] = avg_health
         else:
@@ -399,7 +441,6 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
     avg_health_score = sum(all_health_scores) / len(all_health_scores) if all_health_scores else 1.0
     unhealthy_endpoints = sum(1 for score in all_health_scores if score < 0.5)
 
-    # 计算每个端点的活跃密钥数量
     active_keys_by_endpoint: dict[str, int] = {}
     for endpoint_id, keys in keys_by_endpoint.items():
         active_keys_by_endpoint[endpoint_id] = sum(1 for k in keys if k.is_active)
@@ -484,6 +525,119 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
     )
 
 
+def _build_provider_summaries_batch(
+    db: Session, providers: list[Provider]
+) -> list[ProviderWithEndpointsSummary]:
+    if not providers:
+        return []
+
+    provider_ids = [provider.id for provider in providers]
+
+    endpoint_rows = (
+        db.query(ProviderEndpoint)
+        .options(
+            load_only(
+                ProviderEndpoint.id,
+                ProviderEndpoint.provider_id,
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.is_active,
+            )
+        )
+        .filter(ProviderEndpoint.provider_id.in_(provider_ids))
+        .all()
+    )
+    endpoints_by_provider: dict[str, list[ProviderEndpoint]] = {}
+    for endpoint in endpoint_rows:
+        endpoints_by_provider.setdefault(str(endpoint.provider_id), []).append(endpoint)
+
+    key_rows = (
+        db.query(ProviderAPIKey)
+        .options(
+            load_only(
+                ProviderAPIKey.id,
+                ProviderAPIKey.provider_id,
+                ProviderAPIKey.is_active,
+                ProviderAPIKey.api_formats,
+                ProviderAPIKey.health_by_format,
+            )
+        )
+        .filter(ProviderAPIKey.provider_id.in_(provider_ids))
+        .all()
+    )
+    keys_by_provider: dict[str, list[ProviderAPIKey]] = {}
+    for key in key_rows:
+        keys_by_provider.setdefault(str(key.provider_id), []).append(key)
+
+    key_stats_rows = (
+        db.query(
+            ProviderAPIKey.provider_id.label("provider_id"),
+            func.count(ProviderAPIKey.id).label("total"),
+            func.sum(case((ProviderAPIKey.is_active == True, 1), else_=0)).label("active"),
+        )
+        .filter(ProviderAPIKey.provider_id.in_(provider_ids))
+        .group_by(ProviderAPIKey.provider_id)
+        .all()
+    )
+    key_stats_by_provider: dict[str, dict[str, int]] = {
+        str(row.provider_id): {
+            "total": int(row.total or 0),
+            "active": int(row.active or 0),
+        }
+        for row in key_stats_rows
+    }
+
+    model_stats_rows = (
+        db.query(
+            Model.provider_id.label("provider_id"),
+            func.count(Model.id).label("total"),
+            func.sum(case((Model.is_active == True, 1), else_=0)).label("active"),
+        )
+        .filter(Model.provider_id.in_(provider_ids))
+        .group_by(Model.provider_id)
+        .all()
+    )
+    model_stats_by_provider: dict[str, dict[str, int]] = {
+        str(row.provider_id): {
+            "total": int(row.total or 0),
+            "active": int(row.active or 0),
+        }
+        for row in model_stats_rows
+    }
+
+    global_model_rows = (
+        db.query(Model.provider_id, Model.global_model_id)
+        .filter(
+            Model.provider_id.in_(provider_ids),
+            Model.is_active == True,
+            Model.global_model_id.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    global_model_ids_by_provider: dict[str, list[Any]] = {}
+    for provider_id, global_model_id in global_model_rows:
+        global_model_ids_by_provider.setdefault(str(provider_id), []).append(global_model_id)
+
+    summaries: list[ProviderWithEndpointsSummary] = []
+    for provider in providers:
+        pid = str(provider.id)
+        key_stats = key_stats_by_provider.get(pid, {"total": 0, "active": 0})
+        model_stats = model_stats_by_provider.get(pid, {"total": 0, "active": 0})
+        summaries.append(
+            _compose_provider_summary(
+                provider=provider,
+                endpoints=endpoints_by_provider.get(pid, []),
+                all_keys=keys_by_provider.get(pid, []),
+                total_keys=key_stats["total"],
+                active_keys=key_stats["active"],
+                total_models=model_stats["total"],
+                active_models=model_stats["active"],
+                global_model_ids=global_model_ids_by_provider.get(pid, []),
+            )
+        )
+    return summaries
+
+
 # -------- Adapters --------
 
 
@@ -493,6 +647,12 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
     lookback_hours: int
     per_endpoint_limit: int
 
+    @cache_result(
+        key_prefix="admin:providers:health-monitor",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+        vary_by=["provider_id", "lookback_hours", "per_endpoint_limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
@@ -501,6 +661,14 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
 
         endpoints = (
             db.query(ProviderEndpoint)
+            .options(
+                load_only(
+                    ProviderEndpoint.id,
+                    ProviderEndpoint.provider_id,
+                    ProviderEndpoint.api_format,
+                    ProviderEndpoint.is_active,
+                )
+            )
             .filter(ProviderEndpoint.provider_id == self.provider_id)
             .all()
         )
@@ -508,7 +676,7 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
         now = datetime.now(timezone.utc)
         since = now - timedelta(hours=self.lookback_hours)
 
-        endpoint_ids = [endpoint.id for endpoint in endpoints]
+        endpoint_ids = [str(endpoint.id) for endpoint in endpoints]
         if not endpoint_ids:
             response = ProviderEndpointHealthMonitorResponse(
                 provider_id=provider.id,
@@ -522,46 +690,65 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
                 endpoint_count=0,
                 lookback_hours=self.lookback_hours,
             )
-            return response
+            return response.model_dump()
 
-        limit_rows = max(200, self.per_endpoint_limit * max(1, len(endpoint_ids)) * 2)
-        attempts_query = (
+        ranked_attempts_subq = (
             db.query(RequestCandidate)
+            .with_entities(
+                RequestCandidate.endpoint_id.label("endpoint_id"),
+                RequestCandidate.status.label("status"),
+                RequestCandidate.status_code.label("status_code"),
+                RequestCandidate.latency_ms.label("latency_ms"),
+                RequestCandidate.error_type.label("error_type"),
+                RequestCandidate.error_message.label("error_message"),
+                func.coalesce(
+                    RequestCandidate.finished_at,
+                    RequestCandidate.started_at,
+                    RequestCandidate.created_at,
+                ).label("event_timestamp"),
+                func.row_number()
+                .over(
+                    partition_by=RequestCandidate.endpoint_id,
+                    order_by=RequestCandidate.created_at.desc(),
+                )
+                .label("rn"),
+            )
             .filter(
                 RequestCandidate.endpoint_id.in_(endpoint_ids),
                 RequestCandidate.created_at >= since,
             )
-            .order_by(RequestCandidate.created_at.desc())
+            .subquery()
         )
-        attempts = attempts_query.limit(limit_rows).all()
+        attempt_rows = (
+            db.query(ranked_attempts_subq)
+            .filter(ranked_attempts_subq.c.rn <= self.per_endpoint_limit)
+            .order_by(
+                ranked_attempts_subq.c.endpoint_id.asc(),
+                ranked_attempts_subq.c.event_timestamp.asc(),
+            )
+            .all()
+        )
 
-        buffered_attempts: dict[str, list[RequestCandidate]] = {eid: [] for eid in endpoint_ids}
-        counters: dict[str, int] = {eid: 0 for eid in endpoint_ids}
-
-        for attempt in attempts:
-            if not attempt.endpoint_id or attempt.endpoint_id not in buffered_attempts:
+        events_by_endpoint: dict[str, list[EndpointHealthEvent]] = {eid: [] for eid in endpoint_ids}
+        for row in attempt_rows:
+            endpoint_id = str(row.endpoint_id) if row.endpoint_id is not None else ""
+            if not endpoint_id or endpoint_id not in events_by_endpoint:
                 continue
-            if counters[attempt.endpoint_id] >= self.per_endpoint_limit:
-                continue
-            buffered_attempts[attempt.endpoint_id].append(attempt)
-            counters[attempt.endpoint_id] += 1
+            events_by_endpoint[endpoint_id].append(
+                EndpointHealthEvent(
+                    timestamp=row.event_timestamp,
+                    status=row.status,
+                    status_code=row.status_code,
+                    latency_ms=row.latency_ms,
+                    error_type=row.error_type,
+                    error_message=row.error_message,
+                )
+            )
 
         endpoint_monitors: list[EndpointHealthMonitor] = []
         for endpoint in endpoints:
-            attempt_list = list(reversed(buffered_attempts.get(endpoint.id, [])))
-            events: list[EndpointHealthEvent] = []
-            for attempt in attempt_list:
-                event_timestamp = attempt.finished_at or attempt.started_at or attempt.created_at
-                events.append(
-                    EndpointHealthEvent(
-                        timestamp=event_timestamp,
-                        status=attempt.status,
-                        status_code=attempt.status_code,
-                        latency_ms=attempt.latency_ms,
-                        error_type=attempt.error_type,
-                        error_message=attempt.error_message,
-                    )
-                )
+            endpoint_id = str(endpoint.id)
+            events = events_by_endpoint.get(endpoint_id, [])
 
             success_count = sum(1 for event in events if event.status == "success")
             failed_count = sum(1 for event in events if event.status == "failed")
@@ -598,10 +785,15 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
             lookback_hours=self.lookback_hours,
             per_endpoint_limit=self.per_endpoint_limit,
         )
-        return response
+        return response.model_dump()
 
 
 class AdminProviderSummaryAdapter(AdminApiAdapter):
+    @cache_result(
+        key_prefix="admin:providers:summary",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         providers = (
@@ -609,7 +801,25 @@ class AdminProviderSummaryAdapter(AdminApiAdapter):
             .order_by(Provider.provider_priority.asc(), Provider.created_at.asc())
             .all()
         )
-        return [_build_provider_summary(db, provider) for provider in providers]
+        return [item.model_dump() for item in _build_provider_summaries_batch(db, providers)]
+
+
+@dataclass
+class AdminProviderDetailAdapter(AdminApiAdapter):
+    provider_id: str
+
+    @cache_result(
+        key_prefix="admin:providers:summary:detail",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+        vary_by=["provider_id"],
+    )
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        db = context.db
+        provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
+        if not provider:
+            raise NotFoundException(f"Provider {self.provider_id} not found")
+        return _build_provider_summary(db, provider).model_dump()
 
 
 @dataclass

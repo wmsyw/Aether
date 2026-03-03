@@ -276,17 +276,24 @@ class AdminListGlobalModelsAdapter(AdminApiAdapter):
     search: str | None
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        from sqlalchemy import and_, case, func
+        from sqlalchemy import and_, case, func, or_
 
-        from src.models.database import Model, Provider
+        from src.models.database import GlobalModel, Model, Provider
 
-        models = GlobalModelService.list_global_models(
-            db=context.db,
-            skip=self.skip,
-            limit=self.limit,
-            is_active=self.is_active,
-            search=self.search,
-        )
+        query = context.db.query(GlobalModel)
+        if self.is_active is not None:
+            query = query.filter(GlobalModel.is_active == self.is_active)
+        if self.search:
+            search_pattern = f"%{self.search}%"
+            query = query.filter(
+                or_(
+                    GlobalModel.name.ilike(search_pattern),
+                    GlobalModel.display_name.ilike(search_pattern),
+                )
+            )
+
+        total = int(query.with_entities(func.count(GlobalModel.id)).scalar() or 0)
+        models = query.order_by(GlobalModel.name).offset(self.skip).limit(self.limit).all()
 
         # 一次性查询所有 GlobalModel 的 provider_count（优化 N+1 问题）
         # 用条件聚合同时获取总数和活跃数，减少一次 DB 往返
@@ -331,7 +338,7 @@ class AdminListGlobalModelsAdapter(AdminApiAdapter):
 
         return GlobalModelListResponse(
             models=model_responses,
-            total=len(models),
+            total=total,
         )
 
 
@@ -349,10 +356,9 @@ class AdminGetGlobalModelAdapter(AdminApiAdapter):
         global_model = GlobalModelService.get_global_model(context.db, self.global_model_id)
         stats = GlobalModelService.get_global_model_stats(context.db, self.global_model_id)
 
-        # 查询 provider_count 和 active_provider_count（与列表 API 一致）
-        count_row = (
+        # total_providers 已由 stats 提供，这里只查询活跃 provider 数量
+        active_count = (
             context.db.query(
-                func.count(func.distinct(Model.provider_id)),
                 func.count(
                     func.distinct(
                         case(
@@ -366,17 +372,17 @@ class AdminGetGlobalModelAdapter(AdminApiAdapter):
                             else_=None,
                         )
                     )
-                ),
+                )
             )
             .join(Provider, Model.provider_id == Provider.id)
             .filter(Model.global_model_id == global_model.id)
-            .first()
+            .scalar()
+            or 0
         )
-        total_count, active_count = count_row if count_row else (0, 0)
 
         response = GlobalModelResponse.model_validate(global_model)
-        response.provider_count = total_count
-        response.active_provider_count = active_count
+        response.provider_count = stats["total_providers"]
+        response.active_provider_count = int(active_count)
 
         return GlobalModelWithStats(
             **response.model_dump(),

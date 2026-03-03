@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
+from src.config.constants import CacheTTL
 from src.core.enums import ProviderBillingType
 from src.database import get_db
 from src.models.database import Provider
+from src.utils.cache_decorator import cache_result
 
 from .common import pipeline
 
@@ -20,6 +22,11 @@ router = APIRouter()
 
 
 class AdminQuotaUsageAdapter(AdminApiAdapter):
+    @cache_result(
+        key_prefix="admin:stats:providers:quota_usage",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         providers = (

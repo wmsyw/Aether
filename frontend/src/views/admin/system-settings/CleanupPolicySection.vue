@@ -64,7 +64,7 @@
           id="compressed-log-retention-days"
           :model-value="compressedLogRetentionDays"
           type="number"
-          placeholder="90"
+          placeholder="30"
           class="mt-1"
           @update:model-value="$emit('update:compressedLogRetentionDays', Number($event))"
         />
@@ -98,7 +98,7 @@
           for="log-retention-days"
           class="block text-sm font-medium"
         >
-          完整记录保留天数
+          请求记录保存天数
         </Label>
         <Input
           id="log-retention-days"

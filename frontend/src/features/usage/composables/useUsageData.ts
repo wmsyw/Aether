@@ -52,6 +52,8 @@ export function useUsageData(options: UseUsageDataOptions) {
 
   // 当前的日期范围（用于分页请求）
   const currentDateRange = ref<DateRangeParams | undefined>(undefined)
+  let loadStatsRequestId = 0
+  let loadRecordsRequestId = 0
 
   // 可用的筛选选项（从统计数据获取，而不是从记录中）
   const availableModels = ref<string[]>([])
@@ -69,6 +71,7 @@ export function useUsageData(options: UseUsageDataOptions) {
 
   // 加载统计数据（不加载记录）
   async function loadStats(dateRange?: DateRangeParams) {
+    const requestId = ++loadStatsRequestId
     isLoadingStats.value = true
     currentDateRange.value = dateRange
 
@@ -81,6 +84,10 @@ export function useUsageData(options: UseUsageDataOptions) {
           usageApi.getUsageByProvider(dateRange),
           usageApi.getUsageByApiFormat(dateRange)
         ])
+
+        if (requestId !== loadStatsRequestId) {
+          return
+        }
 
         // statsData may contain additional fields not declared in UsageStats
         const statsRaw = statsData as Record<string, unknown>
@@ -138,6 +145,9 @@ export function useUsageData(options: UseUsageDataOptions) {
       } else {
         // 用户页面
         const userData = await meApi.getUsage(dateRange)
+        if (requestId !== loadStatsRequestId) {
+          return
+        }
 
         stats.value = {
           total_requests: userData.total_requests || 0,
@@ -227,6 +237,9 @@ export function useUsageData(options: UseUsageDataOptions) {
           .sort((a, b) => b.request_count - a.request_count)
       }
     } catch (error: unknown) {
+      if (requestId !== loadStatsRequestId) {
+        return
+      }
       if (getErrorStatus(error) !== 403) {
         log.error('加载统计数据失败:', error)
       }
@@ -234,7 +247,9 @@ export function useUsageData(options: UseUsageDataOptions) {
       modelStats.value = []
       currentRecords.value = []
     } finally {
-      isLoadingStats.value = false
+      if (requestId === loadStatsRequestId) {
+        isLoadingStats.value = false
+      }
     }
   }
 
@@ -243,6 +258,7 @@ export function useUsageData(options: UseUsageDataOptions) {
     pagination: PaginationParams,
     filters?: FilterParams
   ): Promise<void> {
+    const requestId = ++loadRecordsRequestId
     isLoadingRecords.value = true
 
     try {
@@ -279,22 +295,33 @@ export function useUsageData(options: UseUsageDataOptions) {
         }
 
         const response = await usageApi.getAllUsageRecords(params)
+        if (requestId !== loadRecordsRequestId) {
+          return
+        }
         const nextRecords = (response.records || []) as UsageRecord[]
         currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = response.total || 0
       } else {
         // 用户页面：使用用户 API
         const userData = await meApi.getUsage(params)
+        if (requestId !== loadRecordsRequestId) {
+          return
+        }
         const nextRecords = (userData.records || []) as UsageRecord[]
         currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = userData.pagination?.total || currentRecords.value.length
       }
     } catch (error) {
+      if (requestId !== loadRecordsRequestId) {
+        return
+      }
       log.error('加载记录失败:', error)
       currentRecords.value = []
       totalRecords.value = 0
     } finally {
-      isLoadingRecords.value = false
+      if (requestId === loadRecordsRequestId) {
+        isLoadingRecords.value = false
+      }
     }
   }
 

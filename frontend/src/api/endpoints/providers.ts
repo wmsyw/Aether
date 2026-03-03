@@ -1,4 +1,5 @@
 import client from '../client'
+import { dedupedRequest } from '@/utils/cache'
 import type {
   ClaudeCodeAdvancedConfig,
   FailoverRulesConfig,
@@ -11,16 +12,20 @@ import type {
  * 获取 Providers 摘要（包含 Endpoints 统计）
  */
 export async function getProvidersSummary(): Promise<ProviderWithEndpointsSummary[]> {
-  const response = await client.get('/api/admin/providers/summary')
-  return response.data
+  return dedupedRequest('providers:summary', async () => {
+    const response = await client.get<ProviderWithEndpointsSummary[]>('/api/admin/providers/summary')
+    return response.data
+  })
 }
 
 /**
  * 获取单个 Provider 的详细信息
  */
 export async function getProvider(providerId: string): Promise<ProviderWithEndpointsSummary> {
-  const response = await client.get(`/api/admin/providers/${providerId}/summary`)
-  return response.data
+  return dedupedRequest(`providers:detail:${providerId}`, async () => {
+    const response = await client.get<ProviderWithEndpointsSummary>(`/api/admin/providers/${providerId}/summary`)
+    return response.data
+  })
 }
 
 /**
@@ -214,6 +219,8 @@ export interface ProviderMappingPreviewResponse {
 export async function getProviderMappingPreview(
   providerId: string
 ): Promise<ProviderMappingPreviewResponse> {
-  const response = await client.get(`/api/admin/providers/${providerId}/mapping-preview`)
-  return response.data
+  return dedupedRequest(`providers:mapping-preview:${providerId}`, async () => {
+    const response = await client.get<ProviderMappingPreviewResponse>(`/api/admin/providers/${providerId}/mapping-preview`)
+    return response.data
+  })
 }

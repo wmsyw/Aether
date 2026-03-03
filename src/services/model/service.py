@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -255,14 +255,15 @@ class ModelService:
 
         # 检查这是否是该 GlobalModel 的最后一个关联提供商
         if model.global_model_id:
-            other_implementations = (
-                db.query(Model)
+            other_implementations = int(
+                db.query(func.count(Model.id))
                 .filter(
                     Model.global_model_id == model.global_model_id,
                     Model.id != model_id,
                     Model.is_active == True,
                 )
-                .count()
+                .scalar()
+                or 0
             )
 
             if other_implementations == 0:

@@ -3,6 +3,7 @@
  */
 
 import api from './client'
+import { cachedRequest, buildCacheKey } from '@/utils/cache'
 
 export interface CacheStats {
   scheduler: string
@@ -314,8 +315,15 @@ export const cacheAnalysisApi = {
     user_id?: string
     include_user_info?: boolean
   }): Promise<IntervalTimelineResponse> {
-    const response = await api.get('/api/admin/usage/cache-affinity/interval-timeline', { params })
-    return response.data
+    const cacheKey = buildCacheKey('cache-affinity:interval-timeline', params as Record<string, unknown> | undefined)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await api.get('/api/admin/usage/cache-affinity/interval-timeline', { params })
+        return response.data
+      },
+      30000
+    )
   }
 }
 

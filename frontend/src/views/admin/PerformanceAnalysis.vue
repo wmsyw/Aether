@@ -91,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import Card from '@/components/ui/card.vue'
 import { LoadingState, TimeRangePicker } from '@/components/common'
 import { ErrorDistributionChart, PercentileChart } from '@/components/stats'
@@ -112,6 +112,12 @@ const errorLoading = ref(false)
 
 const providerStatus = ref<ProviderStatus[]>([])
 const providerLoading = ref(false)
+let percentilesRequestId = 0
+let errorsRequestId = 0
+let providersRequestId = 0
+let loadAllPromise: Promise<void> | null = null
+let hasPendingLoadAll = false
+let loadAllDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 function buildTimeRangeParams() {
   return {
@@ -124,31 +130,45 @@ function buildTimeRangeParams() {
 }
 
 async function loadPercentiles() {
+  const requestId = ++percentilesRequestId
   percentileLoading.value = true
   try {
-    percentiles.value = await adminApi.getPercentiles(buildTimeRangeParams())
+    const data = await adminApi.getPercentiles(buildTimeRangeParams())
+    if (requestId !== percentilesRequestId) return
+    percentiles.value = data
   } finally {
-    percentileLoading.value = false
+    if (requestId === percentilesRequestId) {
+      percentileLoading.value = false
+    }
   }
 }
 
 async function loadErrors() {
+  const requestId = ++errorsRequestId
   errorLoading.value = true
   try {
     const response = await adminApi.getErrorDistribution(buildTimeRangeParams())
+    if (requestId !== errorsRequestId) return
     errorDistribution.value = response.distribution
     errorTrend.value = response.trend
   } finally {
-    errorLoading.value = false
+    if (requestId === errorsRequestId) {
+      errorLoading.value = false
+    }
   }
 }
 
 async function loadProviders() {
+  const requestId = ++providersRequestId
   providerLoading.value = true
   try {
-    providerStatus.value = await dashboardApi.getProviderStatus()
+    const data = await dashboardApi.getProviderStatus()
+    if (requestId !== providersRequestId) return
+    providerStatus.value = data
   } finally {
-    providerLoading.value = false
+    if (requestId === providersRequestId) {
+      providerLoading.value = false
+    }
   }
 }
 
@@ -166,10 +186,47 @@ const errorTrendChartData = computed(() => ({
 }))
 
 async function loadAll() {
-  await Promise.all([loadPercentiles(), loadErrors(), loadProviders()])
+  if (loadAllPromise) {
+    hasPendingLoadAll = true
+    return loadAllPromise
+  }
+  loadAllPromise = Promise.all([loadPercentiles(), loadErrors(), loadProviders()])
+    .then(() => undefined)
+    .finally(() => {
+      loadAllPromise = null
+      if (hasPendingLoadAll) {
+        hasPendingLoadAll = false
+        void loadAll()
+      }
+    })
+  return loadAllPromise
 }
 
-watch(timeRange, loadAll, { deep: true })
+function scheduleLoadAll() {
+  if (loadAllDebounceTimer) {
+    clearTimeout(loadAllDebounceTimer)
+  }
+  loadAllDebounceTimer = setTimeout(() => {
+    loadAllDebounceTimer = null
+    void loadAll()
+  }, 120)
+}
 
-onMounted(loadAll)
+watch(timeRange, scheduleLoadAll, { deep: true })
+
+onMounted(() => {
+  void loadAll()
+})
+
+onUnmounted(() => {
+  if (loadAllDebounceTimer) {
+    clearTimeout(loadAllDebounceTimer)
+    loadAllDebounceTimer = null
+  }
+  hasPendingLoadAll = false
+  loadAllPromise = null
+  percentilesRequestId += 1
+  errorsRequestId += 1
+  providersRequestId += 1
+})
 </script>

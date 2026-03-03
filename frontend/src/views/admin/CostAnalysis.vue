@@ -72,7 +72,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import Card from '@/components/ui/card.vue'
 import { TimeRangePicker } from '@/components/common'
 import { CostForecastChart, QuotaProgressCard } from '@/components/stats'
@@ -93,6 +93,13 @@ const providerStats = ref<ProviderStatsItem[]>([])
 
 const forecastLoading = ref(false)
 const quotaLoading = ref(false)
+let forecastRequestId = 0
+let savingsRequestId = 0
+let quotaRequestId = 0
+let providerStatsRequestId = 0
+let loadAllPromise: Promise<void> | null = null
+let hasPendingLoadAll = false
+let loadAllDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 const forecastHistory = computed(() => forecast.value?.history || [])
 const forecastFuture = computed(() => forecast.value?.forecast || [])
@@ -108,40 +115,93 @@ function buildTimeRangeParams() {
 }
 
 async function loadForecast() {
+  const requestId = ++forecastRequestId
   forecastLoading.value = true
   try {
-    forecast.value = await adminApi.getCostForecast(buildTimeRangeParams())
+    const data = await adminApi.getCostForecast(buildTimeRangeParams())
+    if (requestId !== forecastRequestId) return
+    forecast.value = data
   } finally {
-    forecastLoading.value = false
+    if (requestId === forecastRequestId) {
+      forecastLoading.value = false
+    }
   }
 }
 
 async function loadSavings() {
-  costSavings.value = await adminApi.getCostSavings(buildTimeRangeParams())
+  const requestId = ++savingsRequestId
+  const data = await adminApi.getCostSavings(buildTimeRangeParams())
+  if (requestId !== savingsRequestId) return
+  costSavings.value = data
 }
 
 async function loadQuotaUsage() {
+  const requestId = ++quotaRequestId
   quotaLoading.value = true
   try {
     const response = await adminApi.getQuotaUsage()
+    if (requestId !== quotaRequestId) return
     quotaProviders.value = response.providers
   } finally {
-    quotaLoading.value = false
+    if (requestId === quotaRequestId) {
+      quotaLoading.value = false
+    }
   }
 }
 
 async function loadProviderStats() {
-  providerStats.value = await usageApi.getUsageByProvider({
+  const requestId = ++providerStatsRequestId
+  const stats = await usageApi.getUsageByProvider({
     ...buildTimeRangeParams(),
     limit: 8
   })
+  if (requestId !== providerStatsRequestId) return
+  providerStats.value = stats
 }
 
 async function loadAll() {
-  await Promise.all([loadForecast(), loadSavings(), loadQuotaUsage(), loadProviderStats()])
+  if (loadAllPromise) {
+    hasPendingLoadAll = true
+    return loadAllPromise
+  }
+  loadAllPromise = Promise.all([loadForecast(), loadSavings(), loadQuotaUsage(), loadProviderStats()])
+    .then(() => undefined)
+    .finally(() => {
+      loadAllPromise = null
+      if (hasPendingLoadAll) {
+        hasPendingLoadAll = false
+        void loadAll()
+      }
+    })
+  return loadAllPromise
 }
 
-watch(timeRange, loadAll, { deep: true })
+function scheduleLoadAll() {
+  if (loadAllDebounceTimer) {
+    clearTimeout(loadAllDebounceTimer)
+  }
+  loadAllDebounceTimer = setTimeout(() => {
+    loadAllDebounceTimer = null
+    void loadAll()
+  }, 120)
+}
 
-onMounted(loadAll)
+watch(timeRange, scheduleLoadAll, { deep: true })
+
+onMounted(() => {
+  void loadAll()
+})
+
+onUnmounted(() => {
+  if (loadAllDebounceTimer) {
+    clearTimeout(loadAllDebounceTimer)
+    loadAllDebounceTimer = null
+  }
+  hasPendingLoadAll = false
+  loadAllPromise = null
+  forecastRequestId += 1
+  savingsRequestId += 1
+  quotaRequestId += 1
+  providerStatsRequestId += 1
+})
 </script>

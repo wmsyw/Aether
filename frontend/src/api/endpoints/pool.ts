@@ -1,4 +1,5 @@
 import client from '../client'
+import { dedupedRequest } from '@/utils/cache'
 import type { AllowedModels, ProxyConfig } from './types/provider'
 
 export interface PoolKeyStatus {
@@ -175,16 +176,21 @@ export interface PoolBatchAction {
 }
 
 export async function getPoolOverview(): Promise<PoolOverviewResponse> {
-  const response = await client.get('/api/admin/pool/overview')
-  return response.data
+  return dedupedRequest('pool:overview', async () => {
+    const response = await client.get<PoolOverviewResponse>('/api/admin/pool/overview')
+    return response.data
+  })
 }
 
 export async function listPoolKeys(
   providerId: string,
   params: PoolKeysQuery = {},
 ): Promise<PoolKeysPageResponse> {
-  const response = await client.get(`/api/admin/pool/${providerId}/keys`, { params })
-  return response.data
+  const key = `pool:keys:${providerId}|${params.page ?? ''}|${params.page_size ?? ''}|${params.search ?? ''}|${params.status ?? ''}`
+  return dedupedRequest(key, async () => {
+    const response = await client.get<PoolKeysPageResponse>(`/api/admin/pool/${providerId}/keys`, { params })
+    return response.data
+  })
 }
 
 export async function batchActionPoolKeys(

@@ -987,6 +987,10 @@ const dailyTimeRange = ref<DateRangeParams>(getDateRangeFromPeriod('last7days'))
 // 统计周期
 const loadingDaily = ref(false)
 const loading = ref(false)
+let dailyStatsRequestId = 0
+let dailyStatsLoadPromise: Promise<void> | null = null
+let hasPendingDailyStatsLoad = false
+let dailyStatsDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 
 // 公告
@@ -1279,7 +1283,8 @@ onMounted(async () => {
   }
   await Promise.all([
     loadDashboardData(),
-    loadAnnouncements()
+    loadAnnouncements(),
+    loadDailyStats()
   ])
   await nextTick()
   setupTimelineResizeObserver()
@@ -1298,6 +1303,13 @@ onBeforeUnmount(() => {
   statsPanelObserver = null
   announcementsTimelineObserver?.disconnect()
   announcementsTimelineObserver = null
+  if (dailyStatsDebounceTimer) {
+    clearTimeout(dailyStatsDebounceTimer)
+    dailyStatsDebounceTimer = null
+  }
+  hasPendingDailyStatsLoad = false
+  dailyStatsLoadPromise = null
+  dailyStatsRequestId += 1
 })
 
 async function loadDashboardData() {
@@ -1326,22 +1338,48 @@ async function loadDashboardData() {
 }
 
 async function loadDailyStats() {
-  loadingDaily.value = true
-  try {
-    const response = await dashboardApi.getDailyStats(dailyTimeRange.value)
-    dailyStats.value = response.daily_stats
-    providerSummary.value = response.provider_summary || []
-  } catch {
-    dailyStats.value = []
-    providerSummary.value = []
-  } finally {
-    loadingDaily.value = false
+  if (dailyStatsLoadPromise) {
+    hasPendingDailyStatsLoad = true
+    return dailyStatsLoadPromise
   }
+  const requestId = ++dailyStatsRequestId
+  loadingDaily.value = true
+  dailyStatsLoadPromise = (async () => {
+    try {
+      const response = await dashboardApi.getDailyStats(dailyTimeRange.value)
+      if (requestId !== dailyStatsRequestId) return
+      dailyStats.value = response.daily_stats
+      providerSummary.value = response.provider_summary || []
+    } catch {
+      if (requestId !== dailyStatsRequestId) return
+      dailyStats.value = []
+      providerSummary.value = []
+    } finally {
+      if (requestId === dailyStatsRequestId) {
+        loadingDaily.value = false
+      }
+    }
+  })().finally(() => {
+    dailyStatsLoadPromise = null
+    if (hasPendingDailyStatsLoad) {
+      hasPendingDailyStatsLoad = false
+      void loadDailyStats()
+    }
+  })
+  return dailyStatsLoadPromise
 }
 
-watch(dailyTimeRange, async () => {
-  await loadDailyStats()
-}, { deep: true })
+function scheduleDailyStatsLoad() {
+  if (dailyStatsDebounceTimer) {
+    clearTimeout(dailyStatsDebounceTimer)
+  }
+  dailyStatsDebounceTimer = setTimeout(() => {
+    dailyStatsDebounceTimer = null
+    void loadDailyStats()
+  }, 120)
+}
+
+watch(dailyTimeRange, scheduleDailyStatsLoad, { deep: true })
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString)

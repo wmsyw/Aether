@@ -911,6 +911,8 @@ const showDetail = ref(false)
 const selectedTask = ref<AsyncTaskDetail | null>(null)
 const detailAutoRefresh = ref(false)
 let detailRefreshInterval: ReturnType<typeof setInterval> | null = null
+const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
+let overviewRefreshInFlight = false
 
 // 使用记录详情抽屉状态
 const usageDetailOpen = ref(false)
@@ -950,6 +952,16 @@ async function fetchStats() {
     stats.value = await asyncTasksApi.getStats()
   } catch (error) {
     log.error('Failed to fetch stats', error)
+  }
+}
+
+async function refreshOverview() {
+  if (overviewRefreshInFlight) return
+  overviewRefreshInFlight = true
+  try {
+    await Promise.all([fetchTasks(), fetchStats()])
+  } finally {
+    overviewRefreshInFlight = false
   }
 }
 
@@ -993,22 +1005,27 @@ function toggleDetailAutoRefresh() {
 
 // 开始详情自动刷新
 function startDetailAutoRefresh() {
+  if (!isPageVisible.value) return
   if (detailRefreshInterval) return
   // 立即刷新一次
   refreshTaskDetail()
   detailRefreshInterval = setInterval(() => {
-    if (selectedTask.value && showDetail.value) {
+    if (isPageVisible.value && selectedTask.value && showDetail.value) {
       refreshTaskDetail()
     }
   }, 5000)
 }
 
-// 停止详情自动刷新
-function stopDetailAutoRefresh() {
+function pauseDetailAutoRefresh() {
   if (detailRefreshInterval) {
     clearInterval(detailRefreshInterval)
     detailRefreshInterval = null
   }
+}
+
+// 停止详情自动刷新
+function stopDetailAutoRefresh() {
+  pauseDetailAutoRefresh()
   detailAutoRefresh.value = false
 }
 
@@ -1052,8 +1069,7 @@ async function cancelTask(task: AsyncTaskItem | AsyncTaskDetail) {
     toast({
       title: '任务已取消',
     })
-    fetchTasks()
-    fetchStats()
+    await refreshOverview()
     if (showDetail.value) {
       closeDetail()
     }
@@ -1222,11 +1238,11 @@ let autoRefreshInterval: ReturnType<typeof setInterval> | null = null
 const AUTO_REFRESH_INTERVAL = 5000 // 5秒
 
 function startAutoRefresh() {
+  if (!isPageVisible.value) return
   if (autoRefreshInterval) return
   autoRefreshInterval = setInterval(() => {
-    if (hasProcessingTasks.value && !loading.value) {
-      fetchTasks()
-      fetchStats()
+    if (isPageVisible.value && hasProcessingTasks.value && !loading.value) {
+      refreshOverview()
     }
   }, AUTO_REFRESH_INTERVAL)
 }
@@ -1240,19 +1256,35 @@ function stopAutoRefresh() {
 
 // 监听是否有进行中的任务，动态启停自动刷新
 watch(hasProcessingTasks, (has) => {
-  if (has) {
+  if (has && isPageVisible.value) {
     startAutoRefresh()
   } else {
     stopAutoRefresh()
   }
 }, { immediate: true })
 
+function handleVisibilityChange() {
+  isPageVisible.value = !document.hidden
+  if (!isPageVisible.value) {
+    stopAutoRefresh()
+    pauseDetailAutoRefresh()
+    return
+  }
+  if (hasProcessingTasks.value) {
+    startAutoRefresh()
+  }
+  if (detailAutoRefresh.value && selectedTask.value && showDetail.value) {
+    startDetailAutoRefresh()
+  }
+}
+
 onMounted(() => {
-  fetchTasks()
-  fetchStats()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  refreshOverview()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopAutoRefresh()
   stopDetailAutoRefresh()
   clearTimeout(filterTimeout)

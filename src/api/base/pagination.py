@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, TypeVar
 
+from sqlalchemy import func
 from sqlalchemy.orm import Query
 
 T = TypeVar("T")
@@ -22,7 +23,7 @@ def paginate_query(query: Query, limit: int, offset: int) -> tuple[int, list[T]]
     """
     对 SQLAlchemy 查询应用 limit/offset，并返回总数与结果列表。
     """
-    total = query.order_by(None).count()
+    total = int(query.order_by(None).with_entities(func.count()).scalar() or 0)
     records = query.offset(offset).limit(limit).all()
     return total, records
 
