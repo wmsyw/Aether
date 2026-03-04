@@ -9,11 +9,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.exceptions import (
     InvalidRequestException,
     NotFoundException,
@@ -25,6 +27,7 @@ from src.models.api import SystemSettingsRequest, SystemSettingsResponse
 from src.models.database import ApiKey, Provider, Usage, User
 from src.services.email.email_template import EmailTemplate
 from src.services.system.config import SystemConfigService
+from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/admin/system", tags=["Admin - System"])
 
@@ -824,16 +827,27 @@ class AdminDeleteSystemConfigAdapter(AdminApiAdapter):
 
 
 class AdminSystemStatsAdapter(AdminApiAdapter):
+    @cache_result(
+        key_prefix="admin:system:stats",
+        ttl=CacheTTL.DASHBOARD_STATS,
+        user_specific=False,
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
-        total_users = db.query(User).count()
-        active_users = db.query(User).filter(User.is_active.is_(True)).count()
-        total_providers = db.query(Provider).count()
-        active_providers = (
-            db.query(Provider).filter(Provider.is_active.is_(True)).count()
-        )
-        total_api_keys = db.query(ApiKey).count()
-        total_requests = db.query(Usage).count()
+        user_stats = db.query(
+            func.count(User.id).label("total"),
+            func.sum(case((User.is_active.is_(True), 1), else_=0)).label("active"),
+        ).first()
+        provider_stats = db.query(
+            func.count(Provider.id).label("total"),
+            func.sum(case((Provider.is_active.is_(True), 1), else_=0)).label("active"),
+        ).first()
+        total_api_keys = int(db.query(func.count(ApiKey.id)).scalar() or 0)
+        total_requests = int(db.query(func.count(Usage.id)).scalar() or 0)
+        total_users = int(user_stats.total or 0) if user_stats else 0
+        active_users = int(user_stats.active or 0) if user_stats else 0
+        total_providers = int(provider_stats.total or 0) if provider_stats else 0
+        active_providers = int(provider_stats.active or 0) if provider_stats else 0
 
         return {
             "users": {"total": total_users, "active": active_users},
@@ -853,21 +867,28 @@ class AdminTriggerCleanupAdapter(AdminApiAdapter):
         db = context.db
 
         # 获取清理前的统计信息
-        total_before = db.query(Usage).count()
+        total_before = int(db.query(func.count(Usage.id)).scalar() or 0)
         with_body_before = (
-            db.query(Usage)
-            .filter(
-                (Usage.request_body.isnot(None)) | (Usage.response_body.isnot(None))
+            int(
+                db.query(func.count(Usage.id))
+                .filter(
+                    (Usage.request_body.isnot(None))
+                    | (Usage.response_body.isnot(None))
+                )
+                .scalar()
+                or 0
             )
-            .count()
         )
         with_headers_before = (
-            db.query(Usage)
-            .filter(
-                (Usage.request_headers.isnot(None))
-                | (Usage.response_headers.isnot(None))
+            int(
+                db.query(func.count(Usage.id))
+                .filter(
+                    (Usage.request_headers.isnot(None))
+                    | (Usage.response_headers.isnot(None))
+                )
+                .scalar()
+                or 0
             )
-            .count()
         )
 
         # 触发清理
@@ -875,21 +896,28 @@ class AdminTriggerCleanupAdapter(AdminApiAdapter):
         await maintenance_scheduler._perform_cleanup()
 
         # 获取清理后的统计信息
-        total_after = db.query(Usage).count()
+        total_after = int(db.query(func.count(Usage.id)).scalar() or 0)
         with_body_after = (
-            db.query(Usage)
-            .filter(
-                (Usage.request_body.isnot(None)) | (Usage.response_body.isnot(None))
+            int(
+                db.query(func.count(Usage.id))
+                .filter(
+                    (Usage.request_body.isnot(None))
+                    | (Usage.response_body.isnot(None))
+                )
+                .scalar()
+                or 0
             )
-            .count()
         )
         with_headers_after = (
-            db.query(Usage)
-            .filter(
-                (Usage.request_headers.isnot(None))
-                | (Usage.response_headers.isnot(None))
+            int(
+                db.query(func.count(Usage.id))
+                .filter(
+                    (Usage.request_headers.isnot(None))
+                    | (Usage.response_headers.isnot(None))
+                )
+                .scalar()
+                or 0
             )
-            .count()
         )
 
         return {
@@ -2839,11 +2867,11 @@ class AdminPurgeConfigAdapter(AdminApiAdapter):
         db = context.db
 
         # 统计
-        providers_count = db.query(Provider).count()
-        endpoints_count = db.query(ProviderEndpoint).count()
-        keys_count = db.query(ProviderAPIKey).count()
-        models_count = db.query(Model).count()
-        global_models_count = db.query(GlobalModel).count()
+        providers_count = int(db.query(func.count(Provider.id)).scalar() or 0)
+        endpoints_count = int(db.query(func.count(ProviderEndpoint.id)).scalar() or 0)
+        keys_count = int(db.query(func.count(ProviderAPIKey.id)).scalar() or 0)
+        models_count = int(db.query(func.count(Model.id)).scalar() or 0)
+        global_models_count = int(db.query(func.count(GlobalModel.id)).scalar() or 0)
 
         # VideoTask 的 provider_id/endpoint_id/key_id 无 ondelete，置 NULL 保留任务记录
         db.query(VideoTask).filter(
@@ -2911,7 +2939,9 @@ class AdminPurgeUsersAdapter(AdminApiAdapter):
             )
 
             # 统计关联 API Keys 数量（DB 级别 CASCADE 会随 User 自动删除）
-            keys_count = db.query(ApiKey).filter(ApiKey.user_id.in_(user_ids)).count()
+            keys_count = int(
+                db.query(func.count(ApiKey.id)).filter(ApiKey.user_id.in_(user_ids)).scalar() or 0
+            )
 
             # 将使用记录的 user_id 置空（保留记录）
             db.query(Usage).filter(Usage.user_id.in_(user_ids)).update(
@@ -3009,9 +3039,9 @@ class AdminPurgeUsageAdapter(AdminApiAdapter):
 
         db = context.db
 
-        usage_count = db.query(Usage).count()
-        candidates_count = db.query(RequestCandidate).count()
-        usage_counts_count = db.query(UserModelUsageCount).count()
+        usage_count = int(db.query(func.count(Usage.id)).scalar() or 0)
+        candidates_count = int(db.query(func.count(RequestCandidate.id)).scalar() or 0)
+        usage_counts_count = int(db.query(func.count(UserModelUsageCount.id)).scalar() or 0)
 
         # 清空使用记录
         db.query(RequestCandidate).delete()
@@ -3038,7 +3068,7 @@ class AdminPurgeAuditLogsAdapter(AdminApiAdapter):
 
         db = context.db
 
-        count = db.query(AuditLog).count()
+        count = int(db.query(func.count(AuditLog.id)).scalar() or 0)
         db.query(AuditLog).delete()
         db.commit()
 
@@ -3056,8 +3086,8 @@ class AdminPurgeRequestBodiesAdapter(AdminApiAdapter):
         db = context.db
 
         # 统计有 body 的记录数
-        with_body = (
-            db.query(Usage)
+        with_body = int(
+            db.query(func.count(Usage.id))
             .filter(
                 (Usage.request_body.isnot(None))
                 | (Usage.response_body.isnot(None))
@@ -3068,7 +3098,8 @@ class AdminPurgeRequestBodiesAdapter(AdminApiAdapter):
                 | (Usage.provider_request_body_compressed.isnot(None))
                 | (Usage.client_response_body_compressed.isnot(None))
             )
-            .count()
+            .scalar()
+            or 0
         )
 
         # 批量清空所有 body 字段

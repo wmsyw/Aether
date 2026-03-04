@@ -152,7 +152,6 @@ _ENDPOINT_DEFINITIONS: dict[tuple[ApiFamily, EndpointKind], EndpointDefinition] 
         # compact endpoint is non-streaming by design.
         stream_in_body=False,
         data_format_id="openai_responses",
-        default_body_rules=_CODEX_DEFAULT_BODY_RULES,
     ),
     (ApiFamily.OPENAI, EndpointKind.VIDEO): EndpointDefinition(
         api_family=ApiFamily.OPENAI,

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.core.exceptions import ForbiddenException, NotFoundException
@@ -79,15 +79,15 @@ class AnnouncementService:
                 or_(Announcement.end_time == None, Announcement.end_time >= now),
             )
 
+        # 分页
+        total = int(query.with_entities(func.count(Announcement.id)).scalar() or 0)
+
         # 排序：置顶优先，然后按优先级和创建时间
         query = query.order_by(
             Announcement.is_pinned.desc(),
             Announcement.priority.desc(),
             Announcement.created_at.desc(),
         )
-
-        # 分页
-        total = query.count()
         announcements = query.offset(offset).limit(limit).all()
 
         # 获取已读状态

@@ -372,7 +372,7 @@ function getVideoPricingTooltip(model: Model): string {
 // 获取状态指示灯样式
 function getStatusIndicatorClass(model: Model): string {
   if (!model.is_active) {
-    // 已停用 - 灰色
+    // 停用 - 灰色
     return 'bg-gray-400 dark:bg-gray-600'
   }
   if (model.is_available) {
@@ -386,7 +386,7 @@ function getStatusIndicatorClass(model: Model): string {
 // 获取状态提示文本
 function getStatusTitle(model: Model): string {
   if (!model.is_active) {
-    return '已停用'
+    return '停用'
   }
   if (model.is_available) {
     return '活跃且可用'

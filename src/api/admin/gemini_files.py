@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from src.clients.http_client import HTTPClientPool
 from src.core.crypto import crypto_service
@@ -106,26 +106,45 @@ async def list_file_mappings(
     now = datetime.now(timezone.utc)
 
     query = db.query(GeminiFileMapping)
+    count_query = db.query(func.count(GeminiFileMapping.id))
 
     # 过滤过期
     if not include_expired:
-        query = query.filter(GeminiFileMapping.expires_at > now)
+        active_filter = GeminiFileMapping.expires_at > now
+        query = query.filter(active_filter)
+        count_query = count_query.filter(active_filter)
 
     # 搜索
     if search:
         search_pattern = f"%{search}%"
-        query = query.filter(
-            (GeminiFileMapping.file_name.ilike(search_pattern))
-            | (GeminiFileMapping.display_name.ilike(search_pattern))
+        search_filter = (GeminiFileMapping.file_name.ilike(search_pattern)) | (
+            GeminiFileMapping.display_name.ilike(search_pattern)
         )
+        query = query.filter(search_filter)
+        count_query = count_query.filter(search_filter)
 
     # 总数
-    total = query.count()
+    total = int(count_query.scalar() or 0)
 
     # 分页
     offset = (page - 1) * page_size
     mappings = (
-        query.order_by(GeminiFileMapping.created_at.desc()).offset(offset).limit(page_size).all()
+        query.options(
+            load_only(
+                GeminiFileMapping.id,
+                GeminiFileMapping.file_name,
+                GeminiFileMapping.key_id,
+                GeminiFileMapping.user_id,
+                GeminiFileMapping.display_name,
+                GeminiFileMapping.mime_type,
+                GeminiFileMapping.created_at,
+                GeminiFileMapping.expires_at,
+            )
+        )
+        .order_by(GeminiFileMapping.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
     )
 
     # 获取关联的 Key 和 User 信息
@@ -134,12 +153,22 @@ async def list_file_mappings(
 
     keys_map = {}
     if key_ids:
-        keys = db.query(ProviderAPIKey).filter(ProviderAPIKey.id.in_(key_ids)).all()
+        keys = (
+            db.query(ProviderAPIKey)
+            .options(load_only(ProviderAPIKey.id, ProviderAPIKey.name))
+            .filter(ProviderAPIKey.id.in_(key_ids))
+            .all()
+        )
         keys_map = {str(k.id): k.name for k in keys}
 
     users_map = {}
     if user_ids:
-        users = db.query(User).filter(User.id.in_(user_ids)).all()
+        users = (
+            db.query(User)
+            .options(load_only(User.id, User.username))
+            .filter(User.id.in_(user_ids))
+            .all()
+        )
         users_map = {str(u.id): u.username for u in users}
 
     items = []
@@ -199,9 +228,11 @@ async def get_file_mapping_stats(
     by_mime_type = {(mt or "unknown"): count for mt, count in mime_stats}
 
     # 有 gemini_files 能力的 Key 数量
-    keys = db.query(ProviderAPIKey).filter(ProviderAPIKey.is_active.is_(True)).all()
+    keys = db.query(ProviderAPIKey.capabilities).filter(ProviderAPIKey.is_active.is_(True)).all()
     capable_keys_count = sum(
-        1 for key in keys if key.capabilities and key.capabilities.get("gemini_files", False)
+        1
+        for (capabilities,) in keys
+        if isinstance(capabilities, dict) and capabilities.get("gemini_files", False)
     )
 
     return FileMappingStatsResponse(
@@ -294,15 +325,28 @@ async def list_capable_keys(
     """获取所有具有 gemini_files 能力的 Key 列表"""
     from src.models.database import Provider
 
-    keys = db.query(ProviderAPIKey).filter(ProviderAPIKey.is_active.is_(True)).all()
+    key_rows = (
+        db.query(
+            ProviderAPIKey.id,
+            ProviderAPIKey.name,
+            ProviderAPIKey.provider_id,
+            ProviderAPIKey.capabilities,
+        )
+        .filter(ProviderAPIKey.is_active.is_(True))
+        .all()
+    )
     capable_keys = [
-        key for key in keys if key.capabilities and key.capabilities.get("gemini_files", False)
+        key
+        for key in key_rows
+        if isinstance(key.capabilities, dict) and key.capabilities.get("gemini_files", False)
     ]
 
     # 获取 Provider 名称
-    provider_ids = {key.provider_id for key in capable_keys}
-    providers = db.query(Provider).filter(Provider.id.in_(provider_ids)).all()
-    provider_map = {str(p.id): p.name for p in providers}
+    provider_ids = {key.provider_id for key in capable_keys if key.provider_id}
+    provider_map: dict[str, str] = {}
+    if provider_ids:
+        providers = db.query(Provider.id, Provider.name).filter(Provider.id.in_(provider_ids)).all()
+        provider_map = {str(provider_id): provider_name for provider_id, provider_name in providers}
 
     return [
         CapableKeyResponse(
@@ -454,6 +498,15 @@ async def upload_file(
     with create_session() as db:
         keys = (
             db.query(ProviderAPIKey)
+            .options(
+                load_only(
+                    ProviderAPIKey.id,
+                    ProviderAPIKey.name,
+                    ProviderAPIKey.api_key,
+                    ProviderAPIKey.capabilities,
+                    ProviderAPIKey.is_active,
+                )
+            )
             .filter(
                 ProviderAPIKey.id.in_(key_id_list),
                 ProviderAPIKey.is_active.is_(True),
@@ -483,6 +536,7 @@ async def upload_file(
             now = datetime.now(timezone.utc)
             existing = (
                 db.query(GeminiFileMapping)
+                .options(load_only(GeminiFileMapping.key_id, GeminiFileMapping.file_name))
                 .filter(
                     GeminiFileMapping.source_hash == source_hash,
                     GeminiFileMapping.key_id.in_(capable_key_ids),

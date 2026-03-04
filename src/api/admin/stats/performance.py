@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
+from src.config.constants import CacheTTL
 from src.database import get_db
 from src.models.database import StatsDaily
 from src.services.system.stats_aggregator import StatsAggregatorService
 from src.services.system.time_range import TimeRangeParams
+from src.utils.cache_decorator import cache_result
 
 from .common import _apply_admin_default_range, _build_time_range_params, pipeline
 
@@ -24,6 +26,18 @@ class AdminPercentilesAdapter(AdminApiAdapter):
     def __init__(self, time_range: TimeRangeParams | None) -> None:
         self.time_range = _apply_admin_default_range(time_range)
 
+    @cache_result(
+        key_prefix="admin:stats:performance:percentiles",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+        vary_by=[
+            "time_range.start_date",
+            "time_range.end_date",
+            "time_range.preset",
+            "time_range.timezone",
+            "time_range.tz_offset_minutes",
+        ],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         if not self.time_range:
             return []

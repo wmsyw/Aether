@@ -32,7 +32,7 @@
                   variant="secondary"
                   class="text-xs"
                 >
-                  已停用
+                  停用
                 </Badge>
               </div>
               <div class="flex items-center gap-1.5">

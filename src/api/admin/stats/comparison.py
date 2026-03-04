@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
+from src.config.constants import CacheTTL
 from src.database import get_db
 from src.services.system.stats_aggregator import AggregatedStats, StatsFilter, query_stats_hybrid
 from src.services.system.time_range import TimeRangeParams
+from src.utils.cache_decorator import cache_result
 
 from .common import pipeline
 
@@ -34,6 +36,18 @@ class AdminComparisonAdapter(AdminApiAdapter):
         self.timezone_name = timezone_name
         self.tz_offset_minutes = tz_offset_minutes
 
+    @cache_result(
+        key_prefix="admin:stats:comparison",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+        vary_by=[
+            "current_start",
+            "current_end",
+            "comparison_type",
+            "timezone_name",
+            "tz_offset_minutes",
+        ],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         if self.current_start > self.current_end:
             raise HTTPException(status_code=400, detail="current_start must be <= current_end")

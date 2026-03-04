@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -366,7 +367,7 @@ class AdminListStandaloneKeysAdapter(AdminApiAdapter):
         if self.is_active is not None:
             query = query.filter(ApiKey.is_active == self.is_active)
 
-        total = query.count()
+        total = int(query.with_entities(func.count(ApiKey.id)).scalar() or 0)
         api_keys = (
             query.order_by(ApiKey.created_at.desc()).offset(self.skip).limit(self.limit).all()
         )

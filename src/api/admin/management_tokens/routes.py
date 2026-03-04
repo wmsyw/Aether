@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -190,7 +191,7 @@ class AdminListManagementTokensAdapter(AdminManagementTokenApiAdapter):
         if self.is_active is not None:
             query = query.filter(ManagementToken.is_active == self.is_active)
 
-        total = query.count()
+        total = int(query.with_entities(func.count(ManagementToken.id)).scalar() or 0)
         tokens = (
             query.order_by(ManagementToken.created_at.desc())
             .offset(self.skip)

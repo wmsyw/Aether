@@ -133,7 +133,7 @@
         :variant="provider.is_active ? 'success' : 'secondary'"
         class="text-xs"
       >
-        {{ provider.is_active ? '活跃' : '已停用' }}
+        {{ provider.is_active ? '活跃' : '停用' }}
       </Badge>
     </TableCell>
     <TableCell

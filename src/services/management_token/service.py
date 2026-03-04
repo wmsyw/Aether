@@ -6,6 +6,7 @@ import ipaddress
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -159,7 +160,12 @@ class ManagementTokenService:
             ValueError: 如果名称已存在或超过数量限制
         """
         # 检查用户 Token 数量限制
-        token_count = db.query(ManagementToken).filter(ManagementToken.user_id == user_id).count()
+        token_count = int(
+            db.query(func.count(ManagementToken.id))
+            .filter(ManagementToken.user_id == user_id)
+            .scalar()
+            or 0
+        )
         max_tokens = config.management_token_max_per_user
         if token_count >= max_tokens:
             raise ValueError(f"已达到 Token 数量上限（{max_tokens}）")
@@ -245,7 +251,7 @@ class ManagementTokenService:
         if is_active is not None:
             query = query.filter(ManagementToken.is_active == is_active)
 
-        total = query.count()
+        total = int(query.with_entities(func.count(ManagementToken.id)).scalar() or 0)
         tokens = query.order_by(ManagementToken.created_at.desc()).offset(skip).limit(limit).all()
 
         return tokens, total

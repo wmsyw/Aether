@@ -378,57 +378,14 @@
                 </div>
               </Card>
 
-              <!-- 号池调度摘要 -->
-              <Card v-if="poolSummary">
-                <div class="p-3 sm:p-4">
-                  <div class="text-xs text-muted-foreground mb-2 font-medium">
-                    号池调度
-                  </div>
-                  <div class="flex items-center gap-3 flex-wrap text-sm">
-                    <span class="font-mono">
-                      {{ poolSummary.total_keys }} 候选
-                    </span>
-                    <span class="text-muted-foreground">|</span>
-                    <span class="font-mono">
-                      {{ poolSummary.attempted }} 尝试
-                    </span>
-                    <template v-if="poolSummary.skipped_cooldown > 0">
-                      <span class="text-muted-foreground">|</span>
-                      <span class="font-mono text-amber-600 dark:text-amber-400">
-                        {{ poolSummary.skipped_cooldown }} 冷却跳过
-                      </span>
-                    </template>
-                    <template v-if="poolSummary.skipped_cost > 0">
-                      <span class="text-muted-foreground">|</span>
-                      <span class="font-mono text-orange-600 dark:text-orange-400">
-                        {{ poolSummary.skipped_cost }} 成本跳过
-                      </span>
-                    </template>
-                    <template v-if="poolSummary.sticky_session">
-                      <span class="text-muted-foreground">|</span>
-                      <Badge
-                        variant="outline"
-                        class="text-[10px] px-1.5 py-0 h-4"
-                      >
-                        粘性会话
-                      </Badge>
-                    </template>
-                    <template v-if="poolSummary.success_reason">
-                      <span class="text-muted-foreground">|</span>
-                      <span class="text-xs text-muted-foreground">
-                        {{ poolSummary.success_reason }}
-                      </span>
-                    </template>
-                  </div>
-                </div>
-              </Card>
-
               <!-- 请求链路追踪卡片 -->
               <div v-if="detail.request_id || detail.id">
                 <HorizontalRequestTimeline
                   ref="timelineRef"
                   :request-id="detail.request_id || detail.id"
                   :override-status-code="detail.status_code"
+                  :request-api-format="detail.api_format || null"
+                  :request-metadata="traceRequestMetadata"
                 />
               </div>
 
@@ -552,14 +509,10 @@
                         </template>
 
                         <!-- 区域3：常驻按钮（展开/收缩、复制） -->
-                        <div
-                          v-if="activeTab !== 'metadata'"
-                          class="w-px h-3.5 bg-border mx-0.5"
-                        />
+                        <div class="w-px h-3.5 bg-border mx-0.5" />
 
                         <!-- 展开/收缩 -->
                         <button
-                          v-if="activeTab !== 'metadata'"
                           :title="currentExpandDepth === 0 ? '展开全部' : '收缩全部'"
                           class="p-1 rounded transition-colors"
                           :class="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')
@@ -580,7 +533,6 @@
 
                         <!-- 复制 -->
                         <button
-                          v-if="activeTab !== 'metadata'"
                           :title="copiedStates[activeTab] ? '已复制' : '复制'"
                           class="p-1 rounded transition-colors"
                           :class="viewMode === 'compare'
@@ -705,7 +657,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import Button from '@/components/ui/button.vue'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useClipboard } from '@/composables/useClipboard'
@@ -764,10 +716,13 @@ const historicalPricing = ref<{
 } | null>(null)
 const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const autoRefreshing = ref(false)
+const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
 const curlCopying = ref(false)
 const curlCopied = ref(false)
 const replayDialogOpen = ref(false)
 const AUTO_REFRESH_INTERVAL_MS = 1000
+let loadDetailRequestId = 0
+let loadDetailInFlight = false
 
 // 监听标签页切换
 watch(activeTab, (newTab) => {
@@ -786,11 +741,10 @@ const isDark = computed(() => {
   return document.documentElement.classList.contains('dark')
 })
 
-// 号池调度摘要
-const poolSummary = computed(() => {
-  const ps = detail.value?.metadata?.pool_summary as Record<string, unknown> | undefined
-  if (!ps || !ps.enabled) return null
-  return ps
+const traceRequestMetadata = computed<Record<string, unknown> | null>(() => {
+  const meta = detail.value?.metadata
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null
+  return meta as Record<string, unknown>
 })
 
 // 检测是否有提供商请求头
@@ -1146,13 +1100,20 @@ watch(() => props.isOpen, async (isOpen) => {
 })
 
 async function loadDetail(id: string, silent = false) {
+  if (silent && loadDetailInFlight) {
+    return
+  }
+  const requestId = ++loadDetailRequestId
+  loadDetailInFlight = true
   if (!silent) {
     loading.value = true
     historicalPricing.value = null
   }
   error.value = null
   try {
-    detail.value = await dashboardApi.getRequestDetail(id)
+    const response = await dashboardApi.getRequestDetail(id)
+    if (requestId !== loadDetailRequestId) return
+    detail.value = response
 
     // 首次加载时选择默认 tab
     if (!silent) {
@@ -1194,13 +1155,17 @@ async function loadDetail(id: string, silent = false) {
       }
     }
   } catch (err) {
+    if (requestId !== loadDetailRequestId) return
     log.error('Failed to load request detail:', err)
     if (!silent) {
       error.value = '加载请求详情失败'
     }
   } finally {
-    if (!silent) {
+    if (!silent && requestId === loadDetailRequestId) {
       loading.value = false
+    }
+    if (requestId === loadDetailRequestId) {
+      loadDetailInFlight = false
     }
   }
 }
@@ -1224,12 +1189,17 @@ function stopAutoRefresh() {
 }
 
 function startAutoRefresh() {
-  if (autoRefreshTimer.value || !props.requestId || !props.isOpen) {
+  if (autoRefreshTimer.value) {
+    autoRefreshing.value = true
+    return
+  }
+  if (!isPageVisible.value || !props.requestId || !props.isOpen) {
+    autoRefreshing.value = false
     return
   }
   autoRefreshing.value = true
   autoRefreshTimer.value = setInterval(async () => {
-    if (!props.requestId || !props.isOpen) {
+    if (!isPageVisible.value || !props.requestId || !props.isOpen) {
       stopAutoRefresh()
       return
     }
@@ -1267,8 +1237,26 @@ async function refreshDetail() {
   startAutoRefresh()
 }
 
+function handleVisibilityChange() {
+  isPageVisible.value = !document.hidden
+  if (!isPageVisible.value) {
+    stopAutoRefresh()
+    return
+  }
+  if (props.isOpen && props.requestId && !isRequestCompleted()) {
+    startAutoRefresh()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopAutoRefresh()
+  loadDetailRequestId += 1
+  loadDetailInFlight = false
 })
 
 function formatDateTime(dateStr: string | null | undefined): string {

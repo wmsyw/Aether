@@ -385,7 +385,6 @@ const isDemo = computed(() => isDemoMode())
 
 const showAuthError = ref(false)
 const mobileMenuOpen = ref(false)
-let authCheckInterval: number | null = null
 
 // 更新检查相关
 const showUpdateDialog = ref(false)
@@ -437,12 +436,35 @@ async function checkForUpdate() {
   }
 }
 
+function syncAuthNotice() {
+  authStore.syncToken()
+  showAuthError.value = !!authStore.user && !authStore.token
+}
+
+function handleStorageChange(event: StorageEvent) {
+  if (event.key === null || event.key === 'access_token') {
+    syncAuthNotice()
+  }
+}
+
+function handleVisibilityChange() {
+  if (!document.hidden) {
+    syncAuthNotice()
+  }
+}
+
+watch(
+  () => [authStore.user, authStore.token] as const,
+  () => {
+    showAuthError.value = !!authStore.user && !authStore.token
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
-  authCheckInterval = setInterval(() => {
-    if (authStore.user && !authStore.token) {
-      showAuthError.value = true
-    }
-  }, 5000)
+  window.addEventListener('storage', handleStorageChange)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  syncAuthNotice()
 
   // 管理员预加载模块状态（路由守卫会按需加载，这里提前加载以避免菜单闪烁）
   if (authStore.user?.role === 'admin' && !moduleStore.loaded && !moduleStore.loading) {
@@ -456,10 +478,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (authCheckInterval) {
-    clearInterval(authCheckInterval)
-    authCheckInterval = null
-  }
+  window.removeEventListener('storage', handleStorageChange)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 function handleRelogin() {
@@ -556,8 +576,8 @@ const navigation = computed(() => {
       items: [
         { name: '用户管理', href: '/admin/users', icon: Users },
         { name: '提供商', href: '/admin/providers', icon: FolderTree },
-        { name: '号池管理', href: '/admin/pool', icon: Database },
         { name: '模型管理', href: '/admin/models', icon: Layers },
+        { name: '号池管理', href: '/admin/pool', icon: Database },
         { name: '独立密钥', href: '/admin/keys', icon: Key },
         { name: '异步任务', href: '/admin/async-tasks', icon: Zap },
         { name: '使用记录', href: '/admin/usage', icon: BarChart3 },

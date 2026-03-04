@@ -1,4 +1,5 @@
 import client from '../client'
+import { dedupedRequest, buildCacheKey } from '@/utils/cache'
 import type {
   GlobalModelCreate,
   GlobalModelUpdate,
@@ -27,16 +28,21 @@ export async function getGlobalModels(params?: {
   is_active?: boolean
   search?: string
 }): Promise<GlobalModelListResponse> {
-  const response = await client.get('/api/admin/models/global', { params })
-  return response.data
+  const key = buildCacheKey('global-models:list', params as Record<string, unknown> | undefined)
+  return dedupedRequest(key, async () => {
+    const response = await client.get('/api/admin/models/global', { params })
+    return response.data
+  })
 }
 
 /**
  * 获取单个 GlobalModel 详情
  */
 export async function getGlobalModel(id: string): Promise<GlobalModelWithStats> {
-  const response = await client.get(`/api/admin/models/global/${id}`)
-  return response.data
+  return dedupedRequest(`global-models:detail:${id}`, async () => {
+    const response = await client.get(`/api/admin/models/global/${id}`)
+    return response.data
+  })
 }
 
 /**
@@ -112,10 +118,12 @@ export async function getGlobalModelProviders(globalModelId: string): Promise<{
   providers: ModelCatalogProviderDetail[]
   total: number
 }> {
-  const response = await client.get(
-    `/api/admin/models/global/${globalModelId}/providers`
-  )
-  return response.data
+  return dedupedRequest(`global-models:providers:${globalModelId}`, async () => {
+    const response = await client.get(
+      `/api/admin/models/global/${globalModelId}/providers`
+    )
+    return response.data
+  })
 }
 
 /**

@@ -338,8 +338,8 @@ class AuditService:
         )
 
         # 获取最近的可疑活动
-        recent_suspicious = (
-            db.query(AuditLog)
+        recent_suspicious = int(
+            db.query(func.count(AuditLog.id))
             .filter(
                 AuditLog.user_id == user_id,
                 AuditLog.event_type.in_(
@@ -350,7 +350,8 @@ class AuditService:
                 ),
                 AuditLog.created_at >= cutoff_time,
             )
-            .count()
+            .scalar()
+            or 0
         )
 
         return {

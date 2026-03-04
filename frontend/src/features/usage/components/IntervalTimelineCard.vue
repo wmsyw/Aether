@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import Card from '@/components/ui/card.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import { cacheAnalysisApi, type IntervalTimelineResponse } from '@/api/cache'
@@ -73,6 +73,10 @@ const props = withDefaults(defineProps<{
 const loading = ref(false)
 const timelineData = ref<IntervalTimelineResponse | null>(null)
 const primaryColor = ref('201, 100, 66')  // 默认主题色
+let loadRequestId = 0
+
+const ADMIN_TIMELINE_LIMIT = 1500
+const USER_TIMELINE_LIMIT = 1200
 
 // 获取主题色
 function getPrimaryColor(): string {
@@ -86,7 +90,7 @@ function getPrimaryColor(): string {
 
 onMounted(() => {
   primaryColor.value = getPrimaryColor()
-  loadData()
+  void loadData()
 })
 
 // 预定义的颜色列表（用于区分不同用户/模型）
@@ -278,35 +282,44 @@ const chartOptions = computed<ChartOptions<'scatter'>>(() => ({
 }))
 
 async function loadData() {
+  const requestId = ++loadRequestId
   loading.value = true
   try {
+    const limit = props.isAdmin ? ADMIN_TIMELINE_LIMIT : USER_TIMELINE_LIMIT
     if (props.isAdmin) {
       // 管理员：获取所有用户数据（按比例采样）
-      timelineData.value = await cacheAnalysisApi.getIntervalTimeline({
+      const data = await cacheAnalysisApi.getIntervalTimeline({
         hours: props.hours,
         include_user_info: true,
-        limit: 10000,
+        limit,
       })
+      if (requestId !== loadRequestId) return
+      timelineData.value = data
     } else {
       // 普通用户：获取自己的数据
-      timelineData.value = await meApi.getIntervalTimeline({
+      const data = await meApi.getIntervalTimeline({
         hours: props.hours,
-        limit: 5000,
+        limit,
       })
+      if (requestId !== loadRequestId) return
+      timelineData.value = data
     }
   } catch (error) {
+    if (requestId !== loadRequestId) return
     log.error('加载请求间隔时间线失败:', error)
     timelineData.value = null
   } finally {
-    loading.value = false
+    if (requestId === loadRequestId) {
+      loading.value = false
+    }
   }
 }
 
-watch(() => props.hours, () => {
-  loadData()
+watch([() => props.hours, () => props.isAdmin], () => {
+  void loadData()
 })
 
-watch(() => props.isAdmin, () => {
-  loadData()
+onBeforeUnmount(() => {
+  loadRequestId++
 })
 </script>

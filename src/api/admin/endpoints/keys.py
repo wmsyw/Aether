@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -349,10 +350,15 @@ CODEX_WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 # ========== Kiro Quota Refresh API ==========
 
 
+class RefreshProviderQuotaRequest(BaseModel):
+    key_ids: list[str] | None = Field(default=None, description="仅刷新指定 Key 列表（可选）")
+
+
 @router.post("/providers/{provider_id}/refresh-quota")
 async def refresh_provider_quota(
     provider_id: str,
     request: Request,
+    payload: RefreshProviderQuotaRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
     """
@@ -365,13 +371,18 @@ async def refresh_provider_quota(
 
     **路径参数**:
     - `provider_id`: Provider ID
+    **请求体**（可选）:
+    - `key_ids`: 仅刷新指定 Key 列表，不传时刷新所有活跃 Key
 
     **返回字段**:
     - `success`: 成功刷新的 Key 数量
     - `failed`: 失败的 Key 数量
     - `results`: 每个 Key 的刷新结果
     """
-    adapter = AdminRefreshProviderQuotaAdapter(provider_id=provider_id)
+    adapter = AdminRefreshProviderQuotaAdapter(
+        provider_id=provider_id,
+        key_ids=payload.key_ids if payload else None,
+    )
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
@@ -380,10 +391,12 @@ class AdminRefreshProviderQuotaAdapter(AdminApiAdapter):
     """刷新 Provider 所有 Keys 的限额信息"""
 
     provider_id: str
+    key_ids: list[str] | None = None
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         return await refresh_provider_quota_for_provider(
             db=context.db,
             provider_id=self.provider_id,
             codex_wham_usage_url=CODEX_WHAM_USAGE_URL,
+            key_ids=self.key_ids,
         )

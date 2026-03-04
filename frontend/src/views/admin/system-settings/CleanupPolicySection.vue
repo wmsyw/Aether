@@ -64,7 +64,7 @@
           id="compressed-log-retention-days"
           :model-value="compressedLogRetentionDays"
           type="number"
-          placeholder="90"
+          placeholder="30"
           class="mt-1"
           @update:model-value="$emit('update:compressedLogRetentionDays', Number($event))"
         />
@@ -98,7 +98,7 @@
           for="log-retention-days"
           class="block text-sm font-medium"
         >
-          完整记录保留天数
+          请求记录保存天数
         </Label>
         <Input
           id="log-retention-days"
@@ -164,7 +164,8 @@
         <p>2. <strong>压缩日志阶段</strong>: body 字段被压缩存储，节省空间</p>
         <p>3. <strong>统计阶段</strong>: 仅保留 tokens、成本等统计信息</p>
         <p>4. <strong>归档删除</strong>: 超过保留期限后完全删除记录</p>
-        <p>5. <strong>审计日志</strong>: 独立清理，记录用户登录、操作等安全事件</p>
+        <p>5. <strong>候选记录</strong>: 与详细记录同步清理请求候选记录（request_candidates）</p>
+        <p>6. <strong>审计日志</strong>: 独立清理，记录用户登录、操作等安全事件</p>
       </div>
     </div>
   </CardSection>

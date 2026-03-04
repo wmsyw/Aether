@@ -389,7 +389,7 @@
             <div class="flex justify-between">
               <span class="text-muted-foreground">账户状态</span>
               <span :class="profile?.is_active ? 'text-success' : 'text-destructive'">
-                {{ profile?.is_active ? '活跃' : '已停用' }}
+                {{ profile?.is_active ? '活跃' : '停用' }}
               </span>
             </div>
             <div class="flex justify-between">

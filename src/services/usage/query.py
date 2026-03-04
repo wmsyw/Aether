@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
@@ -239,6 +239,21 @@ class UsageQueryMixin:
             func.sum(Usage.total_tokens).label("total_tokens"),
             func.sum(Usage.total_cost_usd).label("total_cost_usd"),
             func.avg(Usage.response_time_ms).label("avg_response_time"),
+            func.sum(
+                case(
+                    (
+                        (Usage.status_code == 200) & Usage.response_time_ms.isnot(None),
+                        Usage.response_time_ms,
+                    ),
+                    else_=0,
+                )
+            ).label("success_response_time_sum"),
+            func.sum(
+                case(
+                    ((Usage.status_code == 200) & Usage.response_time_ms.isnot(None), 1),
+                    else_=0,
+                )
+            ).label("success_response_time_count"),
         )
 
         # 过滤掉 pending/streaming 状态的请求（与上方明细查询一致）
@@ -268,6 +283,8 @@ class UsageQueryMixin:
                 "avg_response_time_ms": (
                     float(row.avg_response_time) if row.avg_response_time else 0
                 ),
+                "success_response_time_sum_ms": float(row.success_response_time_sum or 0.0),
+                "success_response_time_count": int(row.success_response_time_count or 0),
             }
             for row in summary
         ]

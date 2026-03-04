@@ -101,6 +101,7 @@ async def refresh_provider_quota_for_provider(
     db: Session,
     provider_id: str,
     codex_wham_usage_url: str,
+    key_ids: list[str] | None = None,
 ) -> dict:
     """刷新 Provider 限额信息（惰性导入实现）。"""
     from src.services.provider_keys.key_quota_service import (
@@ -111,4 +112,5 @@ async def refresh_provider_quota_for_provider(
         db=db,
         provider_id=provider_id,
         codex_wham_usage_url=codex_wham_usage_url,
+        key_ids=key_ids,
     )

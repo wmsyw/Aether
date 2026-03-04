@@ -302,10 +302,12 @@ class Usage(Base):
     __table_args__ = (
         # Composite indexes for common query patterns (analytics / list pages)
         Index("idx_usage_user_created", "user_id", "created_at"),
+        Index("idx_usage_status_user_created", "status", "user_id", "created_at"),
         Index("idx_usage_apikey_created", "api_key_id", "created_at"),
         Index("idx_usage_provider_model_created", "provider_name", "model", "created_at"),
         Index("idx_usage_provider_created", "provider_name", "created_at"),
         Index("idx_usage_model_created", "model", "created_at"),
+        Index("idx_usage_provider_key", "provider_id", "provider_api_key_id"),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)

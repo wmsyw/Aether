@@ -197,8 +197,12 @@ export interface RefreshQuotaResult {
   }>
 }
 
-export async function refreshProviderQuota(providerId: string): Promise<RefreshQuotaResult> {
-  const response = await client.post(`/api/admin/endpoints/providers/${providerId}/refresh-quota`)
+export async function refreshProviderQuota(
+  providerId: string,
+  keyIds?: string[],
+): Promise<RefreshQuotaResult> {
+  const body = keyIds && keyIds.length > 0 ? { key_ids: keyIds } : undefined
+  const response = await client.post(`/api/admin/endpoints/providers/${providerId}/refresh-quota`, body)
   return response.data
 }
 

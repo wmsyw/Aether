@@ -116,8 +116,8 @@ class SystemConfigService:
             "description": "详细日志保留天数，超过此天数后压缩 request_body 和 response_body 到压缩字段",
         },
         "compressed_log_retention_days": {
-            "value": 90,
-            "description": "压缩日志保留天数，超过此天数后删除压缩的 body 字段（保留headers和统计）",
+            "value": 30,
+            "description": "压缩记录保留天数，超过此天数后删除压缩的 body 字段（保留headers和统计）",
         },
         "header_retention_days": {
             "value": 90,
@@ -125,7 +125,7 @@ class SystemConfigService:
         },
         "log_retention_days": {
             "value": 365,
-            "description": "完整日志保留天数，超过此天数后删除整条记录（保留核心统计）",
+            "description": "请求记录保存天数，超过此天数后删除整条使用记录",
         },
         "enable_auto_cleanup": {
             "value": True,
@@ -207,6 +207,10 @@ class SystemConfigService:
         "audit_log_retention_days": {
             "value": 30,
             "description": "审计日志保留天数，超过此天数的审计日志将被自动清理",
+        },
+        "enable_db_maintenance": {
+            "value": True,
+            "description": "是否启用数据库表维护任务（定期 VACUUM ANALYZE 防止表和索引膨胀）",
         },
         # 系统代理
         "system_proxy_node_id": {

@@ -983,7 +983,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
 
     @cache_result(
         key_prefix="admin:usage:records",
-        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        ttl=3,  # 使用记录页强调实时性，避免 15s 缓存导致列表滞后
         user_specific=False,
         vary_by=[
             "start_date",
@@ -2674,7 +2674,7 @@ class CacheHitAnalysisAdapter(AdminApiAdapter):
 async def get_interval_timeline(
     request: Request,
     hours: int = Query(24, ge=1, le=720, description="分析最近多少小时的数据"),
-    limit: int = Query(10000, ge=100, le=50000, description="最大返回数据点数量"),
+    limit: int = Query(3000, ge=100, le=50000, description="最大返回数据点数量"),
     user_id: str | None = Query(None, description="指定用户 ID"),
     include_user_info: bool = Query(
         False, description="是否包含用户信息（用于管理员多用户视图）"
@@ -2717,6 +2717,12 @@ class IntervalTimelineAdapter(AdminApiAdapter):
         self.user_id = user_id
         self.include_user_info = include_user_info
 
+    @cache_result(
+        key_prefix="admin:usage:interval_timeline",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+        vary_by=["hours", "limit", "user_id", "include_user_info"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 

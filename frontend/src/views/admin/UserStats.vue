@@ -144,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Card, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui'
 import LineChart from '@/components/charts/LineChart.vue'
 import { LoadingState, TimeRangePicker } from '@/components/common'
@@ -184,6 +184,15 @@ const summaryLoading = ref(false)
 const series = ref<TimeSeriesItem[]>([])
 const comparisonSeries = ref<TimeSeriesItem[]>([])
 const seriesLoading = ref(false)
+let leaderboardRequestId = 0
+let summaryRequestId = 0
+let seriesRequestId = 0
+let leaderboardLoadPromise: Promise<void> | null = null
+let hasPendingLeaderboardLoad = false
+let leaderboardDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let userPanelsLoadPromise: Promise<void> | null = null
+let hasPendingUserPanelsLoad = false
+let userPanelsDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 function buildTimeRangeParams() {
   return {
@@ -204,6 +213,12 @@ async function loadUsers() {
 }
 
 async function loadLeaderboard() {
+  if (leaderboardLoadPromise) {
+    hasPendingLeaderboardLoad = true
+    return leaderboardLoadPromise
+  }
+  leaderboardLoadPromise = (async () => {
+  const requestId = ++leaderboardRequestId
   leaderboardLoading.value = true
   try {
     const response = await adminApi.getLeaderboardUsers({
@@ -211,44 +226,88 @@ async function loadLeaderboard() {
       metric: metric.value,
       limit: 10
     })
+    if (requestId !== leaderboardRequestId) return
     leaderboard.value = response.items
   } finally {
-    leaderboardLoading.value = false
+    if (requestId === leaderboardRequestId) {
+      leaderboardLoading.value = false
+    }
   }
+  })().finally(() => {
+    leaderboardLoadPromise = null
+    if (hasPendingLeaderboardLoad) {
+      hasPendingLeaderboardLoad = false
+      void loadLeaderboard()
+    }
+  })
+  return leaderboardLoadPromise
 }
 
 async function loadSummary() {
   if (!selectedUserId.value) return
+  const requestId = ++summaryRequestId
   summaryLoading.value = true
   try {
-    userSummary.value = await usageApi.getUsageStats({
+    const summary = await usageApi.getUsageStats({
       ...buildTimeRangeParams(),
       user_id: selectedUserId.value
     })
+    if (requestId !== summaryRequestId) return
+    userSummary.value = summary
   } finally {
-    summaryLoading.value = false
+    if (requestId === summaryRequestId) {
+      summaryLoading.value = false
+    }
   }
 }
 
 async function loadSeries() {
   if (!selectedUserId.value) return
+  const requestId = ++seriesRequestId
   seriesLoading.value = true
   try {
-    series.value = await adminApi.getTimeSeries({
+    const baseParams = {
       ...buildTimeRangeParams(),
       user_id: selectedUserId.value
-    })
-
-    comparisonSeries.value = []
-    if (compareUserId.value && compareUserId.value !== '__none__') {
-      comparisonSeries.value = await adminApi.getTimeSeries({
+    }
+    const shouldCompare = Boolean(compareUserId.value && compareUserId.value !== '__none__')
+    const comparePromise: Promise<TimeSeriesItem[]> = shouldCompare
+      ? adminApi.getTimeSeries({
         ...buildTimeRangeParams(),
         user_id: compareUserId.value
       })
-    }
+      : Promise.resolve([])
+
+    const [primarySeries, compareSeries] = await Promise.all([
+      adminApi.getTimeSeries(baseParams),
+      comparePromise
+    ])
+
+    if (requestId !== seriesRequestId) return
+    series.value = primarySeries
+    comparisonSeries.value = compareSeries
   } finally {
-    seriesLoading.value = false
+    if (requestId === seriesRequestId) {
+      seriesLoading.value = false
+    }
   }
+}
+
+async function loadUserPanels() {
+  if (userPanelsLoadPromise) {
+    hasPendingUserPanelsLoad = true
+    return userPanelsLoadPromise
+  }
+  userPanelsLoadPromise = Promise.all([loadSummary(), loadSeries()])
+    .then(() => undefined)
+    .finally(() => {
+      userPanelsLoadPromise = null
+      if (hasPendingUserPanelsLoad) {
+        hasPendingUserPanelsLoad = false
+        void loadUserPanels()
+      }
+    })
+  return userPanelsLoadPromise
 }
 
 const seriesChartData = computed(() => ({
@@ -284,16 +343,52 @@ const comparisonChartData = computed(() => ({
   ]
 }))
 
-watch([timeRange, metric], loadLeaderboard, { deep: true })
-watch([timeRange, selectedUserId, compareUserId], () => {
-  loadSummary()
-  loadSeries()
-}, { deep: true })
+function scheduleLeaderboardLoad() {
+  if (leaderboardDebounceTimer) {
+    clearTimeout(leaderboardDebounceTimer)
+  }
+  leaderboardDebounceTimer = setTimeout(() => {
+    leaderboardDebounceTimer = null
+    void loadLeaderboard()
+  }, 120)
+}
+
+function scheduleUserPanelsLoad() {
+  if (userPanelsDebounceTimer) {
+    clearTimeout(userPanelsDebounceTimer)
+  }
+  userPanelsDebounceTimer = setTimeout(() => {
+    userPanelsDebounceTimer = null
+    void loadUserPanels()
+  }, 120)
+}
+
+watch([timeRange, metric], scheduleLeaderboardLoad, { deep: true })
+watch([timeRange, selectedUserId, compareUserId], scheduleUserPanelsLoad, { deep: true })
 
 onMounted(async () => {
   await loadUsers()
-  await loadLeaderboard()
-  await loadSummary()
-  await loadSeries()
+  await Promise.all([
+    loadLeaderboard(),
+    loadUserPanels()
+  ])
+})
+
+onUnmounted(() => {
+  if (leaderboardDebounceTimer) {
+    clearTimeout(leaderboardDebounceTimer)
+    leaderboardDebounceTimer = null
+  }
+  if (userPanelsDebounceTimer) {
+    clearTimeout(userPanelsDebounceTimer)
+    userPanelsDebounceTimer = null
+  }
+  hasPendingLeaderboardLoad = false
+  hasPendingUserPanelsLoad = false
+  leaderboardLoadPromise = null
+  userPanelsLoadPromise = null
+  leaderboardRequestId += 1
+  summaryRequestId += 1
+  seriesRequestId += 1
 })
 </script>

@@ -1,4 +1,5 @@
 import apiClient from './client'
+import { cachedRequest, buildCacheKey } from '@/utils/cache'
 
 // LDAP 配置导出结构
 export interface LDAPConfigExport {
@@ -743,10 +744,17 @@ export const adminApi = {
     include_inactive?: boolean
     exclude_admin?: boolean
   }): Promise<LeaderboardResponse> {
-    const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/users', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:leaderboard:users', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/users', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
   async getLeaderboardApiKeys(params?: {
@@ -764,10 +772,17 @@ export const adminApi = {
     include_inactive?: boolean
     exclude_admin?: boolean
   }): Promise<LeaderboardResponse> {
-    const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/api-keys', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:leaderboard:api-keys', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/api-keys', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
   async getLeaderboardModels(params?: {
@@ -783,10 +798,17 @@ export const adminApi = {
     provider_name?: string
     model?: string
   }): Promise<LeaderboardResponse> {
-    const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/models', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:leaderboard:models', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<LeaderboardResponse>('/api/admin/stats/leaderboard/models', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
   async getCostForecast(params?: {
@@ -798,10 +820,17 @@ export const adminApi = {
     days?: number
     forecast_days?: number
   }): Promise<CostForecastResponse> {
-    const response = await apiClient.get<CostForecastResponse>('/api/admin/stats/cost/forecast', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:cost:forecast', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<CostForecastResponse>('/api/admin/stats/cost/forecast', {
+          params
+        })
+        return response.data
+      },
+      30 * 1000
+    )
   },
 
   async getCostSavings(params?: {
@@ -813,15 +842,28 @@ export const adminApi = {
     provider_name?: string
     model?: string
   }): Promise<CostSavingsResponse> {
-    const response = await apiClient.get<CostSavingsResponse>('/api/admin/stats/cost/savings', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:cost:savings', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<CostSavingsResponse>('/api/admin/stats/cost/savings', {
+          params
+        })
+        return response.data
+      },
+      30 * 1000
+    )
   },
 
   async getQuotaUsage(): Promise<QuotaUsageResponse> {
-    const response = await apiClient.get<QuotaUsageResponse>('/api/admin/stats/providers/quota-usage')
-    return response.data
+    return cachedRequest(
+      'admin:stats:providers:quota-usage',
+      async () => {
+        const response = await apiClient.get<QuotaUsageResponse>('/api/admin/stats/providers/quota-usage')
+        return response.data
+      },
+      30 * 1000
+    )
   },
 
   async getPercentiles(params?: {
@@ -831,10 +873,17 @@ export const adminApi = {
     timezone?: string
     tz_offset_minutes?: number
   }): Promise<PercentileItem[]> {
-    const response = await apiClient.get<PercentileItem[]>('/api/admin/stats/performance/percentiles', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:performance:percentiles', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<PercentileItem[]>('/api/admin/stats/performance/percentiles', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
   async getErrorDistribution(params?: {
@@ -844,10 +893,17 @@ export const adminApi = {
     timezone?: string
     tz_offset_minutes?: number
   }): Promise<ErrorDistributionResponse> {
-    const response = await apiClient.get<ErrorDistributionResponse>('/api/admin/stats/errors/distribution', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:errors:distribution', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<ErrorDistributionResponse>('/api/admin/stats/errors/distribution', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
   async getComparison(params: {
@@ -882,8 +938,15 @@ export const adminApi = {
     model?: string
     provider_name?: string
   }): Promise<Array<Record<string, unknown>>> {
-    const response = await apiClient.get<Array<Record<string, unknown>>>('/api/admin/stats/time-series', { params })
-    return response.data
+    const cacheKey = buildCacheKey('admin:stats:time-series', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<Array<Record<string, unknown>>>('/api/admin/stats/time-series', { params })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
 }

@@ -7,13 +7,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
-from src.api.base.pagination import PaginationMeta, build_pagination_payload, paginate_query
+from src.api.base.pagination import PaginationMeta, build_pagination_payload
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.logger import logger
 from src.database import get_db
 from src.models.database import (
@@ -26,6 +27,7 @@ from src.models.database import (
 from src.models.database import User as DBUser
 from src.services.health.monitor import HealthMonitor
 from src.services.system.audit import audit_service
+from src.utils.cache_decorator import cache_result
 from src.utils.database_helpers import escape_like_pattern
 
 router = APIRouter(prefix="/api/admin/monitoring", tags=["Admin - Monitoring"])
@@ -223,9 +225,25 @@ class AdminGetAuditLogsAdapter(AdminApiAdapter):
     # 查看审计日志本身不应该产生审计记录，避免刷新页面时产生大量无意义的日志
     audit_log_enabled: bool = False
 
+    @cache_result(
+        key_prefix="admin:monitoring:audit-logs",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+        vary_by=["username", "event_type", "days", "limit", "offset"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         cutoff_time = datetime.now(timezone.utc) - timedelta(days=self.days)
+
+        count_query = db.query(func.count(AuditLog.id)).filter(AuditLog.created_at >= cutoff_time)
+        if self.username:
+            escaped = escape_like_pattern(self.username)
+            count_query = count_query.outerjoin(DBUser, AuditLog.user_id == DBUser.id).filter(
+                DBUser.username.ilike(f"%{escaped}%", escape="\\")
+            )
+        if self.event_type:
+            count_query = count_query.filter(AuditLog.event_type == self.event_type)
+        total = int(count_query.scalar() or 0)
 
         base_query = (
             db.query(AuditLog, DBUser)
@@ -238,8 +256,12 @@ class AdminGetAuditLogsAdapter(AdminApiAdapter):
         if self.event_type:
             base_query = base_query.filter(AuditLog.event_type == self.event_type)
 
-        ordered_query = base_query.order_by(AuditLog.created_at.desc())
-        total, logs_with_users = paginate_query(ordered_query, self.limit, self.offset)
+        logs_with_users = (
+            base_query.order_by(AuditLog.created_at.desc())
+            .offset(self.offset)
+            .limit(self.limit)
+            .all()
+        )
 
         items = [
             {
@@ -287,39 +309,51 @@ class AdminGetAuditLogsAdapter(AdminApiAdapter):
 
 
 class AdminSystemStatusAdapter(AdminApiAdapter):
+    @cache_result(
+        key_prefix="admin:monitoring:system-status",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
-        total_users = db.query(func.count(DBUser.id)).scalar()
-        active_users = db.query(func.count(DBUser.id)).filter(DBUser.is_active.is_(True)).scalar()
+        user_stats = db.query(
+            func.count(DBUser.id).label("total"),
+            func.sum(case((DBUser.is_active.is_(True), 1), else_=0)).label("active"),
+        ).first()
+        total_users = int((user_stats.total if user_stats else 0) or 0)
+        active_users = int((user_stats.active if user_stats else 0) or 0)
 
-        total_providers = db.query(func.count(Provider.id)).scalar()
-        active_providers = (
-            db.query(func.count(Provider.id)).filter(Provider.is_active.is_(True)).scalar()
-        )
+        provider_stats = db.query(
+            func.count(Provider.id).label("total"),
+            func.sum(case((Provider.is_active.is_(True), 1), else_=0)).label("active"),
+        ).first()
+        total_providers = int((provider_stats.total if provider_stats else 0) or 0)
+        active_providers = int((provider_stats.active if provider_stats else 0) or 0)
 
-        total_api_keys = db.query(func.count(ApiKey.id)).scalar()
-        active_api_keys = (
-            db.query(func.count(ApiKey.id)).filter(ApiKey.is_active.is_(True)).scalar()
-        )
+        api_key_stats = db.query(
+            func.count(ApiKey.id).label("total"),
+            func.sum(case((ApiKey.is_active.is_(True), 1), else_=0)).label("active"),
+        ).first()
+        total_api_keys = int((api_key_stats.total if api_key_stats else 0) or 0)
+        active_api_keys = int((api_key_stats.active if api_key_stats else 0) or 0)
 
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_requests = (
-            db.query(func.count(Usage.id)).filter(Usage.created_at >= today_start).scalar()
-        )
-        today_tokens = (
-            db.query(func.sum(Usage.total_tokens)).filter(Usage.created_at >= today_start).scalar()
-            or 0
-        )
-        today_cost = (
-            db.query(func.sum(Usage.total_cost_usd))
+        today_stats = (
+            db.query(
+                func.count(Usage.id).label("requests"),
+                func.coalesce(func.sum(Usage.total_tokens), 0).label("tokens"),
+                func.coalesce(func.sum(Usage.total_cost_usd), 0.0).label("cost"),
+            )
             .filter(Usage.created_at >= today_start)
-            .scalar()
-            or 0
+            .first()
         )
+        today_requests = int((today_stats.requests if today_stats else 0) or 0)
+        today_tokens = int((today_stats.tokens if today_stats else 0) or 0)
+        today_cost = float((today_stats.cost if today_stats else 0.0) or 0.0)
 
         recent_errors = (
-            db.query(AuditLog)
+            db.query(func.count(AuditLog.id))
             .filter(
                 AuditLog.event_type.in_(
                     [
@@ -329,20 +363,21 @@ class AdminSystemStatusAdapter(AdminApiAdapter):
                 ),
                 AuditLog.created_at >= datetime.now(timezone.utc) - timedelta(hours=1),
             )
-            .count()
+            .scalar()
+            or 0
         )
 
         context.add_audit_metadata(
             action="system_status_snapshot",
-            total_users=int(total_users or 0),
-            active_users=int(active_users or 0),
-            total_providers=int(total_providers or 0),
-            active_providers=int(active_providers or 0),
-            total_api_keys=int(total_api_keys or 0),
-            active_api_keys=int(active_api_keys or 0),
-            today_requests=int(today_requests or 0),
-            today_tokens=int(today_tokens or 0),
-            today_cost=float(today_cost or 0.0),
+            total_users=total_users,
+            active_users=active_users,
+            total_providers=total_providers,
+            active_providers=active_providers,
+            total_api_keys=total_api_keys,
+            active_api_keys=active_api_keys,
+            today_requests=today_requests,
+            today_tokens=today_tokens,
+            today_cost=today_cost,
             recent_errors=int(recent_errors or 0),
         )
 

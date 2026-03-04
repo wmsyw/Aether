@@ -147,7 +147,33 @@ async def test_refresh_provider_quota_no_active_keys_returns_empty() -> None:
         "failed": 0,
         "total": 0,
         "results": [],
-        "message": "没有活跃的 Key",
+        "message": "没有可刷新的 Key",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_provider_quota_empty_key_ids_returns_empty() -> None:
+    provider = SimpleNamespace(
+        id="p1",
+        provider_type=ProviderType.CODEX,
+        endpoints=[SimpleNamespace(api_format="openai:cli", is_active=True)],
+    )
+    key = SimpleNamespace(id="k1", name="K1", upstream_metadata={})
+    db = _FakeDB(provider=provider, keys=[key])
+
+    result = await refresh_provider_quota_for_provider(
+        db=cast(Any, db),
+        provider_id="p1",
+        codex_wham_usage_url="https://example.test/wham/usage",
+        key_ids=[],
+    )
+
+    assert result == {
+        "success": 0,
+        "failed": 0,
+        "total": 0,
+        "results": [],
+        "message": "未提供可刷新的 Key",
     }
 
 

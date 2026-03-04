@@ -47,6 +47,7 @@ const clearingRowAffinityKey = ref<string | null>(null)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const currentTime = ref(Math.floor(Date.now() / 1000))
+const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
 
 // ==================== 模型映射缓存 ====================
 
@@ -236,6 +237,7 @@ function handlePageChange() {
 // ==================== 定时器管理 ====================
 
 function startCountdown() {
+  if (!isPageVisible.value) return
   if (countdownTimer) clearInterval(countdownTimer)
 
   countdownTimer = setInterval(() => {
@@ -258,6 +260,16 @@ function stopCountdown() {
     clearInterval(countdownTimer)
     countdownTimer = null
   }
+}
+
+function handleVisibilityChange() {
+  isPageVisible.value = !document.hidden
+  if (!isPageVisible.value) {
+    stopCountdown()
+    return
+  }
+  currentTime.value = Math.floor(Date.now() / 1000)
+  startCountdown()
 }
 
 // ==================== 模型映射缓存方法 ====================
@@ -431,6 +443,7 @@ watch(tableKeyword, (value) => {
 })
 
 onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   fetchCacheStats()
   fetchCacheConfig()
   fetchAffinityList()
@@ -441,6 +454,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   stopCountdown()
 })

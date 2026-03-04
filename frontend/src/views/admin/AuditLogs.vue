@@ -406,7 +406,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
   Card,
   Button,
@@ -462,6 +462,7 @@ interface AuditLog {
 const loading = ref(false)
 const logs = ref<AuditLog[]>([])
 const selectedLog = ref<AuditLog | null>(null)
+let logsRequestId = 0
 
 // 搜索查询
 const searchQuery = ref('')
@@ -480,9 +481,9 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const totalRecords = ref(0)
 
-let loadTimeout: number
+let loadTimeout: number | null = null
 const debouncedLoadLogs = () => {
-  clearTimeout(loadTimeout)
+  if (loadTimeout !== null) clearTimeout(loadTimeout)
   loadTimeout = window.setTimeout(resetAndLoad, 500)
 }
 
@@ -493,6 +494,7 @@ const hasActiveFilters = computed(() => {
 })
 
 async function loadLogs() {
+  const requestId = ++logsRequestId
   loading.value = true
   try {
     const offset = (currentPage.value - 1) * pageSize.value
@@ -506,14 +508,18 @@ async function loadLogs() {
     }
 
     const data = await auditApi.getAuditLogs(filterParams)
+    if (requestId !== logsRequestId) return
     logs.value = data.items || []
     totalRecords.value = data.meta?.total ?? logs.value.length
   } catch (error) {
+    if (requestId !== logsRequestId) return
     log.error('获取审计日志失败:', error)
     logs.value = []
     totalRecords.value = 0
   } finally {
-    loading.value = false
+    if (requestId === logsRequestId) {
+      loading.value = false
+    }
   }
 }
 
@@ -710,5 +716,13 @@ function formatDateTime(dateStr: string): string {
 
 onMounted(() => {
   loadLogs()
+})
+
+onBeforeUnmount(() => {
+  if (loadTimeout !== null) {
+    clearTimeout(loadTimeout)
+    loadTimeout = null
+  }
+  logsRequestId += 1
 })
 </script>

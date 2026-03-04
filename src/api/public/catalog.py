@@ -11,12 +11,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.logger import logger
 from src.database import get_db
 from src.models.api import (
@@ -40,6 +41,7 @@ from src.models.endpoint_models import (
 )
 from src.services.health.endpoint import EndpointHealthService
 from src.services.system.config import SystemConfigService
+from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/public", tags=["System Catalog"])
 pipeline = ApiRequestPipeline()
@@ -300,33 +302,84 @@ class PublicProvidersAdapter(PublicApiAdapter):
     skip: int
     limit: int
 
+    @cache_result(
+        key_prefix="public:catalog:providers",
+        ttl=CacheTTL.PROVIDER,
+        user_specific=False,
+        vary_by=["is_active", "skip", "limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求提供商列表")
-        query = db.query(Provider)
+        query = db.query(Provider).options(
+            load_only(
+                Provider.id,
+                Provider.name,
+                Provider.description,
+                Provider.is_active,
+                Provider.provider_priority,
+            )
+        )
         if self.is_active is not None:
             query = query.filter(Provider.is_active == self.is_active)
         else:
             query = query.filter(Provider.is_active.is_(True))
 
         providers = query.offset(self.skip).limit(self.limit).all()
+        provider_ids = [provider.id for provider in providers]
+
+        models_count_map: dict[str, int] = {}
+        active_models_count_map: dict[str, int] = {}
+        endpoints_count_map: dict[str, int] = {}
+        active_endpoints_count_map: dict[str, int] = {}
+        if provider_ids:
+            model_counts = (
+                db.query(Model.provider_id, func.count(Model.id))
+                .filter(Model.provider_id.in_(provider_ids))
+                .group_by(Model.provider_id)
+                .all()
+            )
+            models_count_map = {provider_id: int(count) for provider_id, count in model_counts}
+
+            active_model_counts = (
+                db.query(Model.provider_id, func.count(Model.id))
+                .filter(Model.provider_id.in_(provider_ids), Model.is_active.is_(True))
+                .group_by(Model.provider_id)
+                .all()
+            )
+            active_models_count_map = {
+                provider_id: int(count) for provider_id, count in active_model_counts
+            }
+
+            endpoint_counts = (
+                db.query(ProviderEndpoint.provider_id, func.count(ProviderEndpoint.id))
+                .filter(ProviderEndpoint.provider_id.in_(provider_ids))
+                .group_by(ProviderEndpoint.provider_id)
+                .all()
+            )
+            endpoints_count_map = {
+                provider_id: int(count) for provider_id, count in endpoint_counts
+            }
+
+            active_endpoint_counts = (
+                db.query(ProviderEndpoint.provider_id, func.count(ProviderEndpoint.id))
+                .filter(
+                    ProviderEndpoint.provider_id.in_(provider_ids),
+                    ProviderEndpoint.is_active.is_(True),
+                )
+                .group_by(ProviderEndpoint.provider_id)
+                .all()
+            )
+            active_endpoints_count_map = {
+                provider_id: int(count) for provider_id, count in active_endpoint_counts
+            }
+
         result = []
         for provider in providers:
-            models_count = db.query(Model).filter(Model.provider_id == provider.id).count()
-            active_models_count = (
-                db.query(Model)
-                .filter(
-                    and_(
-                        Model.provider_id == provider.id,
-                        Model.is_active.is_(True),
-                    )
-                )
-                .count()
-            )
-            endpoints_count = len(provider.endpoints) if provider.endpoints else 0
-            active_endpoints_count = (
-                sum(1 for ep in provider.endpoints if ep.is_active) if provider.endpoints else 0
-            )
+            models_count = models_count_map.get(provider.id, 0)
+            active_models_count = active_models_count_map.get(provider.id, 0)
+            endpoints_count = endpoints_count_map.get(provider.id, 0)
+            active_endpoints_count = active_endpoints_count_map.get(provider.id, 0)
             provider_data = PublicProviderResponse(
                 id=provider.id,
                 name=provider.name,
@@ -351,6 +404,12 @@ class PublicModelsAdapter(PublicApiAdapter):
     skip: int
     limit: int
 
+    @cache_result(
+        key_prefix="public:catalog:models",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+        vary_by=["provider_id", "is_active", "skip", "limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求模型列表")
@@ -407,12 +466,19 @@ class PublicModelsAdapter(PublicApiAdapter):
 
 
 class PublicStatsAdapter(PublicApiAdapter):
+    @cache_result(
+        key_prefix="public:catalog:stats",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求系统统计信息")
-        active_providers = db.query(Provider).filter(Provider.is_active.is_(True)).count()
-        active_models = (
-            db.query(Model)
+        active_providers = int(
+            db.query(func.count(Provider.id)).filter(Provider.is_active.is_(True)).scalar() or 0
+        )
+        active_models = int(
+            db.query(func.count(Model.id))
             .join(Provider)
             .filter(
                 and_(
@@ -420,12 +486,21 @@ class PublicStatsAdapter(PublicApiAdapter):
                     Provider.is_active.is_(True),
                 )
             )
-            .count()
+            .scalar()
+            or 0
         )
         formats = (
-            db.query(Provider.api_format).filter(Provider.is_active.is_(True)).distinct().all()
+            db.query(ProviderEndpoint.api_format)
+            .join(Provider, ProviderEndpoint.provider_id == Provider.id)
+            .filter(
+                ProviderEndpoint.is_active.is_(True),
+                Provider.is_active.is_(True),
+                ProviderEndpoint.api_format.isnot(None),
+            )
+            .distinct()
+            .all()
         )
-        supported_formats = [f.api_format for f in formats if f.api_format]
+        supported_formats = [row[0] for row in formats if row[0]]
         stats = ProviderStatsResponse(
             total_providers=active_providers,
             active_providers=active_providers,
@@ -443,6 +518,12 @@ class PublicSearchModelsAdapter(PublicApiAdapter):
     provider_id: int | None
     limit: int
 
+    @cache_result(
+        key_prefix="public:catalog:search_models",
+        ttl=CacheTTL.ADMIN_USAGE_AGGREGATION,
+        user_specific=False,
+        vary_by=["query", "provider_id", "limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug(f"公共API搜索模型: {self.query}")
@@ -512,6 +593,12 @@ class PublicApiFormatHealthMonitorAdapter(PublicApiAdapter):
     lookback_hours: int
     per_format_limit: int
 
+    @cache_result(
+        key_prefix="public:catalog:health_api_formats",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+        vary_by=["lookback_hours", "per_format_limit"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         now = datetime.now(timezone.utc)
@@ -657,7 +744,7 @@ class PublicApiFormatHealthMonitorAdapter(PublicApiAdapter):
         )
 
         logger.debug(f"公开健康监控: 返回 {len(monitors)} 个 API 格式的健康数据")
-        return response
+        return response.model_dump()
 
 
 @dataclass
@@ -669,6 +756,12 @@ class PublicGlobalModelsAdapter(PublicApiAdapter):
     is_active: bool | None
     search: str | None
 
+    @cache_result(
+        key_prefix="public:catalog:global_models",
+        ttl=CacheTTL.MODEL,
+        user_specific=False,
+        vary_by=["skip", "limit", "is_active", "search"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求 GlobalModel 列表")
@@ -691,8 +784,8 @@ class PublicGlobalModelsAdapter(PublicApiAdapter):
                 )
             )
 
-        # 统计总数
-        total = query.count()
+        # 统计总数（避免 Query.count() 生成大子查询）
+        total = int(query.with_entities(func.count(GlobalModel.id)).scalar() or 0)
 
         # 分页
         models = query.order_by(GlobalModel.name).offset(self.skip).limit(self.limit).all()
@@ -714,4 +807,4 @@ class PublicGlobalModelsAdapter(PublicApiAdapter):
             )
 
         logger.debug(f"返回 {len(model_responses)} 个 GlobalModel")
-        return PublicGlobalModelListResponse(models=model_responses, total=total)
+        return PublicGlobalModelListResponse(models=model_responses, total=total).model_dump()

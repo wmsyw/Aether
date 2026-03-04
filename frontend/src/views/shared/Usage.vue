@@ -252,15 +252,18 @@ const hasActiveRequests = computed(() => activeRequestIds.value.length > 0)
 // 自动刷新定时器
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 let globalAutoRefreshTimer: ReturnType<typeof setInterval> | null = null
+let refreshInFlight: Promise<void> | null = null
 const AUTO_REFRESH_INTERVAL = 1000 // 1秒刷新一次（用于活跃请求）
 const GLOBAL_AUTO_REFRESH_INTERVAL = 5000 // 5秒刷新一次（全局自动刷新）
 const globalAutoRefresh = ref(false) // 全局自动刷新开关
 const isDeletingRecords = ref(false)
+const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
 
 // 轮询活跃请求状态（轻量级，只更新状态变化的记录）
 
 let pollInFlight = false
 async function pollActiveRequests() {
+  if (!isPageVisible.value) return
   if (!hasActiveRequests.value) return
   if (pollInFlight) return
   pollInFlight = true
@@ -344,6 +347,7 @@ async function pollActiveRequests() {
 
 // 启动自动刷新
 function startAutoRefresh() {
+  if (!isPageVisible.value) return
   if (autoRefreshTimer) return
   autoRefreshTimer = setInterval(pollActiveRequests, AUTO_REFRESH_INTERVAL)
 }
@@ -359,7 +363,7 @@ function stopAutoRefresh() {
 // 监听活跃请求状态，自动启动/停止刷新
 // 1秒轮询始终用于活跃请求的实时更新，不受全局刷新影响
 watch(hasActiveRequests, (hasActive) => {
-  if (hasActive) {
+  if (hasActive && isPageVisible.value) {
     startAutoRefresh()
   } else {
     stopAutoRefresh()
@@ -368,6 +372,7 @@ watch(hasActiveRequests, (hasActive) => {
 
 // 启动全局自动刷新
 function startGlobalAutoRefresh() {
+  if (!isPageVisible.value) return
   if (globalAutoRefreshTimer) return
   globalAutoRefreshTimer = setInterval(refreshData, GLOBAL_AUTO_REFRESH_INTERVAL)
 }
@@ -384,15 +389,34 @@ function stopGlobalAutoRefresh() {
 function handleAutoRefreshChange(value: boolean) {
   globalAutoRefresh.value = value
   if (value) {
-    refreshData() // 立即刷新一次
+    if (isPageVisible.value) {
+      refreshData() // 立即刷新一次
+    }
     startGlobalAutoRefresh()
   } else {
     stopGlobalAutoRefresh()
   }
 }
 
+function handleVisibilityChange() {
+  isPageVisible.value = !document.hidden
+  if (!isPageVisible.value) {
+    stopAutoRefresh()
+    stopGlobalAutoRefresh()
+    return
+  }
+  if (hasActiveRequests.value) {
+    startAutoRefresh()
+  }
+  if (globalAutoRefresh.value) {
+    refreshData()
+    startGlobalAutoRefresh()
+  }
+}
+
 // 组件卸载时清理定时器
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopAutoRefresh()
   stopGlobalAutoRefresh()
 })
@@ -425,6 +449,8 @@ const selectedRequestId = ref<string | null>(null)
 
 // 初始化加载
 onMounted(async () => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+
   // 所有数据源并行加载（stats/heatmap/records/users 之间没有数据依赖）
   const statsTask = loadStats(timeRange.value).catch(err => {
     log.error('加载统计数据失败:', err)
@@ -451,6 +477,10 @@ onMounted(async () => {
   // 用户页面：loadStats 已包含记录加载，不需要单独调用 loadRecords
 
   await Promise.allSettled(tasks)
+
+  if (globalAutoRefresh.value && isPageVisible.value) {
+    startGlobalAutoRefresh()
+  }
 })
 
 // 处理时间范围变化
@@ -554,11 +584,28 @@ async function handleFilterStatusChange(value: string) {
 
 // 刷新数据
 async function refreshData() {
-  await loadStats(timeRange.value)
-  if (isAdminPage.value) {
-    await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+  if (!isPageVisible.value) return
+  if (refreshInFlight) return refreshInFlight
+
+  refreshInFlight = (async () => {
+    if (isAdminPage.value) {
+      // loadStats 会同步更新 currentDateRange，随后 loadRecords 复用同一时间范围
+      await Promise.all([
+        loadStats(timeRange.value),
+        loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+      ])
+      return
+    }
+
+    await loadStats(timeRange.value)
+    // 用户页面：loadStats 已包含记录加载
+  })()
+
+  try {
+    await refreshInFlight
+  } finally {
+    refreshInFlight = null
   }
-  // 用户页面：loadStats 已包含记录加载
 }
 
 async function refreshDataWithFreshStats() {

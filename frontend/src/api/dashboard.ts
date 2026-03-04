@@ -1,4 +1,5 @@
 import apiClient from './client'
+import { cachedRequest, buildCacheKey } from '@/utils/cache'
 
 export interface DashboardStat {
   name: string
@@ -289,8 +290,15 @@ export interface TimeRangeParams {
 export const dashboardApi = {
   // 获取仪表盘统计数据
   async getStats(params?: TimeRangeParams): Promise<DashboardStatsResponse> {
-    const response = await apiClient.get<DashboardStatsResponse>('/api/dashboard/stats', { params })
-    return response.data
+    const cacheKey = buildCacheKey('dashboard:stats', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<DashboardStatsResponse>('/api/dashboard/stats', { params })
+        return response.data
+      },
+      10 * 1000
+    )
   },
 
   // 获取最近的请求记录
@@ -303,8 +311,14 @@ export const dashboardApi = {
 
   // 获取提供商状态
   async getProviderStatus(): Promise<ProviderStatus[]> {
-    const response = await apiClient.get<ProviderStatusResponse>('/api/dashboard/provider-status')
-    return response.data.providers
+    return cachedRequest(
+      'dashboard:provider-status',
+      async () => {
+        const response = await apiClient.get<ProviderStatusResponse>('/api/dashboard/provider-status')
+        return response.data.providers
+      },
+      20 * 1000
+    )
   },
 
   // 获取请求详情
@@ -316,10 +330,17 @@ export const dashboardApi = {
 
   // 获取每日统计数据
   async getDailyStats(params?: TimeRangeParams & { days?: number }): Promise<DailyStatsResponse> {
-    const response = await apiClient.get<DailyStatsResponse>('/api/dashboard/daily-stats', {
-      params
-    })
-    return response.data
+    const cacheKey = buildCacheKey('dashboard:daily-stats', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<DailyStatsResponse>('/api/dashboard/daily-stats', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
   },
 
   // 获取 cURL 命令数据（含明文 API Key）

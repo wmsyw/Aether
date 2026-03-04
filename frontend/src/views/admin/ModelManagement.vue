@@ -611,7 +611,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import {
   Plus,
   Edit,
@@ -703,6 +703,11 @@ const editingModel = ref<GlobalModelResponse | null>(null)
 const globalModels = ref<GlobalModelResponse[]>([])
 const providers = ref<ProviderWithEndpointsSummary[]>([])
 const GLOBAL_MODELS_FETCH_PAGE_SIZE = 1000
+let globalModelsRequestId = 0
+let modelSelectionRequestId = 0
+let modelProvidersRequestId = 0
+let providersRequestId = 0
+let providerOptionsRequest: Promise<void> | null = null
 
 // 模型目录分页
 const catalogCurrentPage = ref(1)
@@ -1025,19 +1030,27 @@ watch([searchQuery, capabilityFilters], () => {
 }, { deep: true })
 
 async function loadGlobalModels() {
+  const requestId = ++globalModelsRequestId
   loading.value = true
   try {
     const allModels: GlobalModelResponse[] = []
     let skip = 0
+    let expectedTotal: number | null = null
 
     while (true) {
       const response = await listGlobalModels({
         skip,
         limit: GLOBAL_MODELS_FETCH_PAGE_SIZE,
       })
+      if (expectedTotal === null && typeof response.total === 'number') {
+        expectedTotal = response.total
+      }
       const pageModels = response.models || []
       allModels.push(...pageModels)
 
+      if (expectedTotal !== null && allModels.length >= expectedTotal) {
+        break
+      }
       if (pageModels.length < GLOBAL_MODELS_FETCH_PAGE_SIZE) {
         break
       }
@@ -1045,12 +1058,16 @@ async function loadGlobalModels() {
       skip += pageModels.length
     }
 
+    if (requestId !== globalModelsRequestId) return
     globalModels.value = allModels
   } catch (err: unknown) {
+    if (requestId !== globalModelsRequestId) return
     log.error('加载模型失败:', err)
     showError(parseApiError(err, '加载模型失败'), '加载模型失败')
   } finally {
-    loading.value = false
+    if (requestId === globalModelsRequestId) {
+      loading.value = false
+    }
   }
 }
 
@@ -1064,6 +1081,7 @@ function handleRowClick(event: MouseEvent, model: GlobalModelResponse) {
 }
 
 async function selectModel(model: GlobalModelResponse) {
+  const requestId = ++modelSelectionRequestId
   // 先显示缓存数据，提升响应速度
   selectedModel.value = model
   detailTab.value = 'basic'
@@ -1078,6 +1096,7 @@ async function selectModel(model: GlobalModelResponse) {
   ])
 
   // 更新为最新数据（如果获取成功）
+  if (requestId !== modelSelectionRequestId) return
   if (latestModel) {
     selectedModel.value = latestModel
   }
@@ -1096,10 +1115,12 @@ async function refreshSelectedModel() {
 
 // 加载指定模型的关联提供商
 async function loadModelProviders(_globalModelId: string) {
+  const requestId = ++modelProvidersRequestId
   loadingModelProviders.value = true
   try {
     // 使用新的 API 获取所有关联提供商（包括非活跃的）
     const response = await getGlobalModelProviders(_globalModelId)
+    if (requestId !== modelProvidersRequestId) return
 
     // 转换为展示格式
     selectedModelProviders.value = response.providers.map(p => ({
@@ -1124,11 +1145,14 @@ async function loadModelProviders(_globalModelId: string) {
       supports_streaming: p.supports_streaming
     }))
   } catch (err: unknown) {
+    if (requestId !== modelProvidersRequestId) return
     log.error('加载关联提供商失败:', err)
     showError(parseApiError(err, '加载关联提供商失败'), '错误')
     selectedModelProviders.value = []
   } finally {
-    loadingModelProviders.value = false
+    if (requestId === modelProvidersRequestId) {
+      loadingModelProviders.value = false
+    }
   }
 }
 
@@ -1137,14 +1161,25 @@ async function ensureProviderOptions() {
   if (providerOptions.value.length > 0 || loadingProviderOptions.value) {
     return
   }
+  if (providerOptionsRequest) {
+    await providerOptionsRequest
+    return
+  }
+  providerOptionsRequest = (async () => {
+    try {
+      loadingProviderOptions.value = true
+      providerOptions.value = await getProvidersSummary()
+    } catch (err: unknown) {
+      const message = parseApiError(err, '加载 Provider 列表失败')
+      showError(message, '错误')
+    } finally {
+      loadingProviderOptions.value = false
+    }
+  })()
   try {
-    loadingProviderOptions.value = true
-    providerOptions.value = await getProvidersSummary()
-  } catch (err: unknown) {
-    const message = parseApiError(err, '加载 Provider 列表失败')
-    showError(message, '错误')
+    await providerOptionsRequest
   } finally {
-    loadingProviderOptions.value = false
+    providerOptionsRequest = null
   }
 }
 
@@ -1229,7 +1264,7 @@ const batchManageShortcuts = computed(() => {
   const defs: { label: string; description: string; filter: (m: GlobalModelResponse) => boolean }[] = [
     { label: '无提供商', description: '没有关联任何提供商的模型', filter: m => (m.provider_count || 0) === 0 },
     { label: '无活跃提供商', description: '有提供商但没有活跃提供商的模型', filter: m => (m.active_provider_count || 0) === 0 && (m.provider_count || 0) > 0 },
-    { label: '已禁用', description: '被禁用的模型', filter: m => !m.is_active },
+    { label: '禁用', description: '被禁用的模型', filter: m => !m.is_active },
     { label: '未调用', description: '没有调用记录的模型', filter: m => (m.usage_count || 0) === 0 },
     { label: '无价格', description: '没有配置任何价格的模型', filter: m => hasNoPrice(m) },
   ]
@@ -1320,6 +1355,8 @@ async function confirmBatchDeleteModels() {
 // 抽屉控制函数
 function handleDrawerOpenChange(value: boolean) {
   if (!value && !hasBlockingDialogOpen.value) {
+    modelSelectionRequestId += 1
+    modelProvidersRequestId += 1
     selectedModel.value = null
   }
 }
@@ -1455,9 +1492,13 @@ async function refreshData() {
 }
 
 async function loadProviders() {
+  const requestId = ++providersRequestId
   try {
-    providers.value = await getProvidersSummary()
+    const nextProviders = await getProvidersSummary()
+    if (requestId !== providersRequestId) return
+    providers.value = nextProviders
   } catch (err: unknown) {
+    if (requestId !== providersRequestId) return
     showError(parseApiError(err, '加载 Provider 列表失败'), '加载 Provider 列表失败')
   }
 }
@@ -1467,6 +1508,13 @@ onMounted(async () => {
     refreshData(),
     loadProviders(),
   ])
+})
+
+onBeforeUnmount(() => {
+  globalModelsRequestId += 1
+  modelSelectionRequestId += 1
+  modelProvidersRequestId += 1
+  providersRequestId += 1
 })
 </script>
 

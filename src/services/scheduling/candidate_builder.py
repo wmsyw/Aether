@@ -398,7 +398,7 @@ class CandidateBuilder:
         Returns:
             候选列表
         """
-        from src.services.scheduling.schemas import ProviderCandidate
+        from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
 
         candidates: list[ProviderCandidate] = []
         client_format_str = normalize_endpoint_signature(client_format)
@@ -438,7 +438,6 @@ class CandidateBuilder:
             ] = {}
             exact_candidates: list[ProviderCandidate] = []
             convertible_candidates: list[ProviderCandidate] = []
-            pool_has_usable = False
             pool_cfg = _get_pool_config(provider)
 
             # 使用新架构字段 (api_family, endpoint_kind) 进行预过滤与排序：
@@ -576,32 +575,97 @@ class CandidateBuilder:
                 if not active_keys:
                     continue
 
-                # --- Pool branch: select a single key internally ------
+                use_random = all((key.cache_ttl_minutes or 0) == 0 for key in active_keys)
                 if pool_cfg is not None:
-                    selected_key = await self._pool_select_key(
-                        db, provider, pool_cfg, active_keys, request_body
+                    use_random = False
+                elif use_random and len(active_keys) > 1:
+                    logger.debug(
+                        "  Provider {} 启用 Key 轮换模式 (endpoint_format={}, {} keys)",
+                        provider.name,
+                        endpoint_format_str,
+                        len(active_keys),
                     )
-                    if selected_key is None:
-                        logger.debug(
-                            "Pool[{}]: no schedulable key for endpoint {}",
-                            str(provider.id)[:8],
-                            endpoint_format_str,
+                keys_to_check = self._sorter.shuffle_keys_by_internal_priority(
+                    active_keys, affinity_key, use_random
+                )
+
+                if pool_cfg is not None:
+                    # 号池 Provider 仅构建一个 PoolCandidate，内部 key 选择延迟到执行阶段。
+                    pool_keys: list[ProviderAPIKey] = []
+                    pool_miss_counts: list[int] = []
+                    pool_mapping: dict[str, str | None] = {}
+                    for key in keys_to_check:
+                        is_available, _key_skip_reason, mapping_matched_model = (
+                            self._check_key_availability(
+                                key,
+                                endpoint_format_str,
+                                model_name,
+                                capability_requirements,
+                                model_mappings=model_mappings,
+                                candidate_models=provider_model_names,
+                                provider_type=getattr(provider, "provider_type", None),
+                            )
                         )
+                        if not is_available:
+                            continue
+
+                        pool_keys.append(key)
+                        pool_miss_counts.append(
+                            compute_capability_score(
+                                key.capabilities or {},
+                                capability_requirements,
+                            )
+                        )
+                        pool_mapping[str(key.id)] = mapping_matched_model
+
+                    if not pool_keys:
                         continue
-                    keys_to_check: list[ProviderAPIKey] = [selected_key]
-                else:
-                    # --- Normal branch: check all keys ----
-                    use_random = all((key.cache_ttl_minutes or 0) == 0 for key in active_keys)
-                    if use_random and len(active_keys) > 1:
-                        logger.debug(
-                            "  Provider {} 启用 Key 轮换模式 (endpoint_format={}, {} keys)",
-                            provider.name,
-                            endpoint_format_str,
-                            len(active_keys),
+
+                    provider_priority_raw = getattr(provider, "provider_priority", None)
+                    try:
+                        provider_priority = (
+                            int(provider_priority_raw)
+                            if provider_priority_raw is not None
+                            else 999999
                         )
-                    keys_to_check = self._sorter.shuffle_keys_by_internal_priority(
-                        active_keys, affinity_key, use_random
+                    except Exception:
+                        provider_priority = 999999
+                    try:
+                        pool_priority = (
+                            int(pool_cfg.global_priority)
+                            if pool_cfg.global_priority is not None
+                            else provider_priority
+                        )
+                    except Exception:
+                        pool_priority = provider_priority
+
+                    pool_candidate = PoolCandidate(
+                        provider=provider,
+                        endpoint=endpoint,
+                        key=pool_keys[0],
+                        pool_keys=pool_keys,
+                        pool_config=pool_cfg,
+                        pool_priority=pool_priority,
+                        mapping_matched_model=pool_mapping.get(str(pool_keys[0].id)),
+                        needs_conversion=needs_conversion,
+                        provider_api_format=str(endpoint_format_str or ""),
+                        output_limit=output_limit,
+                        capability_miss_count=min(pool_miss_counts) if pool_miss_counts else 0,
                     )
+
+                    # 在 key 对象上附加映射结果，供 PoolCandidate 运行时切 key 后同步模型名。
+                    for pool_key in pool_keys:
+                        setattr(
+                            pool_key,
+                            "_pool_mapping_matched_model",
+                            pool_mapping.get(str(pool_key.id)),
+                        )
+
+                    if needs_conversion:
+                        convertible_candidates.append(pool_candidate)
+                    else:
+                        exact_candidates.append(pool_candidate)
+                    break
 
                 for key in keys_to_check:
                     # Key 级别检查（健康度/熔断按 provider_format bucket）
@@ -645,13 +709,6 @@ class CandidateBuilder:
                     else:
                         exact_candidates.append(candidate)
 
-                    if is_available:
-                        pool_has_usable = True
-
-                # Pool mode: stop after the first endpoint that produced a usable candidate.
-                if pool_cfg is not None and pool_has_usable:
-                    break
-
             candidates.extend(exact_candidates)
             candidates.extend(convertible_candidates)
 
@@ -660,22 +717,3 @@ class CandidateBuilder:
             candidates = candidates[:max_candidates]
 
         return candidates
-
-    async def _pool_select_key(
-        self,
-        db: Session,
-        provider: Provider,
-        pool_cfg: "PoolConfig",
-        active_keys: list[ProviderAPIKey],
-        request_body: dict | None,
-    ) -> ProviderAPIKey | None:
-        """Select a single key via pool scheduling (sticky -> cooldown/cost -> LRU)."""
-        from src.services.provider.pool.hooks import get_pool_hook
-        from src.services.provider.pool.manager import PoolManager
-
-        provider_type = str(getattr(provider, "provider_type", "") or "")
-        hook = get_pool_hook(provider_type)
-        session_uuid = hook.extract_session_uuid(request_body) if hook and request_body else None
-        mgr = PoolManager(str(provider.id), pool_cfg)
-        release_db_connection_before_await(db)
-        return await mgr.select_key(session_uuid, active_keys)

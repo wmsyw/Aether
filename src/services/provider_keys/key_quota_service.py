@@ -64,8 +64,9 @@ async def refresh_provider_quota_for_provider(
     db: Session,
     provider_id: str,
     codex_wham_usage_url: str,
+    key_ids: list[str] | None = None,
 ) -> dict:
-    """刷新指定 Provider 下所有活跃 Key 的限额信息。"""
+    """刷新指定 Provider 的限额信息（默认所有活跃 Key，可按 key_ids 限定）。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
         raise NotFoundException(f"Provider {provider_id} 不存在")
@@ -74,21 +75,42 @@ async def refresh_provider_quota_for_provider(
     if provider_type not in {ProviderType.CODEX, ProviderType.ANTIGRAVITY, ProviderType.KIRO}:
         raise InvalidRequestException("仅支持 Codex / Antigravity / Kiro 类型的 Provider 刷新限额")
 
-    keys = (
-        db.query(ProviderAPIKey)
-        .filter(
-            ProviderAPIKey.provider_id == provider_id,
-            ProviderAPIKey.is_active.is_(True),
-        )
-        .all()
+    selected_key_ids: list[str] | None = None
+    if key_ids is not None:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for raw in key_ids:
+            value = str(raw).strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        selected_key_ids = deduped
+
+    keys_query = db.query(ProviderAPIKey).filter(
+        ProviderAPIKey.provider_id == provider_id,
     )
+    if selected_key_ids is None:
+        keys_query = keys_query.filter(ProviderAPIKey.is_active.is_(True))
+    else:
+        if not selected_key_ids:
+            return {
+                "success": 0,
+                "failed": 0,
+                "total": 0,
+                "results": [],
+                "message": "未提供可刷新的 Key",
+            }
+        keys_query = keys_query.filter(ProviderAPIKey.id.in_(selected_key_ids))
+
+    keys = keys_query.all()
     if not keys:
         return {
             "success": 0,
             "failed": 0,
             "total": 0,
             "results": [],
-            "message": "没有活跃的 Key",
+            "message": "没有可刷新的 Key",
         }
 
     endpoint = _select_refresh_endpoint(provider, provider_type)

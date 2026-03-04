@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.core.api_format.metadata import can_passthrough_endpoint
@@ -104,13 +105,14 @@ class UsageActiveRequestsMixin:
         """
         cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
 
-        return (
-            db.query(Usage)
+        return int(
+            db.query(func.count(Usage.id))
             .filter(
                 Usage.status.in_(["pending", "streaming"]),
                 Usage.created_at < cutoff_time,
             )
-            .count()
+            .scalar()
+            or 0
         )
 
     @classmethod

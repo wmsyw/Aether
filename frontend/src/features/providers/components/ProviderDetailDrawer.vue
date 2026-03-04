@@ -35,7 +35,7 @@
                     :variant="provider.is_active ? 'default' : 'secondary'"
                     class="text-xs shrink-0"
                   >
-                    {{ provider.is_active ? '活跃' : '已停用' }}
+                    {{ provider.is_active ? '活跃' : '停用' }}
                   </Badge>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
@@ -1132,6 +1132,8 @@ const endpoints = ref<ProviderEndpointWithKeys[]>([])
 const providerKeys = ref<EndpointAPIKey[]>([])  // Provider 级别的 keys
 const providerModels = ref<Model[]>([])  // Provider 级别的 models
 const providerMappingPreview = ref<ProviderMappingPreviewResponse | null>(null)  // 映射预览
+let providerLoadRequestId = 0
+let endpointsLoadRequestId = 0
 
 // 系统级格式转换配置
 const systemFormatConversionEnabled = ref(false)
@@ -1281,12 +1283,19 @@ watch(
       }
       void autoRefreshQuotaInBackground()
     } else if (!newOpen && oldOpen) {
+      // 使在途请求失效，避免关闭后旧响应回写
+      providerLoadRequestId += 1
+      endpointsLoadRequestId += 1
+
       // 停止倒计时定时器
       stopCountdownTimer()
       // 重置所有状态
+      loading.value = false
       provider.value = null
       endpoints.value = []
       providerKeys.value = []  // 清空 Provider 级别的 keys
+      providerModels.value = []
+      providerMappingPreview.value = null
 
       // 重置分页状态
       resetKeysPagination()
@@ -2581,6 +2590,7 @@ async function loadSystemFormatConversionConfig() {
 // 加载 Provider 信息
 async function loadProvider() {
   if (!props.providerId) return
+  const requestId = ++providerLoadRequestId
 
   try {
     loading.value = true
@@ -2589,21 +2599,26 @@ async function loadProvider() {
       getProvider(props.providerId),
       loadSystemFormatConversionConfig(),
     ])
+    if (requestId !== providerLoadRequestId) return
     provider.value = providerData
 
     if (!provider.value) {
       throw new Error('Provider 不存在')
     }
   } catch (err: unknown) {
+    if (requestId !== providerLoadRequestId) return
     showError(parseApiError(err, '加载失败'), '错误')
   } finally {
-    loading.value = false
+    if (requestId === providerLoadRequestId) {
+      loading.value = false
+    }
   }
 }
 
 // 加载端点列表
 async function loadEndpoints() {
   if (!props.providerId) return
+  const requestId = ++endpointsLoadRequestId
 
   try {
     // 并行加载端点列表、Provider 级别的 keys、models 和映射预览
@@ -2613,6 +2628,7 @@ async function loadEndpoints() {
       getProviderModels(props.providerId).catch(() => []),
       getProviderMappingPreview(props.providerId).catch(() => null),
     ])
+    if (requestId !== endpointsLoadRequestId) return
 
     providerKeys.value = providerKeysResult
     providerModels.value = modelsResult
@@ -2627,6 +2643,7 @@ async function loadEndpoints() {
       return aIdx - bIdx
     })
   } catch (err: unknown) {
+    if (requestId !== endpointsLoadRequestId) return
     showError(parseApiError(err, '加载端点失败'), '错误')
   }
 }

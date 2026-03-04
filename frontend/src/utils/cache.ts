@@ -11,6 +11,7 @@ interface CacheItem<T> {
 
 class MemoryCache {
   private cache: Map<string, CacheItem<unknown>> = new Map()
+  private inFlight: Map<string, Promise<unknown>> = new Map()
   private defaultTTL = 60000 // 默认缓存60秒
 
   /**
@@ -61,6 +62,7 @@ class MemoryCache {
    */
   clear(): void {
     this.cache.clear()
+    this.inFlight.clear()
   }
 
   /**
@@ -80,6 +82,27 @@ class MemoryCache {
    */
   size(): number {
     return this.cache.size
+  }
+
+  /**
+   * 获取进行中的请求
+   */
+  getInFlight<T>(key: string): Promise<T> | null {
+    return (this.inFlight.get(key) as Promise<T> | undefined) ?? null
+  }
+
+  /**
+   * 标记进行中的请求
+   */
+  setInFlight<T>(key: string, promise: Promise<T>): void {
+    this.inFlight.set(key, promise as Promise<unknown>)
+  }
+
+  /**
+   * 清除进行中的请求
+   */
+  deleteInFlight(key: string): void {
+    this.inFlight.delete(key)
   }
 }
 
@@ -103,18 +126,62 @@ export async function cachedRequest<T>(
   ttl?: number
 ): Promise<T> {
   // 尝试从缓存获取
-  const cached = cache.get<T>(key)
-  if (cached !== null) {
-    return cached
+  if (ttl !== 0) {
+    const cached = cache.get<T>(key)
+    if (cached !== null) {
+      return cached
+    }
   }
 
-  // 缓存未命中，执行请求
-  const data = await fetcher()
+  // 命中进行中的同 key 请求，直接复用
+  const inFlight = cache.getInFlight<T>(key)
+  if (inFlight) {
+    return inFlight
+  }
 
-  // 存入缓存
-  cache.set(key, data, ttl)
+  // 缓存未命中，执行请求并登记为 in-flight
+  const request = (async () => {
+    try {
+      const data = await fetcher()
+      if (ttl !== 0) {
+        cache.set(key, data, ttl)
+      }
+      return data
+    } finally {
+      cache.deleteInFlight(key)
+    }
+  })()
 
-  return data
+  cache.setInFlight(key, request)
+  return request
+}
+
+/**
+ * 仅做请求去重（不缓存结果）
+ * 相同 key 的并发请求会复用同一个 Promise
+ */
+export function dedupedRequest<T>(
+  key: string,
+  fetcher: () => Promise<T>,
+): Promise<T> {
+  return cachedRequest(key, fetcher, 0)
+}
+
+/**
+ * 构建归一化的缓存 key
+ * 将 params 的 key 排序并过滤 undefined 值，确保相同参数生成相同 key
+ */
+export function buildCacheKey(prefix: string, params?: Record<string, unknown>): string {
+  if (!params) {
+    return prefix
+  }
+  const normalizedParams = Object.entries(params)
+    .filter(([, value]) => value !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b))
+  if (normalizedParams.length === 0) {
+    return prefix
+  }
+  return `${prefix}:${JSON.stringify(normalizedParams)}`
 }
 
 export default cache

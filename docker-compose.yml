@@ -22,9 +22,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: aether-redis
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_data:/data
+    command: redis-server --appendonly no --save "" --requirepass ${REDIS_PASSWORD}
     healthcheck:
       test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
       interval: 5s
@@ -58,4 +56,5 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
+
+

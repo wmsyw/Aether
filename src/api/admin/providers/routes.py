@@ -9,12 +9,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, load_only
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.models_service import invalidate_models_list_cache
 from src.api.base.pipeline import ApiRequestPipeline
+from src.config.constants import CacheTTL
 from src.core.enums import ProviderBillingType
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
@@ -27,6 +29,7 @@ from src.models.database import GlobalModel, Provider, ProviderAPIKey, ProviderE
 from src.models.endpoint_models import ProviderWithEndpointsSummary
 from src.services.cache.model_cache import ModelCacheService
 from src.services.cache.provider_cache import ProviderCacheService
+from src.utils.cache_decorator import cache_result
 
 from .summary import _build_provider_summary
 
@@ -341,9 +344,24 @@ class AdminListProvidersAdapter(AdminApiAdapter):
         self.limit = limit
         self.is_active = is_active
 
+    @cache_result(
+        key_prefix="admin:providers:list",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+        vary_by=["skip", "limit", "is_active"],
+    )
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
-        query = db.query(Provider)
+        query = db.query(Provider).options(
+            load_only(
+                Provider.id,
+                Provider.name,
+                Provider.provider_priority,
+                Provider.is_active,
+                Provider.created_at,
+                Provider.updated_at,
+            )
+        )
         if self.is_active is not None:
             query = query.filter(Provider.is_active == self.is_active)
         providers = query.offset(self.skip).limit(self.limit).all()
@@ -723,30 +741,28 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
     def __init__(self, provider_id: str):
         self.provider_id = provider_id
 
-    async def handle(self, context: ApiRequestContext) -> ProviderMappingPreviewResponse:  # type: ignore[override]
+    @cache_result(
+        key_prefix="admin:providers:mapping-preview",
+        ttl=CacheTTL.ADMIN_USAGE_RECORDS,
+        user_specific=False,
+        vary_by=["provider_id"],
+    )
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 获取 Provider
-        provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
+        provider = (
+            db.query(Provider)
+            .options(load_only(Provider.id, Provider.name))
+            .filter(Provider.id == self.provider_id)
+            .first()
+        )
         if not provider:
             raise NotFoundException("提供商不存在", "provider")
 
         # 统计截断情况
         truncated_keys = 0
         truncated_models = 0
-
-        # 获取该 Provider 有白名单配置的 Key 总数（用于截断统计）
-        from sqlalchemy import func
-
-        total_keys_with_allowed_models = (
-            db.query(func.count(ProviderAPIKey.id))
-            .filter(
-                ProviderAPIKey.provider_id == self.provider_id,
-                ProviderAPIKey.allowed_models.isnot(None),
-            )
-            .scalar()
-            or 0
-        )
 
         # 获取该 Provider 有白名单配置的 Key（只查询需要的字段）
         keys = (
@@ -761,25 +777,22 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
                 ProviderAPIKey.provider_id == self.provider_id,
                 ProviderAPIKey.allowed_models.isnot(None),
             )
-            .limit(MAPPING_PREVIEW_MAX_KEYS)
+            .limit(MAPPING_PREVIEW_MAX_KEYS + 1)
             .all()
         )
 
-        # 计算被截断的 Key 数量
-        if total_keys_with_allowed_models > MAPPING_PREVIEW_MAX_KEYS:
-            truncated_keys = total_keys_with_allowed_models - MAPPING_PREVIEW_MAX_KEYS
-
-        # 获取有 model_mappings 配置的 GlobalModel 总数（用于截断统计）
-        total_models_with_mappings = (
-            db.query(func.count(GlobalModel.id))
-            .filter(
-                GlobalModel.config.isnot(None),
-                GlobalModel.config["model_mappings"].isnot(None),
-                func.jsonb_array_length(GlobalModel.config["model_mappings"]) > 0,
+        if len(keys) > MAPPING_PREVIEW_MAX_KEYS:
+            keys = keys[:MAPPING_PREVIEW_MAX_KEYS]
+            total_keys_with_allowed_models = (
+                db.query(func.count(ProviderAPIKey.id))
+                .filter(
+                    ProviderAPIKey.provider_id == self.provider_id,
+                    ProviderAPIKey.allowed_models.isnot(None),
+                )
+                .scalar()
+                or 0
             )
-            .scalar()
-            or 0
-        )
+            truncated_keys = total_keys_with_allowed_models - MAPPING_PREVIEW_MAX_KEYS
 
         # 只查询有 model_mappings 配置的 GlobalModel（使用 SQLAlchemy JSONB 操作符）
         global_models = (
@@ -795,12 +808,22 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
                 GlobalModel.config["model_mappings"].isnot(None),
                 func.jsonb_array_length(GlobalModel.config["model_mappings"]) > 0,
             )
-            .limit(MAPPING_PREVIEW_MAX_MODELS)
+            .limit(MAPPING_PREVIEW_MAX_MODELS + 1)
             .all()
         )
 
-        # 计算被截断的 GlobalModel 数量
-        if total_models_with_mappings > MAPPING_PREVIEW_MAX_MODELS:
+        if len(global_models) > MAPPING_PREVIEW_MAX_MODELS:
+            global_models = global_models[:MAPPING_PREVIEW_MAX_MODELS]
+            total_models_with_mappings = (
+                db.query(func.count(GlobalModel.id))
+                .filter(
+                    GlobalModel.config.isnot(None),
+                    GlobalModel.config["model_mappings"].isnot(None),
+                    func.jsonb_array_length(GlobalModel.config["model_mappings"]) > 0,
+                )
+                .scalar()
+                or 0
+            )
             truncated_models = total_models_with_mappings - MAPPING_PREVIEW_MAX_MODELS
 
         # 构建有映射配置的 GlobalModel 映射
@@ -819,10 +842,10 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
                 keys=[],
                 total_keys=0,
                 total_matches=0,
-                truncated=False,
-                truncated_keys=0,
-                truncated_models=0,
-            )
+                truncated=truncated_keys > 0 or truncated_models > 0,
+                truncated_keys=truncated_keys,
+                truncated_models=truncated_models,
+            ).model_dump()
 
         key_infos: list[MappingMatchingKey] = []
         total_matches = 0
@@ -836,18 +859,6 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
             allowed_models_list = parse_allowed_models_to_list(key.allowed_models)
             if not allowed_models_list:
                 continue
-
-            # 生成脱敏 Key
-            masked_key = "***"
-            if key.api_key:
-                try:
-                    decrypted_key = crypto.decrypt(key.api_key, silent=True)
-                    if len(decrypted_key) > 8:
-                        masked_key = f"{decrypted_key[:4]}***{decrypted_key[-4:]}"
-                    else:
-                        masked_key = f"{decrypted_key[:2]}***"
-                except Exception:
-                    pass
 
             # 查找匹配的 GlobalModel
             matching_global_models: list[MappingMatchingGlobalModel] = []
@@ -879,6 +890,18 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
                     total_matches += 1
 
             if matching_global_models:
+                # 只有有匹配结果的 key 才做解密脱敏，减少 CPU 开销
+                masked_key = "***"
+                if key.api_key:
+                    try:
+                        decrypted_key = crypto.decrypt(key.api_key, silent=True)
+                        if len(decrypted_key) > 8:
+                            masked_key = f"{decrypted_key[:4]}***{decrypted_key[-4:]}"
+                        else:
+                            masked_key = f"{decrypted_key[:2]}***"
+                    except Exception:
+                        pass
+
                 key_infos.append(
                     MappingMatchingKey(
                         key_id=key.id or "",
@@ -901,7 +924,7 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
             truncated=is_truncated,
             truncated_keys=truncated_keys,
             truncated_models=truncated_models,
-        )
+        ).model_dump()
 
 
 # ========== Claude Code Pool Management ==========

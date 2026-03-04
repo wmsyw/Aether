@@ -1102,7 +1102,7 @@ function getKeyTooltip(key: RoutingKeyInfo): string {
   parts.push(`名称: ${key.name}`)
   parts.push(`健康度: ${((key.health_score || 0) * 100).toFixed(0)}%`)
   if (!key.is_active) {
-    parts.push('状态: 已禁用')
+    parts.push('状态: 禁用')
   } else if (key.circuit_breaker_open) {
     parts.push(`熔断中: ${key.circuit_breaker_formats.join(', ')}`)
   }

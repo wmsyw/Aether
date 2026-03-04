@@ -154,7 +154,7 @@
                   class="text-sm"
                   :class="module.enabled ? 'text-foreground' : 'text-muted-foreground'"
                 >
-                  {{ module.enabled ? '已启用' : '已禁用' }}
+                  {{ module.enabled ? '启用' : '禁用' }}
                 </span>
                 <!-- 配置未验证提示（小字） -->
                 <span

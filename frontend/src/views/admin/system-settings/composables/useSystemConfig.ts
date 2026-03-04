@@ -111,7 +111,7 @@ function createDefaultConfig(): SystemConfig {
     // 请求记录清理
     enable_auto_cleanup: true,
     detail_log_retention_days: 7,
-    compressed_log_retention_days: 90,
+    compressed_log_retention_days: 30,
     header_retention_days: 90,
     log_retention_days: 365,
     cleanup_batch_size: 1000,
@@ -179,7 +179,7 @@ export function useSystemConfig() {
       systemConfig.value.max_request_body_size !== originalConfig.value.max_request_body_size ||
       systemConfig.value.max_response_body_size !== originalConfig.value.max_response_body_size ||
       JSON.stringify(systemConfig.value.sensitive_headers) !==
-        JSON.stringify(originalConfig.value.sensitive_headers)
+      JSON.stringify(originalConfig.value.sensitive_headers)
     )
   })
 
@@ -187,14 +187,14 @@ export function useSystemConfig() {
     if (!originalConfig.value) return false
     return (
       systemConfig.value.detail_log_retention_days !==
-        originalConfig.value.detail_log_retention_days ||
+      originalConfig.value.detail_log_retention_days ||
       systemConfig.value.compressed_log_retention_days !==
-        originalConfig.value.compressed_log_retention_days ||
+      originalConfig.value.compressed_log_retention_days ||
       systemConfig.value.header_retention_days !== originalConfig.value.header_retention_days ||
       systemConfig.value.log_retention_days !== originalConfig.value.log_retention_days ||
       systemConfig.value.cleanup_batch_size !== originalConfig.value.cleanup_batch_size ||
       systemConfig.value.audit_log_retention_days !==
-        originalConfig.value.audit_log_retention_days
+      originalConfig.value.audit_log_retention_days
     )
   })
 
@@ -231,7 +231,7 @@ export function useSystemConfig() {
         try {
           const response = await adminApi.getSystemConfig(key)
           if (response.value !== null && response.value !== undefined) {
-            ;(systemConfig.value as Record<string, unknown>)[key] = response.value
+            ; (systemConfig.value as Record<string, unknown>)[key] = response.value
           }
         } catch {
           // 配置不存在时使用默认值，无需处理

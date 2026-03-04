@@ -75,7 +75,7 @@ export function getEndpointTooltip(endpoint: EndpointHealthDetail): string {
 
   switch (status) {
     case 'disabled':
-      return `${format}: 端点已禁用`
+      return `${format}: 端点禁用`
     case 'no_keys':
       return `${format}: 未配置密钥`
     case 'keys_disabled':

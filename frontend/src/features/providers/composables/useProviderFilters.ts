@@ -19,7 +19,7 @@ export function useProviderFilters(
   const statusFilters: FilterOption[] = [
     { value: 'all', label: '全部状态' },
     { value: 'active', label: '活跃' },
-    { value: 'inactive', label: '已停用' },
+    { value: 'inactive', label: '停用' },
   ]
 
   const apiFormatFilters: FilterOption[] = [

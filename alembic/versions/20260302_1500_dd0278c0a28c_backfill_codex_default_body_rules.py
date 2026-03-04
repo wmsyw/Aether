@@ -1,6 +1,6 @@
 """backfill_codex_default_body_rules
 
-Backfill default body_rules for openai:cli and openai:compact endpoints
+Backfill default body_rules for openai:cli endpoints
 that currently have body_rules IS NULL.
 
 Rules:
@@ -29,7 +29,7 @@ down_revision = "1d2e3f4a5b6c"
 branch_labels = None
 depends_on = None
 
-_TARGET_FORMATS = ("openai:cli", "openai:compact")
+_TARGET_FORMATS = ("openai:cli",)
 
 _DEFAULT_BODY_RULES = [
     {"action": "drop", "path": "max_output_tokens"},
@@ -55,10 +55,10 @@ def upgrade() -> None:
             UPDATE provider_endpoints
             SET body_rules = CAST(:rules AS json),
                 updated_at = CURRENT_TIMESTAMP
-            WHERE api_format IN (:fmt1, :fmt2)
+            WHERE api_format = :fmt
               AND (body_rules IS NULL OR body_rules::text = 'null')
         """),
-        {"rules": rules_json, "fmt1": _TARGET_FORMATS[0], "fmt2": _TARGET_FORMATS[1]},
+        {"rules": rules_json, "fmt": _TARGET_FORMATS[0]},
     )
     if result.rowcount:
         print(f"  backfilled body_rules for {result.rowcount} endpoint(s)")

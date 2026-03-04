@@ -12,15 +12,18 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, load_only, selectinload
 
-from src.api.handlers.base.request_builder import PassthroughRequestBuilder
-from src.api.handlers.base.request_builder import build_test_request_body, get_provider_auth
+from src.api.handlers.base.request_builder import (
+    PassthroughRequestBuilder,
+    build_test_request_body,
+    get_provider_auth,
+)
 from src.clients.redis_client import get_redis_client
 from src.core.logger import logger
 from src.database import get_db
 from src.database.database import get_pool_status
-from src.models.database import Model, Provider, ProviderAPIKey, ProviderEndpoint
+from src.models.database import GlobalModel, Model, Provider, ProviderAPIKey, ProviderEndpoint
 from src.services.provider.transport import build_provider_url
 from src.utils.ssl_utils import get_ssl_context
 
@@ -85,7 +88,7 @@ def _serialize_provider(
 
 def _select_provider(db: Session, provider_name: str | None) -> Provider | None:
     """选择 Provider（按 provider_priority 优先级选择）"""
-    query = db.query(Provider).filter(Provider.is_active == True)
+    query = db.query(Provider).filter(Provider.is_active.is_(True))
     if provider_name:
         provider = query.filter(Provider.name == provider_name).first()
         if provider:
@@ -102,9 +105,9 @@ def _select_provider(db: Session, provider_name: str | None) -> Provider | None:
 async def service_health(db: Session = Depends(get_db)) -> Any:
     """返回服务健康状态与依赖信息"""
     active_providers = (
-        db.query(func.count(Provider.id)).filter(Provider.is_active == True).scalar() or 0
+        db.query(func.count(Provider.id)).filter(Provider.is_active.is_(True)).scalar() or 0
     )
-    active_models = db.query(func.count(Model.id)).filter(Model.is_active == True).scalar() or 0
+    active_models = db.query(func.count(Model.id)).filter(Model.is_active.is_(True)).scalar() or 0
 
     redis_info: dict[str, Any] = {"status": "unknown"}
     try:
@@ -163,11 +166,14 @@ async def root(db: Session = Depends(get_db)) -> Any:
     # 按优先级选择最高优先级的提供商
     top_provider = (
         db.query(Provider)
-        .filter(Provider.is_active == True)
+        .options(load_only(Provider.id, Provider.name, Provider.provider_priority))
+        .filter(Provider.is_active.is_(True))
         .order_by(Provider.provider_priority.asc())
         .first()
     )
-    active_providers = db.query(Provider).filter(Provider.is_active == True).count()
+    active_providers = (
+        db.query(func.count(Provider.id)).filter(Provider.is_active.is_(True)).scalar() or 0
+    )
 
     return {
         "message": "AI Proxy with Modular Architecture v4.0.0",
@@ -193,17 +199,37 @@ async def list_providers(
     active_only: bool = Query(True),
 ) -> Any:
     """列出所有 Provider"""
-    load_options = []
+    load_options = [
+        load_only(Provider.id, Provider.name, Provider.is_active, Provider.provider_priority)
+    ]
     if include_models:
-        load_options.append(selectinload(Provider.models).selectinload(Model.global_model))
+        load_options.append(
+            selectinload(Provider.models)
+            .load_only(
+                Model.id,
+                Model.provider_model_name,
+                Model.is_active,
+                Model.supports_streaming,
+                Model.global_model_id,
+            )
+            .selectinload(Model.global_model)
+            .load_only(GlobalModel.id, GlobalModel.name, GlobalModel.display_name)
+        )
     if include_endpoints:
-        load_options.append(selectinload(Provider.endpoints))
+        load_options.append(
+            selectinload(Provider.endpoints).load_only(
+                ProviderEndpoint.id,
+                ProviderEndpoint.base_url,
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.is_active,
+            )
+        )
 
     base_query = db.query(Provider)
     if load_options:
         base_query = base_query.options(*load_options)
     if active_only:
-        base_query = base_query.filter(Provider.is_active == True)
+        base_query = base_query.filter(Provider.is_active.is_(True))
     base_query = base_query.order_by(Provider.provider_priority.asc(), Provider.name.asc())
 
     providers = base_query.all()
@@ -223,11 +249,31 @@ async def provider_detail(
     include_endpoints: bool = Query(False),
 ) -> Any:
     """获取单个 Provider 详情"""
-    load_options = []
+    load_options = [
+        load_only(Provider.id, Provider.name, Provider.is_active, Provider.provider_priority)
+    ]
     if include_models:
-        load_options.append(selectinload(Provider.models).selectinload(Model.global_model))
+        load_options.append(
+            selectinload(Provider.models)
+            .load_only(
+                Model.id,
+                Model.provider_model_name,
+                Model.is_active,
+                Model.supports_streaming,
+                Model.global_model_id,
+            )
+            .selectinload(Model.global_model)
+            .load_only(GlobalModel.id, GlobalModel.name, GlobalModel.display_name)
+        )
     if include_endpoints:
-        load_options.append(selectinload(Provider.endpoints))
+        load_options.append(
+            selectinload(Provider.endpoints).load_only(
+                ProviderEndpoint.id,
+                ProviderEndpoint.base_url,
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.is_active,
+            )
+        )
 
     base_query = db.query(Provider)
     if load_options:
