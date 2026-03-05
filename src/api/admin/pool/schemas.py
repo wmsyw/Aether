@@ -46,6 +46,8 @@ class PresetDimensionMetaResponse(BaseModel):
     providers: list[str] = Field(default_factory=list)
     modes: list[PresetModeMetaResponse] | None = None
     default_mode: str | None = None
+    mutex_group: str | None = None
+    evidence_hint: str | None = None
 
 
 # ---------------------------------------------------------------------------

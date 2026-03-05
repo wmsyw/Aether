@@ -124,7 +124,10 @@ class PoolManager:
         _cooldown_coro = redis_ops.batch_get_cooldowns(pid, all_key_ids, include_ttl=True)
         _cost_coro = (
             redis_ops.batch_get_cost_totals(pid, all_key_ids, self.config.cost_window_seconds)
-            if self.config.cost_limit_per_key_tokens is not None
+            if (
+                self.config.cost_limit_per_key_tokens is not None
+                or self.config.scheduling_mode == "multi_score"
+            )
             else None
         )
         _lru_coro = redis_ops.get_lru_scores(pid, all_key_ids) if self.config.lru_enabled else None
@@ -170,12 +173,12 @@ class PoolManager:
         if _cost_idx >= 0:
             cost_totals = gathered[_cost_idx]
             limit = self.config.cost_limit_per_key_tokens
-            assert limit is not None  # guarded by _cost_idx >= 0
-            for kid, total in cost_totals.items():
-                if total >= limit:
-                    cost_exhausted.add(kid)
-                elif total >= limit * self.config.cost_soft_threshold_percent / 100:
-                    cost_soft.add(kid)
+            if limit is not None:
+                for kid, total in cost_totals.items():
+                    if total >= limit:
+                        cost_exhausted.add(kid)
+                    elif total >= limit * self.config.cost_soft_threshold_percent / 100:
+                        cost_soft.add(kid)
 
         # LRU scores
         lru_scores: dict[str, float] = {}
@@ -197,6 +200,7 @@ class PoolManager:
                 "all_key_ids": all_key_ids,
                 "lru_scores": lru_scores,
                 "cost_totals": cost_totals,
+                "cost_limit_per_key_tokens": self.config.cost_limit_per_key_tokens,
                 "latency_avgs": latency_avgs,
                 "health_scores": health_scores,
                 "keys_by_id": {str(c.key.id): c.key for c in candidates},
@@ -460,7 +464,10 @@ class PoolManager:
         _cooldown_coro = redis_ops.batch_get_cooldowns(pid, key_ids)
         _cost_coro = (
             redis_ops.batch_get_cost_totals(pid, key_ids, self.config.cost_window_seconds)
-            if self.config.cost_limit_per_key_tokens is not None
+            if (
+                self.config.cost_limit_per_key_tokens is not None
+                or self.config.scheduling_mode == "multi_score"
+            )
             else None
         )
         _lru_coro = redis_ops.get_lru_scores(pid, key_ids) if self.config.lru_enabled else None
@@ -492,9 +499,10 @@ class PoolManager:
         cost_totals: dict[str, int] = {}
         if _cost_idx_sk >= 0:
             cost_totals = gathered_sk[_cost_idx_sk]
-            for kid, total in cost_totals.items():
-                if total >= self.config.cost_limit_per_key_tokens:  # type: ignore[operator]
-                    cost_exhausted.add(kid)
+            if self.config.cost_limit_per_key_tokens is not None:
+                for kid, total in cost_totals.items():
+                    if total >= self.config.cost_limit_per_key_tokens:
+                        cost_exhausted.add(kid)
 
         lru_scores: dict[str, float] = {}
         if _lru_idx_sk >= 0:
@@ -515,6 +523,7 @@ class PoolManager:
             "all_key_ids": key_ids,
             "lru_scores": lru_scores,
             "cost_totals": cost_totals if _cost_idx_sk >= 0 else {},
+            "cost_limit_per_key_tokens": self.config.cost_limit_per_key_tokens,
             "latency_avgs": latency_avgs,
             "health_scores": health_scores,
             "keys_by_id": {str(k.id): k for k in keys},

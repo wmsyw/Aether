@@ -160,6 +160,13 @@ _COOLDOWN_REASON_LABELS: dict[str, str] = {
     "auth_failed_401": "401 认证失败",
     "payment_required_402": "402 欠费",
     "server_error_500": "500 错误",
+    "request_timeout_408": "408 超时",
+    "conflict_409": "409 冲突",
+    "locked_423": "423 锁定",
+    "too_early_425": "425 Too Early",
+    "bad_gateway_502": "502 网关错误",
+    "service_unavailable_503": "503 服务不可用",
+    "gateway_timeout_504": "504 网关超时",
 }
 
 
@@ -607,6 +614,8 @@ class AdminListSchedulingPresetsAdapter(AdminApiAdapter):
                 providers=[],
                 modes=None,
                 default_mode=None,
+                mutex_group="distribution_mode",
+                evidence_hint="依据 LRU 时间戳（最近未使用优先）",
             )
         ]
 
@@ -625,6 +634,8 @@ class AdminListSchedulingPresetsAdapter(AdminApiAdapter):
                     providers=list(meta.providers),
                     modes=modes,
                     default_mode=meta.default_mode,
+                    mutex_group=meta.mutex_group,
+                    evidence_hint=meta.evidence_hint,
                 )
             )
         return items
@@ -766,7 +777,14 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
         # Limit scan range to avoid loading the entire table into memory.
         if self.status == "cooldown":
             _max_scan = 2000
-            all_keys = q.order_by(ProviderAPIKey.created_at.desc()).limit(_max_scan).all()
+            all_keys = (
+                q.order_by(
+                    ProviderAPIKey.internal_priority.asc(),
+                    ProviderAPIKey.created_at.asc(),
+                )
+                .limit(_max_scan)
+                .all()
+            )
             key_ids = [str(k.id) for k in all_keys]
             cooldowns = await pool_redis.batch_get_cooldowns(pid, key_ids) if key_ids else {}
             all_keys = [k for k in all_keys if cooldowns.get(str(k.id)) is not None]
@@ -777,7 +795,10 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
             total = int(q.with_entities(func.count(ProviderAPIKey.id)).scalar() or 0)
             offset = (self.page - 1) * self.page_size
             keys = (
-                q.order_by(ProviderAPIKey.created_at.desc())
+                q.order_by(
+                    ProviderAPIKey.internal_priority.asc(),
+                    ProviderAPIKey.created_at.asc(),
+                )
                 .offset(offset)
                 .limit(self.page_size)
                 .all()
@@ -785,6 +806,9 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
 
         # Batch fetch Redis state (parallel where possible)
         key_ids = [str(k.id) for k in keys]
+        # Sticky session counts are no longer fetched from Redis to reduce
+        # round-trips; the field is kept at 0 for schema compatibility.
+        sticky_counts: dict[str, int] = {kid: 0 for kid in key_ids}
         if key_ids:
             _lru_coro = (
                 pool_redis.get_lru_scores(pid, key_ids)
@@ -807,18 +831,15 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
                 lru_scores,
                 latency_avgs,
                 cost_totals,
-                sticky_counts,
             ) = await asyncio.gather(
                 pool_redis.batch_get_cooldowns(pid, key_ids),
                 pool_redis.batch_get_cooldown_ttls(pid, key_ids),
                 _lru_coro,
                 _latency_coro,
                 _cost_coro,
-                pool_redis.batch_get_key_sticky_counts(pid, key_ids),
             )
         else:
-            cooldowns, cooldown_ttls, lru_scores, latency_avgs, cost_totals, sticky_counts = (
-                {},
+            cooldowns, cooldown_ttls, lru_scores, latency_avgs, cost_totals = (
                 {},
                 {},
                 {},

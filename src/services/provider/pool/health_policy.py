@@ -2,15 +2,16 @@
 
 Maps upstream HTTP status codes to pool-level actions:
 
-| Code | Action                                                       |
-|------|--------------------------------------------------------------|
-| 401  | Invalidate OAuth token cache -> attempt refresh -> disable   |
-| 402  | Auto-disable key (payment issue)                             |
-| 403  | Auto-disable key (suspended/banned)                          |
-| 400  | Check body for "organization has been disabled" -> disable   |
-| 429  | Set cooldown (retry-after header or config default)          |
-| 529  | Set cooldown (config default)                                |
-| *    | Check unschedulable_rules keyword matching                   |
+| Code         | Action                                                     |
+|--------------|------------------------------------------------------------|
+| 401          | Invalidate OAuth token cache + short cooldown              |
+| 402          | Long cooldown (payment issue)                              |
+| 403          | Graded cooldown: severe (suspended/banned) 1h, else 300s+  |
+| 400          | Check body for "organization has been disabled" -> cooldown |
+| 429          | Cooldown (retry-after or rate_limit_cooldown_seconds)      |
+| 529          | Cooldown (overload_cooldown_seconds)                       |
+| *            | Check unschedulable_rules keyword matching                 |
+| 408/5xx/etc  | Transient cooldown (overload_cooldown_seconds)             |
 """
 
 from __future__ import annotations
@@ -31,6 +32,26 @@ _ACCOUNT_DISABLE_PATTERNS = (
     "account has been disabled",
     "account_disabled",
 )
+
+# 需要更长冷却的账号异常语义（403 body 关键字）。
+_FORBIDDEN_ACCOUNT_PATTERNS = (
+    "account suspended",
+    "account banned",
+    "subscription inactive",
+    "suspended",
+    "banned",
+)
+
+_TRANSIENT_STATUS_COOLDOWN_REASON: dict[int, str] = {
+    408: "request_timeout_408",
+    409: "conflict_409",
+    423: "locked_423",
+    425: "too_early_425",
+    500: "server_error_500",
+    502: "bad_gateway_502",
+    503: "service_unavailable_503",
+    504: "gateway_timeout_504",
+}
 
 
 def _parse_retry_after(headers: dict[str, str] | None) -> int | None:
@@ -63,6 +84,22 @@ def _extract_error_message(error_body: str | None) -> str:
     except (json.JSONDecodeError, TypeError):
         pass
     return error_body[:500]
+
+
+def _resolve_transient_cooldown_ttl(
+    *,
+    status_code: int,
+    retry_after_seconds: int | None,
+    config: PoolConfig,
+) -> int:
+    """Resolve cooldown ttl for transient upstream status codes."""
+    if status_code in (429, 503):
+        if retry_after_seconds is not None:
+            return retry_after_seconds
+    if status_code == 429:
+        return config.rate_limit_cooldown_seconds
+    # 408/409/423/425/5xx: 统一走短时过载冷却，避免雪崩重试。
+    return config.overload_cooldown_seconds
 
 
 async def apply_health_policy(
@@ -133,11 +170,15 @@ async def _apply(
 
     # --- 403 Forbidden -------------------------------------------------------
     if status_code == 403:
-        await redis_ops.set_cooldown(provider_id, key_id, "forbidden_403", ttl=3600)
+        error_lower = error_msg.lower()
+        severe = any(pattern in error_lower for pattern in _FORBIDDEN_ACCOUNT_PATTERNS)
+        ttl = 3600 if severe else max(config.rate_limit_cooldown_seconds, 300)
+        await redis_ops.set_cooldown(provider_id, key_id, "forbidden_403", ttl=ttl)
         logger.warning(
-            "Pool[{}]: key {} got 403 (forbidden/suspended), cooldown 1h",
+            "Pool[{}]: key {} got 403 (forbidden), cooldown {}s",
             provider_id[:8],
             key_id[:8],
+            ttl,
         )
         return
 
@@ -160,7 +201,11 @@ async def _apply(
     # --- 429 Rate Limited ----------------------------------------------------
     if status_code == 429:
         retry_after = _parse_retry_after(response_headers)
-        ttl = retry_after or config.rate_limit_cooldown_seconds
+        ttl = _resolve_transient_cooldown_ttl(
+            status_code=status_code,
+            retry_after_seconds=retry_after,
+            config=config,
+        )
         await redis_ops.set_cooldown(provider_id, key_id, "rate_limited_429", ttl=ttl)
         logger.info(
             "Pool[{}]: key {} got 429, cooldown {}s",
@@ -202,6 +247,26 @@ async def _apply(
                     rule.duration_minutes,
                 )
                 return
+
+    # --- Transient status bucket (408/409/423/425/5xx) ----------------------
+    reason = _TRANSIENT_STATUS_COOLDOWN_REASON.get(status_code)
+    if reason:
+        retry_after = _parse_retry_after(response_headers)
+        ttl = _resolve_transient_cooldown_ttl(
+            status_code=status_code,
+            retry_after_seconds=retry_after,
+            config=config,
+        )
+        await redis_ops.set_cooldown(provider_id, key_id, reason, ttl=ttl)
+        logger.info(
+            "Pool[{}]: key {} got {}, cooldown {}s ({})",
+            provider_id[:8],
+            key_id[:8],
+            status_code,
+            ttl,
+            reason,
+        )
+        return
 
 
 async def apply_stream_timeout_policy(

@@ -25,6 +25,10 @@ class RecentRefreshDimension(PresetDimensionBase):
     def providers(self) -> tuple[str, ...]:
         return ("codex", "kiro")
 
+    @property
+    def evidence_hint(self) -> str | None:
+        return "依据账号额度重置倒计时（next_reset / reset_seconds）"
+
     def compute_metric(
         self,
         *,
@@ -32,6 +36,7 @@ class RecentRefreshDimension(PresetDimensionBase):
         all_key_ids: list[str],
         keys_by_id: dict[str, Any],
         lru_scores: dict[str, Any],
+        context: dict[str, Any],
         mode: str | None,
     ) -> float:
         reset_scores: dict[str, float] = {}
@@ -39,6 +44,8 @@ class RecentRefreshDimension(PresetDimensionBase):
             reset_seconds = extract_reset_seconds(keys_by_id.get(kid))
             if reset_seconds is not None:
                 reset_scores[kid] = reset_seconds
+        if not reset_scores:
+            return rank_ascending(key_id, lru_scores, all_key_ids)
         return rank_ascending(key_id, reset_scores, all_key_ids)
 
 

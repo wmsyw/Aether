@@ -87,6 +87,8 @@ export interface PoolPresetMeta {
   providers: string[]
   modes?: PoolPresetModeMeta[] | null
   default_mode?: string | null
+  mutex_group?: string | null
+  evidence_hint?: string | null
 }
 
 export interface PoolKeyDetail {

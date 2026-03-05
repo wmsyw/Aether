@@ -22,6 +22,10 @@ class FreeTeamFirstDimension(PresetDimensionBase):
         return "优先消耗低档账号（依赖 plan_type）"
 
     @property
+    def evidence_hint(self) -> str | None:
+        return "依据 plan_type（oauth_plan_type 或 upstream_metadata）"
+
+    @property
     def providers(self) -> tuple[str, ...]:
         return ("codex", "kiro")
 
@@ -40,12 +44,15 @@ class FreeTeamFirstDimension(PresetDimensionBase):
         all_key_ids: list[str],
         keys_by_id: dict[str, Any],
         lru_scores: dict[str, Any],
+        context: dict[str, Any],
         mode: str | None,
     ) -> float:
         plan_scores = {
             kid: plan_priority_score(extract_plan_type(keys_by_id.get(kid)), mode)
             for kid in all_key_ids
         }
+        if len(set(plan_scores.values())) <= 1:
+            return rank_ascending(key_id, lru_scores, all_key_ids)
         return rank_ascending(key_id, plan_scores, all_key_ids)
 
 

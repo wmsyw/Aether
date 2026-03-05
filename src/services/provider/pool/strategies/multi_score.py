@@ -101,6 +101,7 @@ class MultiScoreStrategy:
                 lru_enabled=lru_enabled,
                 lru_scores=lru_scores,
                 keys_by_id=keys_by_id,
+                context=context,
             )
 
         weights = getattr(config, "scoring_weights", None)
@@ -140,6 +141,7 @@ class MultiScoreStrategy:
         lru_enabled: bool,
         lru_scores: dict[str, Any],
         keys_by_id: dict[str, Any],
+        context: dict[str, Any],
     ) -> float:
         lru_rank_asc = rank_ascending(key_id, lru_scores, all_key_ids)
 
@@ -155,6 +157,7 @@ class MultiScoreStrategy:
                     all_key_ids=all_key_ids,
                     keys_by_id=keys_by_id,
                     lru_scores=lru_scores,
+                    context=context,
                     mode=mode,
                 )
             weight = 1.0 / (1.0 + _POSITIONAL_DECAY * idx)

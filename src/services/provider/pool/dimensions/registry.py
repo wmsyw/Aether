@@ -18,6 +18,8 @@ class PresetDimensionMeta:
     providers: tuple[str, ...]
     modes: tuple[str, ...] | None
     default_mode: str | None
+    mutex_group: str | None
+    evidence_hint: str | None
 
 
 class PresetDimensionBase(ABC):
@@ -59,6 +61,21 @@ class PresetDimensionBase(ABC):
 
         return None
 
+    @property
+    def mutex_group(self) -> str | None:
+        """Optional mutual-exclusion group key.
+
+        Presets in the same group are expected to be mutually exclusive in UI.
+        """
+
+        return None
+
+    @property
+    def evidence_hint(self) -> str | None:
+        """Human-readable hint about which data this preset uses."""
+
+        return None
+
     @abstractmethod
     def compute_metric(
         self,
@@ -67,6 +84,7 @@ class PresetDimensionBase(ABC):
         all_key_ids: list[str],
         keys_by_id: dict[str, Any],
         lru_scores: dict[str, Any],
+        context: dict[str, Any],
         mode: str | None,
     ) -> float:
         """Compute normalized metric in [0, 1], lower is better."""
@@ -142,6 +160,16 @@ def register_preset_dimension(dim: PresetDimensionBase) -> None:
                 return default_mode
             return modes[0]
 
+        @property
+        def mutex_group(self) -> str | None:
+            raw = _normalize_name(self._wrapped.mutex_group)
+            return raw or None
+
+        @property
+        def evidence_hint(self) -> str | None:
+            raw = str(self._wrapped.evidence_hint or "").strip()
+            return raw or None
+
         def compute_metric(
             self,
             *,
@@ -149,6 +177,7 @@ def register_preset_dimension(dim: PresetDimensionBase) -> None:
             all_key_ids: list[str],
             keys_by_id: dict[str, Any],
             lru_scores: dict[str, Any],
+            context: dict[str, Any],
             mode: str | None,
         ) -> float:
             return self._wrapped.compute_metric(
@@ -156,6 +185,7 @@ def register_preset_dimension(dim: PresetDimensionBase) -> None:
                 all_key_ids=all_key_ids,
                 keys_by_id=keys_by_id,
                 lru_scores=lru_scores,
+                context=context,
                 mode=mode,
             )
 
@@ -201,6 +231,8 @@ def get_preset_dimension_metas() -> list[PresetDimensionMeta]:
                 providers=dim.providers,
                 modes=dim.modes,
                 default_mode=dim.default_mode,
+                mutex_group=dim.mutex_group,
+                evidence_hint=dim.evidence_hint,
             )
         )
     return metas

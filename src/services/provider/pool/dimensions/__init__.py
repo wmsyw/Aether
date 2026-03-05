@@ -5,7 +5,11 @@ Importing this package registers all built-in preset dimensions.
 
 from __future__ import annotations
 
+from . import cost_first  # noqa: F401
 from . import free_team_first  # noqa: F401
+from . import health_first  # noqa: F401
+from . import latency_first  # noqa: F401
+from . import priority_first  # noqa: F401
 from . import quota_balanced  # noqa: F401
 from . import recent_refresh  # noqa: F401
 from . import single_account  # noqa: F401

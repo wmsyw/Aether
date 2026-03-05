@@ -19,8 +19,8 @@ def _context() -> dict:
     }
 
 
-def _key_with_metadata(metadata: dict) -> SimpleNamespace:
-    return SimpleNamespace(upstream_metadata=metadata)
+def _key_with_metadata(metadata: dict, **kwargs: object) -> SimpleNamespace:
+    return SimpleNamespace(upstream_metadata=metadata, **kwargs)
 
 
 def test_multi_score_returns_none_when_mode_not_enabled() -> None:
@@ -159,7 +159,7 @@ def test_multi_score_preset_recent_refresh_prefers_nearer_reset() -> None:
     assert s2 < s1
 
 
-def test_multi_score_preset_single_account_prefers_latest_used() -> None:
+def test_multi_score_preset_single_account_prefers_internal_priority_then_reverse_lru() -> None:
     strategy = MultiScoreStrategy()
     cfg = PoolConfig(
         scheduling_mode="multi_score",
@@ -168,7 +168,33 @@ def test_multi_score_preset_single_account_prefers_latest_used() -> None:
     ctx = {
         "all_key_ids": ["k1", "k2", "k3"],
         "lru_scores": {"k1": 100.0, "k2": 900.0, "k3": 400.0},
-        "keys_by_id": {},
+        "keys_by_id": {
+            "k1": _key_with_metadata({}, internal_priority=30),
+            "k2": _key_with_metadata({}, internal_priority=1),
+            "k3": _key_with_metadata({}, internal_priority=10),
+        },
+    }
+    s1 = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
+    s2 = strategy.compute_score(key_id="k2", config=cfg, context=ctx)
+    s3 = strategy.compute_score(key_id="k3", config=cfg, context=ctx)
+    assert s1 is not None and s2 is not None and s3 is not None
+    assert s2 < s3 < s1
+
+
+def test_multi_score_preset_priority_first_prefers_low_internal_priority() -> None:
+    strategy = MultiScoreStrategy()
+    cfg = PoolConfig(
+        scheduling_mode="multi_score",
+        scheduling_presets=(SchedulingPreset(preset="priority_first", enabled=True),),
+    )
+    ctx = {
+        "all_key_ids": ["k1", "k2", "k3"],
+        "lru_scores": {"k1": 100.0, "k2": 100.0, "k3": 100.0},
+        "keys_by_id": {
+            "k1": _key_with_metadata({}, internal_priority=20),
+            "k2": _key_with_metadata({}, internal_priority=3),
+            "k3": _key_with_metadata({}, internal_priority=11),
+        },
     }
     s1 = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
     s2 = strategy.compute_score(key_id="k2", config=cfg, context=ctx)

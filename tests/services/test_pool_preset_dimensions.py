@@ -14,7 +14,16 @@ def _key(metadata: dict, *, plan_type: str | None = None) -> SimpleNamespace:
 
 def test_registry_discovers_builtin_dimensions() -> None:
     names = get_preset_names()
-    assert {"free_team_first", "recent_refresh", "quota_balanced", "single_account"}.issubset(names)
+    assert {
+        "free_team_first",
+        "recent_refresh",
+        "quota_balanced",
+        "single_account",
+        "priority_first",
+        "health_first",
+        "latency_first",
+        "cost_first",
+    }.issubset(names)
 
 
 def test_universal_dimensions_are_applicable_to_any_provider() -> None:
@@ -78,6 +87,7 @@ def test_builtin_dimensions_compute_metric_in_range() -> None:
             all_key_ids=all_key_ids,
             keys_by_id=keys_by_id,
             lru_scores=lru_scores,
+            context={},
             mode=mode,
         )
         assert 0.0 <= metric <= 1.0

@@ -187,6 +187,37 @@ def extract_usage_ratio(key_obj: Any) -> float | None:
     return None
 
 
+def extract_internal_priority(key_obj: Any) -> int:
+    raw = getattr(key_obj, "internal_priority", None)
+    parsed = safe_float(raw)
+    if parsed is None:
+        return 999999
+    return max(0, int(parsed))
+
+
+def extract_health_score(key_obj: Any) -> float | None:
+    direct = safe_float(getattr(key_obj, "health_score", None))
+    if direct is not None:
+        return max(0.0, min(direct, 1.0))
+
+    health_by_format = getattr(key_obj, "health_by_format", None)
+    if not isinstance(health_by_format, dict) or not health_by_format:
+        return None
+
+    scores: list[float] = []
+    for payload in health_by_format.values():
+        if not isinstance(payload, dict):
+            continue
+        score = safe_float(payload.get("health_score"))
+        if score is None:
+            continue
+        scores.append(max(0.0, min(score, 1.0)))
+
+    if not scores:
+        return None
+    return min(scores)
+
+
 def plan_priority_score(plan_type: str | None, mode: str | None = None) -> float:
     """Score a key based on plan type and free_team_first mode."""
 
@@ -215,6 +246,8 @@ def plan_priority_score(plan_type: str | None, mode: str | None = None) -> float
 
 
 __all__ = [
+    "extract_health_score",
+    "extract_internal_priority",
     "extract_plan_type",
     "extract_reset_seconds",
     "extract_usage_ratio",

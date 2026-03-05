@@ -189,16 +189,6 @@
               v-if="selectedProviderId"
               class="h-4 w-px bg-border"
             />
-            <Button
-              v-if="selectedProviderId"
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="添加账号"
-              @click="showImportDialog = true"
-            >
-              <Upload class="w-3.5 h-3.5" />
-            </Button>
             <button
               v-if="selectedProviderId"
               class="group inline-flex items-center gap-1.5 px-2.5 h-8 rounded-md border border-border/50 bg-muted/20 hover:bg-muted/40 hover:border-primary/40 transition-all duration-200 text-xs"
@@ -209,6 +199,20 @@
               <span class="font-medium text-foreground/90">{{ poolSchedulingLabel }}</span>
               <ChevronDown class="w-3 h-3 text-muted-foreground/70 group-hover:text-foreground transition-colors" />
             </button>
+            <div
+              v-if="selectedProviderId"
+              class="h-4 w-px bg-border"
+            />
+            <Button
+              v-if="selectedProviderId"
+              variant="ghost"
+              size="icon"
+              class="h-8 w-8"
+              title="添加账号"
+              @click="showImportDialog = true"
+            >
+              <Upload class="w-3.5 h-3.5" />
+            </Button>
             <Button
               v-if="selectedProviderId"
               variant="ghost"
@@ -279,7 +283,7 @@
           v-if="keyPage.keys.length > 0"
           class="hidden xl:block overflow-x-auto"
         >
-          <Table class="min-w-[1420px]">
+          <Table class="min-w-[1400px]">
             <TableHeader>
               <TableRow class="border-b border-border/60 hover:bg-transparent">
                 <TableHead class="w-[320px] font-semibold whitespace-nowrap">
@@ -312,14 +316,38 @@
                 class="border-b border-border/40 last:border-b-0 hover:bg-muted/30 transition-colors"
                 :class="getRowClass(key)"
               >
-                <TableCell class="py-3">
-                  <div class="max-w-[260px] min-w-0">
+                <TableCell
+                  class="py-3"
+                >
+                  <div class="max-w-[320px] min-w-0">
                     <div class="flex items-center gap-1.5 min-w-0">
                       <span class="text-sm truncate block">
                         {{ key.key_name || '未命名' }}
                       </span>
                     </div>
                     <div class="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5 min-w-0">
+                      <input
+                        v-if="editingPriorityKeyId === key.key_id"
+                        :value="editingPriorityValue"
+                        type="number"
+                        min="1"
+                        max="999999"
+                        autofocus
+                        class="h-[18px] w-10 rounded border border-primary/50 bg-background px-1 text-[10px] tabular-nums text-foreground outline-none ring-1 ring-primary/30 shrink-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        @input="(e) => editingPriorityValue = Number((e.target as HTMLInputElement).value || 0)"
+                        @blur="(e) => finishEditInternalPriority(key, e)"
+                        @keydown.enter.prevent="(e) => finishEditInternalPriority(key, e)"
+                        @keydown.esc.prevent="cancelEditInternalPriority"
+                      >
+                      <button
+                        v-else
+                        type="button"
+                        class="h-4 px-1 rounded text-[10px] tabular-nums text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors shrink-0"
+                        title="点击编辑优先级"
+                        @click="startEditInternalPriority(key)"
+                      >
+                        P{{ key.internal_priority ?? 50 }}
+                      </button>
                       <Button
                         v-if="key.auth_type === 'oauth'"
                         variant="ghost"
@@ -622,6 +650,14 @@
                   </span>
                 </div>
                 <div class="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5 min-w-0">
+                  <button
+                    type="button"
+                    class="h-4 px-1 rounded text-[10px] tabular-nums text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors shrink-0"
+                    title="点击修改优先级"
+                    @click="quickEditInternalPriority(key)"
+                  >
+                    P{{ key.internal_priority ?? 50 }}
+                  </button>
                   <Button
                     v-if="key.auth_type === 'oauth'"
                     variant="ghost"
@@ -940,7 +976,7 @@
       :provider-type="selectedProviderType"
       :current-config="selectedProviderConfig"
       :current-claude-config="selectedProviderClaudeConfig"
-      @saved="loadOverview"
+      @saved="handleSchedulingSaved"
     />
     <KeyFormDialog
       v-if="selectedProviderId"
@@ -1080,7 +1116,8 @@ async function loadOverview() {
 
     if (!selectedStillExists) {
       if (enabledProviders.length > 0) {
-        await selectProvider(enabledProviders[0].provider_id)
+        // Do not block overview loading on key list fetch; keys area has its own loader.
+        void selectProvider(enabledProviders[0].provider_id)
       } else {
         selectedProviderId.value = null
         selectedProviderData.value = null
@@ -1094,6 +1131,15 @@ async function loadOverview() {
       overviewLoading.value = false
     }
   }
+}
+
+async function handleSchedulingSaved(updatedProvider: ProviderWithEndpointsSummary) {
+  // 优先回写保存接口返回值，避免弹窗立即重开时读到旧配置。
+  if (selectedProviderId.value && updatedProvider.id === selectedProviderId.value) {
+    selectedProviderData.value = updatedProvider
+  }
+  showSchedulingDialog.value = false
+  await loadOverview()
 }
 
 // --- Provider Selection ---
@@ -1160,11 +1206,10 @@ const poolSchedulingLabel = computed(() => {
     // New format: object list with { preset, enabled }
     const first = presets[0]
     if (typeof first === 'object' && first !== null && 'preset' in first) {
-      const enabledLabels = (presets as Array<{ preset: string; enabled?: boolean }>)
+      const enabledCount = (presets as Array<{ preset: string; enabled?: boolean }>)
         .filter(p => p.enabled !== false)
-        .map(p => presetLabels[normalizePresetName(p.preset)])
-        .filter(Boolean)
-      return enabledLabels.length > 0 ? enabledLabels.join('+') : '无启用维度'
+        .length
+      return enabledCount > 0 ? `${enabledCount} 维度` : '无启用维度'
     }
 
     // Legacy string list format
@@ -1172,7 +1217,7 @@ const poolSchedulingLabel = computed(() => {
       const labels = (presets as string[])
         .map(p => presetLabels[normalizePresetName(p)])
         .filter(Boolean)
-      if (labels.length > 0) return labels.join('+')
+      if (labels.length > 0) return `${labels.length} 维度`
     }
   }
 
@@ -1259,6 +1304,9 @@ const proxyDesktopPopoverOpenKeyId = ref<string | null>(null)
 const proxyMobilePopoverOpenKeyId = ref<string | null>(null)
 const deletingKeyId = ref<string | null>(null)
 const togglingKeyId = ref<string | null>(null)
+const editingPriorityKeyId = ref<string | null>(null)
+const editingPriorityValue = ref<number>(0)
+const prioritySavingKeyId = ref<string | null>(null)
 
 const keyPermissionsDialogOpen = ref(false)
 const keyFormDialogOpen = ref(false)
@@ -1509,6 +1557,66 @@ const editingKey = computed<EndpointAPIKey | null>(() => {
   if (!editingKeyDetail.value) return null
   return toEndpointApiKey(editingKeyDetail.value)
 })
+
+function sortCurrentPageKeysByPriority() {
+  keyPage.value.keys = [...keyPage.value.keys].sort((a, b) => {
+    const pa = Number(a.internal_priority ?? 50)
+    const pb = Number(b.internal_priority ?? 50)
+    if (pa !== pb) return pa - pb
+    return (a.created_at || '').localeCompare(b.created_at || '')
+  })
+}
+
+function startEditInternalPriority(key: PoolKeyDetail) {
+  editingPriorityKeyId.value = key.key_id
+  editingPriorityValue.value = Number(key.internal_priority ?? 50)
+}
+
+function cancelEditInternalPriority() {
+  editingPriorityKeyId.value = null
+  editingPriorityValue.value = 0
+}
+
+async function applyInternalPriority(key: PoolKeyDetail, nextPriority: number) {
+  const normalized = Math.max(1, Math.min(999999, Math.floor(nextPriority)))
+  if (Number(key.internal_priority ?? 50) === normalized) return
+
+  prioritySavingKeyId.value = key.key_id
+  try {
+    await updateProviderKey(key.key_id, { internal_priority: normalized })
+    key.internal_priority = normalized
+    sortCurrentPageKeysByPriority()
+    success('账号优先级已更新')
+  } catch (err) {
+    showError(parseApiError(err, '更新优先级失败'))
+  } finally {
+    prioritySavingKeyId.value = null
+  }
+}
+
+async function quickEditInternalPriority(key: PoolKeyDetail) {
+  const raw = window.prompt('设置账号优先级（1-999999，数字越小越优先）', String(key.internal_priority ?? 50))
+  if (raw === null) return
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) {
+    showWarning('请输入有效数字')
+    return
+  }
+  await applyInternalPriority(key, parsed)
+}
+
+async function finishEditInternalPriority(
+  key: PoolKeyDetail,
+  event: FocusEvent | KeyboardEvent,
+) {
+  if (prioritySavingKeyId.value) return
+  const target = event.target as HTMLInputElement | null
+  const raw = target?.value ?? String(editingPriorityValue.value)
+  const parsed = Number(raw)
+  const nextPriority = Number.isFinite(parsed) ? parsed : Number(key.internal_priority ?? 50)
+  cancelEditInternalPriority()
+  await applyInternalPriority(key, nextPriority)
+}
 
 function handleEditKey(key: PoolKeyDetail) {
   editingKeyDetail.value = key
@@ -1790,6 +1898,13 @@ const COOLDOWN_REASON_MAP: Record<string, string> = {
   auth_failed_401: '401 认证失败',
   payment_required_402: '402 欠费',
   server_error_500: '500 错误',
+  request_timeout_408: '408 超时',
+  conflict_409: '409 冲突',
+  locked_423: '423 锁定',
+  too_early_425: '425 Too Early',
+  bad_gateway_502: '502 网关错误',
+  service_unavailable_503: '503 服务不可用',
+  gateway_timeout_504: '504 网关超时',
 }
 
 function formatCooldownReason(reason: string): string {
@@ -2150,9 +2265,10 @@ function formatRelativeTime(isoStr: string): string {
 }
 
 // --- Init ---
-onMounted(async () => {
+onMounted(() => {
   startCountdownTimer()
-  await Promise.all([loadSchedulingPresetMetas(), loadOverview()])
+  void loadSchedulingPresetMetas()
+  void loadOverview()
 })
 
 onBeforeUnmount(() => {
