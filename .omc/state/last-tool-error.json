@@ -1,0 +1,7 @@
+{
+  "tool_name": "mcp__auggie-mcp__codebase-retrieval",
+  "tool_input_preview": "{\"information_request\":\"项目的主要结构和核心模块有哪些？\"}",
+  "error": "Failed to retrieve codebase information: HTTP error: 429 Too Many Requests",
+  "timestamp": "2026-03-05T15:05:35.491Z",
+  "retry_count": 2
+}
