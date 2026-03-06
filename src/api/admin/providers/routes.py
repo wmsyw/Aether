@@ -470,6 +470,7 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                 quota_last_reset_at=validated_data.quota_last_reset_at,
                 quota_expires_at=validated_data.quota_expires_at,
                 provider_priority=validated_data.provider_priority,
+                keep_priority_on_conversion=validated_data.keep_priority_on_conversion,
                 is_active=validated_data.is_active,
                 concurrent_limit=validated_data.concurrent_limit,
                 max_retries=validated_data.max_retries,
@@ -488,11 +489,20 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
             # 固定类型 Provider：自动创建并锁定预置 Endpoints（同一事务）
             template = _get_fixed_provider_template(provider.provider_type)
             if template:
+                from src.core.api_format.metadata import get_default_body_rules_for_endpoint
+
                 now = datetime.now(timezone.utc)
                 for sig in template.endpoint_signatures:
                     endpoint_config: dict[str, str] | None = None
                     if provider.provider_type == ProviderType.CODEX.value and sig == "openai:cli":
                         endpoint_config = {"upstream_stream_policy": "force_stream"}
+                    # 获取 provider-scoped 默认 body rules
+                    default_body_rules = (
+                        get_default_body_rules_for_endpoint(
+                            sig, provider_type=provider.provider_type
+                        )
+                        or None
+                    )
                     endpoint = ProviderEndpoint(
                         id=str(uuid.uuid4()),
                         provider_id=provider.id,
@@ -502,6 +512,7 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                         base_url=template.api_base_url,
                         custom_path=None,
                         header_rules=None,
+                        body_rules=default_body_rules,
                         max_retries=provider.max_retries or 2,
                         is_active=True,
                         config=endpoint_config,
