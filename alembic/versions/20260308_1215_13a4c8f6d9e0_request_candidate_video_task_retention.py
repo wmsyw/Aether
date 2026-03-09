@@ -7,9 +7,9 @@ Create Date: 2026-03-08 12:15:00.000000+00:00
 """
 
 import sqlalchemy as sa
+from helpers import new_cache, replace_fk_if_needed
 
 from alembic import op
-from helpers import new_cache, replace_fk_if_needed
 
 # revision identifiers, used by Alembic.
 revision = "13a4c8f6d9e0"
@@ -99,30 +99,6 @@ def upgrade() -> None:
         ["id"],
         "SET NULL",
     )
-
-    # --- Backfill: populate snapshots from existing FK joins ---
-    # One LEFT JOIN UPDATE per table covers all rows regardless of which FK is present.
-    op.execute("""
-        UPDATE request_candidates rc
-        SET username     = COALESCE(rc.username, usr.username),
-            api_key_name = COALESCE(rc.api_key_name, ak.name)
-        FROM request_candidates rc2
-        LEFT JOIN users usr ON usr.id = rc2.user_id
-        LEFT JOIN api_keys ak ON ak.id = rc2.api_key_id
-        WHERE rc.id = rc2.id
-          AND (rc.username IS NULL OR rc.api_key_name IS NULL)
-        """)
-
-    op.execute("""
-        UPDATE video_tasks vt
-        SET username     = COALESCE(vt.username, usr.username),
-            api_key_name = COALESCE(vt.api_key_name, ak.name)
-        FROM video_tasks vt2
-        LEFT JOIN users usr ON usr.id = vt2.user_id
-        LEFT JOIN api_keys ak ON ak.id = vt2.api_key_id
-        WHERE vt.id = vt2.id
-          AND (vt.username IS NULL OR vt.api_key_name IS NULL)
-        """)
 
 
 def downgrade() -> None:

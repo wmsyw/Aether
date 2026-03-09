@@ -7,9 +7,9 @@ Create Date: 2026-03-08 03:48:49.622091+00:00
 """
 
 import sqlalchemy as sa
+from helpers import new_cache, replace_fk_if_needed
 
 from alembic import op
-from helpers import new_cache, replace_fk_if_needed
 
 # revision identifiers, used by Alembic.
 revision = "45b118150a78"
@@ -79,31 +79,6 @@ def upgrade() -> None:
                 comment="API Key 名称快照（删除 Key 后仍可追溯）",
             ),
         )
-
-    # --- Backfill: populate snapshots from existing FK joins ---
-    # One LEFT JOIN UPDATE per table covers all rows regardless of which FK is present.
-    op.execute("""
-        UPDATE usage u
-        SET username     = COALESCE(u.username, usr.username),
-            api_key_name = COALESCE(u.api_key_name, ak.name)
-        FROM usage u2
-        LEFT JOIN users usr ON usr.id = u2.user_id
-        LEFT JOIN api_keys ak ON ak.id = u2.api_key_id
-        WHERE u.id = u2.id
-          AND (u.username IS NULL OR u.api_key_name IS NULL)
-    """)
-    op.execute("""
-        UPDATE stats_user_daily s
-        SET username = usr.username
-        FROM users usr
-        WHERE s.user_id = usr.id AND s.username IS NULL
-    """)
-    op.execute("""
-        UPDATE stats_daily_api_key s
-        SET api_key_name = ak.name
-        FROM api_keys ak
-        WHERE s.api_key_id = ak.id AND s.api_key_name IS NULL
-    """)
 
 
 def downgrade() -> None:
