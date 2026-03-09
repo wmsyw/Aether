@@ -16,13 +16,24 @@ from src.models.database import RequestCandidate
 from src.services.orchestration.error_classifier import ErrorAction, ErrorClassifier
 from src.services.request.candidate import RequestCandidateService
 from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
-from src.services.task.exceptions import StreamProbeError
-from src.services.task.protocol import AttemptFunc, AttemptKind, AttemptResult
-from src.services.task.schema import ExecutionResult
+from src.services.task.core.exceptions import StreamProbeError
+from src.services.task.core.protocol import AttemptFunc, AttemptKind, AttemptResult
+from src.services.task.core.schema import ExecutionResult
 
 from .policy import FailoverAction, RetryMode, RetryPolicy, SkipPolicy
 from .recorder import CandidateRecorder
 from .schema import CandidateKey
+
+_DISCONNECT_EXCEPTION_NAMES = frozenset({"ClientDisconnectedException"})
+
+
+def _is_client_disconnected(exc: Exception) -> bool:
+    """检查异常(或其 cause)是否为客户端断连，避免循环 import。"""
+    for obj in (exc, getattr(exc, "cause", None)):
+        if obj is not None and type(obj).__name__ in _DISCONNECT_EXCEPTION_NAMES:
+            return True
+    return False
+
 
 _SENSITIVE_PATTERN = re.compile(
     r"(api[_-]?key|token|bearer|authorization)[=:\s]+\S+",
@@ -49,6 +60,11 @@ class FailoverEngine:
 
     # Hard constraint: streaming first chunk probe timeout
     STREAM_FIRST_CHUNK_TIMEOUT_SECONDS: int = 30
+    RETRY_BACKOFF_EVERY_FAILURES: int = 10
+    RETRY_ROTATE_CLIENT_EVERY_FAILURES: int = 40
+    RETRY_BACKOFF_BASE_SECONDS: float = 0.025
+    RETRY_BACKOFF_MAX_SECONDS: float = 0.15
+    STREAM_CAPACITY_BACKOFF_SECONDS: float = 0.3
 
     def __init__(
         self,
@@ -61,6 +77,316 @@ class FailoverEngine:
         self._error_classifier = error_classifier or ErrorClassifier(db=db)
         self._recorder = recorder or CandidateRecorder(db)
 
+    async def _db_op(self, func: Callable[[], Any]) -> Any:
+        """将同步 DB 操作放到线程池执行，避免阻塞 asyncio 事件循环。
+
+        当事件循环被同步 db.commit() / db.execute() 阻塞时，
+        Hub PING 心跳无法发送，导致 worker idle timeout 断连，整个服务不可用。
+        """
+        return await asyncio.to_thread(func)
+
+    @staticmethod
+    def _collect_error_messages(error: Exception | None) -> str:
+        if error is None:
+            return ""
+
+        parts: list[str] = []
+        for item in (
+            getattr(error, "message", None),
+            getattr(error, "upstream_response", None),
+            str(error),
+        ):
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+
+        cause = getattr(error, "cause", None)
+        if cause is not None and cause is not error:
+            for item in (
+                getattr(cause, "message", None),
+                getattr(cause, "upstream_response", None),
+                str(cause),
+            ):
+                if isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+
+        return " | ".join(parts)
+
+    @classmethod
+    def _is_stream_capacity_error(cls, error: Exception | None) -> bool:
+        lowered = cls._collect_error_messages(error).lower()
+        return (
+            "max outbound streams" in lowered
+            or "too many concurrent streams" in lowered
+            or "max concurrent streams" in lowered
+        )
+
+    @classmethod
+    def _compute_retry_backoff_seconds(
+        cls,
+        *,
+        consecutive_failures: int,
+        error: Exception | None,
+    ) -> float:
+        if consecutive_failures <= 0:
+            return 0.0
+        if cls._is_stream_capacity_error(error):
+            return cls.STREAM_CAPACITY_BACKOFF_SECONDS
+        if consecutive_failures % cls.RETRY_BACKOFF_EVERY_FAILURES != 0:
+            return 0.0
+        step = max(1, consecutive_failures // cls.RETRY_BACKOFF_EVERY_FAILURES)
+        return min(cls.RETRY_BACKOFF_BASE_SECONDS * step, cls.RETRY_BACKOFF_MAX_SECONDS)
+
+    @classmethod
+    def _should_rotate_upstream_client(
+        cls,
+        *,
+        consecutive_failures: int,
+        error: Exception | None,
+    ) -> bool:
+        if cls._is_stream_capacity_error(error):
+            return True
+        return (
+            consecutive_failures >= cls.RETRY_ROTATE_CLIENT_EVERY_FAILURES
+            and consecutive_failures % cls.RETRY_ROTATE_CLIENT_EVERY_FAILURES == 0
+        )
+
+    async def _rotate_upstream_client(self, candidate: ProviderCandidate) -> bool:
+        from src.clients.http_client import HTTPClientPool
+        from src.services.proxy_node.resolver import (
+            resolve_delegate_config,
+            resolve_effective_proxy,
+        )
+
+        effective_proxy = resolve_effective_proxy(
+            getattr(candidate.provider, "proxy", None),
+            getattr(candidate.key, "proxy", None),
+        )
+        delegate_cfg = resolve_delegate_config(effective_proxy)
+        return await HTTPClientPool.reset_upstream_client(
+            delegate_cfg, proxy_config=effective_proxy
+        )
+
+    async def _apply_retry_pacing(
+        self,
+        *,
+        candidate: ProviderCandidate,
+        consecutive_failures: int,
+        error: Exception | None,
+        request_id: str | None,
+    ) -> None:
+        should_rotate = self._should_rotate_upstream_client(
+            consecutive_failures=consecutive_failures,
+            error=error,
+        )
+        if should_rotate:
+            rotated = await self._rotate_upstream_client(candidate)
+            if rotated:
+                logger.warning(
+                    "  [{}] 连续失败 {} 次，已重建上游客户端复用",
+                    request_id,
+                    consecutive_failures,
+                )
+
+        backoff_seconds = self._compute_retry_backoff_seconds(
+            consecutive_failures=consecutive_failures,
+            error=error,
+        )
+        if backoff_seconds > 0:
+            logger.warning(
+                "  [{}] 连续失败 {} 次，退避 {:.0f}ms 后继续尝试",
+                request_id,
+                consecutive_failures,
+                backoff_seconds * 1000,
+            )
+            await asyncio.sleep(backoff_seconds)
+
+    async def _check_cancellation(
+        self,
+        is_cancelled: Callable[[], Awaitable[bool]] | None,
+    ) -> bool:
+        if is_cancelled is None:
+            return False
+        try:
+            return bool(await is_cancelled())
+        except Exception:
+            return False
+
+    async def _mark_remaining_cancelled(
+        self,
+        *,
+        candidate_record_map: dict[tuple[int, int], str] | None,
+        candidates: list[ProviderCandidate],
+        from_candidate_idx: int,
+        from_retry_idx: int,
+        retry_policy: RetryPolicy,
+    ) -> None:
+        if not candidate_record_map:
+            return
+
+        # Pre-compute outside thread (reads ProviderCandidate attrs that may not be thread-safe)
+        record_ids: list[str] = []
+        for candidate_idx, cand in enumerate(candidates):
+            if candidate_idx < from_candidate_idx:
+                continue
+            max_retries = self._get_max_retries(cand, retry_policy)
+            for retry_idx in range(max_retries):
+                if candidate_idx == from_candidate_idx and retry_idx < from_retry_idx:
+                    continue
+                record_id = candidate_record_map.get((candidate_idx, retry_idx))
+                if record_id:
+                    record_ids.append(record_id)
+
+        if not record_ids:
+            return
+
+        def _do() -> None:
+            now = datetime.now(timezone.utc)
+            for rid in record_ids:
+                self.db.execute(
+                    update(RequestCandidate)
+                    .where(RequestCandidate.id == rid)
+                    .where(RequestCandidate.status.in_(["available", "pending"]))
+                    .values(
+                        status="cancelled",
+                        status_code=499,
+                        error_message="cancelled_by_client",
+                        finished_at=now,
+                    )
+                )
+            self.db.commit()
+
+        await self._db_op(_do)
+
+    def _append_cancelled_fallback_candidate_keys(
+        self,
+        *,
+        fallback: list[CandidateKey],
+        candidates: list[ProviderCandidate],
+        from_candidate_idx: int,
+        from_retry_idx: int,
+        retry_policy: RetryPolicy,
+    ) -> None:
+        existing = {(item.candidate_index, item.retry_index) for item in fallback}
+        for candidate_idx, cand in enumerate(candidates):
+            if candidate_idx < from_candidate_idx:
+                continue
+            max_retries = self._get_max_retries(cand, retry_policy)
+            for retry_idx in range(max_retries):
+                if candidate_idx == from_candidate_idx and retry_idx < from_retry_idx:
+                    continue
+                key = (candidate_idx, retry_idx)
+                if key in existing:
+                    continue
+                original_key = getattr(cand, "key", None)
+                original_pool_key_index = getattr(cand, "_pool_key_index", 0)
+                if isinstance(cand, PoolCandidate) and cand.pool_keys:
+                    retry_slots_per_key = self._get_pool_key_max_retries(cand, retry_policy)
+                    pool_key_index = min(retry_idx // retry_slots_per_key, len(cand.pool_keys) - 1)
+                    cand.key = cand.pool_keys[pool_key_index]
+                    cand._pool_key_index = pool_key_index
+                fallback.append(
+                    self._make_candidate_key(
+                        candidate=cand,
+                        candidate_index=candidate_idx,
+                        retry_index=retry_idx,
+                        status="cancelled",
+                        error_message="cancelled_by_client",
+                        status_code=499,
+                    )
+                )
+                if isinstance(cand, PoolCandidate):
+                    cand.key = original_key
+                    cand._pool_key_index = original_pool_key_index
+                existing.add(key)
+
+    async def _maybe_cancel_execution(
+        self,
+        *,
+        is_cancelled: Callable[[], Awaitable[bool]] | None,
+        candidate_record_map: dict[tuple[int, int], str] | None,
+        candidate_keys_fallback: list[CandidateKey],
+        candidates: list[ProviderCandidate],
+        from_candidate_idx: int,
+        from_retry_idx: int,
+        retry_policy: RetryPolicy,
+        request_id: str | None,
+        attempt_count: int,
+    ) -> ExecutionResult | None:
+        if not await self._check_cancellation(is_cancelled):
+            return None
+
+        logger.info(
+            "[FailoverEngine] Request cancelled by client at candidate_index={}, retry_index={}",
+            from_candidate_idx,
+            from_retry_idx,
+        )
+        await self._mark_remaining_cancelled(
+            candidate_record_map=candidate_record_map,
+            candidates=candidates,
+            from_candidate_idx=from_candidate_idx,
+            from_retry_idx=from_retry_idx,
+            retry_policy=retry_policy,
+        )
+        self._append_cancelled_fallback_candidate_keys(
+            fallback=candidate_keys_fallback,
+            candidates=candidates,
+            from_candidate_idx=from_candidate_idx,
+            from_retry_idx=from_retry_idx,
+            retry_policy=retry_policy,
+        )
+        return ExecutionResult(
+            success=False,
+            error_type="cancelled",
+            error_message="cancelled_by_client",
+            last_status_code=499,
+            candidate_keys=self._get_candidate_keys(
+                request_id=request_id,
+                fallback=candidate_keys_fallback,
+                candidates=candidates,
+            ),
+            attempt_count=attempt_count,
+        )
+
+    async def _build_disconnected_result(
+        self,
+        *,
+        candidate_record_map: dict[tuple[int, int], str] | None,
+        candidate_keys_fallback: list[CandidateKey],
+        candidates: list[ProviderCandidate],
+        from_candidate_idx: int,
+        from_retry_idx: int,
+        retry_policy: RetryPolicy,
+        request_id: str | None,
+        attempt_count: int,
+    ) -> ExecutionResult:
+        """客户端已断连，立即终止故障转移并返回结果。"""
+        await self._mark_remaining_cancelled(
+            candidate_record_map=candidate_record_map,
+            candidates=candidates,
+            from_candidate_idx=from_candidate_idx,
+            from_retry_idx=from_retry_idx,
+            retry_policy=retry_policy,
+        )
+        self._append_cancelled_fallback_candidate_keys(
+            fallback=candidate_keys_fallback,
+            candidates=candidates,
+            from_candidate_idx=from_candidate_idx,
+            from_retry_idx=from_retry_idx,
+            retry_policy=retry_policy,
+        )
+        return ExecutionResult(
+            success=False,
+            error_type="ClientDisconnected",
+            error_message="client_disconnected",
+            last_status_code=499,
+            candidate_keys=self._get_candidate_keys(
+                request_id=request_id,
+                fallback=candidate_keys_fallback,
+                candidates=candidates,
+            ),
+            attempt_count=attempt_count,
+        )
+
     async def execute(
         self,
         *,
@@ -71,6 +397,8 @@ class FailoverEngine:
         request_id: str | None = None,
         user_id: str | None = None,
         api_key_id: str | None = None,
+        username: str | None = None,
+        api_key_name: str | None = None,
         candidate_record_map: dict[tuple[int, int], str] | None = None,
         max_candidates: int | None = None,
         max_attempts: int | None = None,
@@ -81,6 +409,7 @@ class FailoverEngine:
             ]
             | None
         ) = None,
+        is_cancelled: Callable[[], Awaitable[bool]] | None = None,
     ) -> ExecutionResult:
         """
         Execute candidate traversal + retry + failover.
@@ -95,6 +424,7 @@ class FailoverEngine:
             candidates = candidates[:max_candidates]
 
         attempt_count = 0
+        consecutive_failures = 0
         last_status_code: int | None = None
 
         # For logging / dispatcher parity only; callers may pass an exact value.
@@ -108,11 +438,25 @@ class FailoverEngine:
             max_attempts = computed
 
         for candidate_index, candidate in enumerate(candidates):
+            cancelled_result = await self._maybe_cancel_execution(
+                is_cancelled=is_cancelled,
+                candidate_record_map=candidate_record_map,
+                candidate_keys_fallback=candidate_keys_fallback,
+                candidates=candidates,
+                from_candidate_idx=candidate_index,
+                from_retry_idx=0,
+                retry_policy=retry_policy,
+                request_id=request_id,
+                attempt_count=attempt_count,
+            )
+            if cancelled_result is not None:
+                return cancelled_result
+
             should_skip, skip_reason = self._should_skip(candidate, skip_policy)
             if should_skip:
                 # PRE_EXPAND: mark all retry slots skipped.
                 if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                    self._mark_candidate_skipped(
+                    await self._mark_candidate_skipped(
                         candidate_record_map=candidate_record_map,
                         candidate_index=candidate_index,
                         candidate=candidate,
@@ -128,6 +472,8 @@ class FailoverEngine:
                             candidate_index=candidate_index,
                             user_id=user_id,
                             api_key_id=api_key_id,
+                            username=username,
+                            api_key_name=api_key_name,
                             skip_reason=skip_reason,
                         )
                 candidate_keys_fallback.append(
@@ -142,20 +488,26 @@ class FailoverEngine:
                 continue
 
             if isinstance(candidate, PoolCandidate):
-                pool_result, attempt_count, last_status_code = await self._execute_pool_candidate(
-                    candidate=candidate,
-                    candidate_index=candidate_index,
-                    attempt_func=attempt_func,
-                    retry_policy=retry_policy,
-                    request_id=request_id,
-                    user_id=user_id,
-                    api_key_id=api_key_id,
-                    candidate_record_map=candidate_record_map,
-                    candidate_keys_fallback=candidate_keys_fallback,
-                    candidates=candidates,
-                    attempt_count=attempt_count,
-                    max_attempts=max_attempts,
-                    execution_error_handler=execution_error_handler,
+                pool_result, attempt_count, consecutive_failures, last_status_code = (
+                    await self._execute_pool_candidate(
+                        candidate=candidate,
+                        candidate_index=candidate_index,
+                        attempt_func=attempt_func,
+                        retry_policy=retry_policy,
+                        request_id=request_id,
+                        user_id=user_id,
+                        api_key_id=api_key_id,
+                        username=username,
+                        api_key_name=api_key_name,
+                        candidate_record_map=candidate_record_map,
+                        candidate_keys_fallback=candidate_keys_fallback,
+                        candidates=candidates,
+                        attempt_count=attempt_count,
+                        max_attempts=max_attempts,
+                        execution_error_handler=execution_error_handler,
+                        consecutive_failures=consecutive_failures,
+                        is_cancelled=is_cancelled,
+                    )
                 )
                 if pool_result is not None:
                     return pool_result
@@ -164,6 +516,20 @@ class FailoverEngine:
             max_retries = self._get_max_retries(candidate, retry_policy)
             retry_index = 0
             while retry_index < max_retries:
+                cancelled_result = await self._maybe_cancel_execution(
+                    is_cancelled=is_cancelled,
+                    candidate_record_map=candidate_record_map,
+                    candidate_keys_fallback=candidate_keys_fallback,
+                    candidates=candidates,
+                    from_candidate_idx=candidate_index,
+                    from_retry_idx=retry_index,
+                    retry_policy=retry_policy,
+                    request_id=request_id,
+                    attempt_count=attempt_count,
+                )
+                if cancelled_result is not None:
+                    return cancelled_result
+
                 attempt_count += 1
 
                 # Resolve/create record_id
@@ -181,23 +547,17 @@ class FailoverEngine:
                         retry_index=retry_index,
                         user_id=user_id,
                         api_key_id=api_key_id,
+                        username=username,
+                        api_key_name=api_key_name,
                     )
 
                 self._attach_attempt_context(
                     candidate, candidate_index, retry_index, record_id, attempt_count, max_attempts
                 )
 
-                # Mark pending
-                now = datetime.now(timezone.utc)
-                if record_id:
-                    self._update_record(
-                        record_id,
-                        status="pending",
-                        started_at=now,
-                    )
-
-                # Commit BEFORE await (avoid holding DB connections during slow upstream calls)
-                self._commit_before_await()
+                # Mark pending + commit BEFORE await
+                # (avoid holding DB connections during slow upstream calls)
+                await self._mark_pending_and_commit(record_id)
 
                 try:
                     attempt_result = await self._execute_attempt(
@@ -209,7 +569,7 @@ class FailoverEngine:
 
                     # PRE_EXPAND: mark unused slots after request ends (success)
                     if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                        self._mark_remaining_slots_unused(
+                        await self._mark_remaining_slots_unused(
                             candidate_record_map=candidate_record_map,
                             candidates=candidates,
                             success_candidate_idx=candidate_index,
@@ -217,6 +577,7 @@ class FailoverEngine:
                             retry_policy=retry_policy,
                         )
 
+                    consecutive_failures = 0
                     return ExecutionResult(
                         success=True,
                         attempt_result=attempt_result,
@@ -238,10 +599,30 @@ class FailoverEngine:
 
                 except StreamProbeError as exc:
                     last_status_code = exc.http_status
-                    self._record_attempt_failure(record_id, exc, exc.http_status)
+                    await self._record_attempt_failure(record_id, exc, exc.http_status)
                     action = FailoverAction.CONTINUE
+                    consecutive_failures += 1
+                    await self._apply_retry_pacing(
+                        candidate=candidate,
+                        consecutive_failures=consecutive_failures,
+                        error=exc,
+                        request_id=request_id,
+                    )
 
                 except Exception as exc:
+                    if _is_client_disconnected(exc):
+                        await self._record_attempt_failure(record_id, exc, 499)
+                        return await self._build_disconnected_result(
+                            candidate_record_map=candidate_record_map,
+                            candidate_keys_fallback=candidate_keys_fallback,
+                            candidates=candidates,
+                            from_candidate_idx=candidate_index,
+                            from_retry_idx=retry_index + 1,
+                            retry_policy=retry_policy,
+                            request_id=request_id,
+                            attempt_count=attempt_count,
+                        )
+
                     outcome = await self._handle_attempt_error(
                         exc,
                         candidate=candidate,
@@ -263,12 +644,20 @@ class FailoverEngine:
                     max_retries = outcome.max_retries
                     if outcome.stop_result is not None:
                         return outcome.stop_result
+                    if action in {FailoverAction.CONTINUE, FailoverAction.RETRY}:
+                        consecutive_failures += 1
+                        await self._apply_retry_pacing(
+                            candidate=candidate,
+                            consecutive_failures=consecutive_failures,
+                            error=exc,
+                            request_id=request_id,
+                        )
 
                 # action switch: continue/ retry
                 if action == FailoverAction.CONTINUE:
                     # PRE_EXPAND: if we break early, mark remaining retries of this candidate unused.
                     if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                        self._mark_candidate_remaining_retries_unused(
+                        await self._mark_candidate_remaining_retries_unused(
                             candidate_record_map=candidate_record_map,
                             candidate_idx=candidate_index,
                             from_retry_idx=retry_index + 1,
@@ -284,7 +673,7 @@ class FailoverEngine:
 
         # exhausted: PRE_EXPAND should not leave 'available' records behind
         if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-            self._mark_all_remaining_available_unused(candidate_record_map)
+            await self._mark_all_remaining_available_unused(candidate_record_map)
 
         return ExecutionResult(
             success=False,
@@ -309,19 +698,37 @@ class FailoverEngine:
         request_id: str | None,
         user_id: str | None,
         api_key_id: str | None,
+        username: str | None,
+        api_key_name: str | None,
         candidate_record_map: dict[tuple[int, int], str] | None,
         candidate_keys_fallback: list[CandidateKey],
         candidates: list[ProviderCandidate],
         attempt_count: int,
+        consecutive_failures: int,
         max_attempts: int | None,
         execution_error_handler: Any,
-    ) -> tuple[ExecutionResult | None, int, int | None]:
+        is_cancelled: Callable[[], Awaitable[bool]] | None,
+    ) -> tuple[ExecutionResult | None, int, int, int | None]:
         """Execute a PoolCandidate with in-pool key failover."""
         last_status_code: int | None = None
         retry_slots_per_key = self._get_pool_key_max_retries(candidate, retry_policy)
 
         for key_index, pool_key in enumerate(candidate.pool_keys or []):
             base_retry_index = key_index * retry_slots_per_key
+            cancelled_result = await self._maybe_cancel_execution(
+                is_cancelled=is_cancelled,
+                candidate_record_map=candidate_record_map,
+                candidate_keys_fallback=candidate_keys_fallback,
+                candidates=candidates,
+                from_candidate_idx=candidate_index,
+                from_retry_idx=base_retry_index,
+                retry_policy=retry_policy,
+                request_id=request_id,
+                attempt_count=attempt_count,
+            )
+            if cancelled_result is not None:
+                return cancelled_result, attempt_count, consecutive_failures, last_status_code
+
             candidate.key = pool_key
             candidate._pool_key_index = key_index
             candidate.mapping_matched_model = getattr(pool_key, "_pool_mapping_matched_model", None)
@@ -333,7 +740,7 @@ class FailoverEngine:
                     or "pool_skipped"
                 )
                 if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                    self._mark_retry_indices_status(
+                    await self._mark_retry_indices_status(
                         candidate_record_map=candidate_record_map,
                         candidate_idx=candidate_index,
                         retry_indices=range(
@@ -350,6 +757,8 @@ class FailoverEngine:
                         retry_index=base_retry_index,
                         user_id=user_id,
                         api_key_id=api_key_id,
+                        username=username,
+                        api_key_name=api_key_name,
                         skip_reason=skip_reason,
                     )
                 candidate_keys_fallback.append(
@@ -366,8 +775,22 @@ class FailoverEngine:
             max_retries_for_key = retry_slots_per_key
             retry_index = 0
             while retry_index < max_retries_for_key:
-                attempt_count += 1
                 composite_retry_index = base_retry_index + retry_index
+                cancelled_result = await self._maybe_cancel_execution(
+                    is_cancelled=is_cancelled,
+                    candidate_record_map=candidate_record_map,
+                    candidate_keys_fallback=candidate_keys_fallback,
+                    candidates=candidates,
+                    from_candidate_idx=candidate_index,
+                    from_retry_idx=composite_retry_index,
+                    retry_policy=retry_policy,
+                    request_id=request_id,
+                    attempt_count=attempt_count,
+                )
+                if cancelled_result is not None:
+                    return cancelled_result, attempt_count, consecutive_failures, last_status_code
+
+                attempt_count += 1
 
                 record_id = None
                 if candidate_record_map:
@@ -383,6 +806,8 @@ class FailoverEngine:
                         retry_index=composite_retry_index,
                         user_id=user_id,
                         api_key_id=api_key_id,
+                        username=username,
+                        api_key_name=api_key_name,
                     )
 
                 self._attach_attempt_context(
@@ -394,15 +819,7 @@ class FailoverEngine:
                     max_attempts,
                 )
 
-                now = datetime.now(timezone.utc)
-                if record_id:
-                    self._update_record(
-                        record_id,
-                        status="pending",
-                        started_at=now,
-                    )
-
-                self._commit_before_await()
+                await self._mark_pending_and_commit(record_id)
 
                 try:
                     attempt_result = await self._execute_attempt(
@@ -413,7 +830,7 @@ class FailoverEngine:
                     last_status_code = int(getattr(attempt_result, "http_status", 0) or 0)
 
                     if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                        self._mark_remaining_slots_unused(
+                        await self._mark_remaining_slots_unused(
                             candidate_record_map=candidate_record_map,
                             candidates=candidates,
                             success_candidate_idx=candidate_index,
@@ -421,6 +838,7 @@ class FailoverEngine:
                             retry_policy=retry_policy,
                         )
 
+                    consecutive_failures = 0
                     return (
                         ExecutionResult(
                             success=True,
@@ -441,15 +859,41 @@ class FailoverEngine:
                             request_candidate_id=record_id,
                         ),
                         attempt_count,
+                        consecutive_failures,
                         last_status_code,
                     )
 
                 except StreamProbeError as exc:
                     last_status_code = exc.http_status
-                    self._record_attempt_failure(record_id, exc, exc.http_status)
+                    await self._record_attempt_failure(record_id, exc, exc.http_status)
                     action = FailoverAction.CONTINUE
+                    consecutive_failures += 1
+                    await self._apply_retry_pacing(
+                        candidate=candidate,
+                        consecutive_failures=consecutive_failures,
+                        error=exc,
+                        request_id=request_id,
+                    )
 
                 except Exception as exc:
+                    if _is_client_disconnected(exc):
+                        await self._record_attempt_failure(record_id, exc, 499)
+                        return (
+                            await self._build_disconnected_result(
+                                candidate_record_map=candidate_record_map,
+                                candidate_keys_fallback=candidate_keys_fallback,
+                                candidates=candidates,
+                                from_candidate_idx=candidate_index,
+                                from_retry_idx=composite_retry_index + 1,
+                                retry_policy=retry_policy,
+                                request_id=request_id,
+                                attempt_count=attempt_count,
+                            ),
+                            attempt_count,
+                            consecutive_failures,
+                            499,
+                        )
+
                     outcome = await self._handle_pool_attempt_error(
                         exc,
                         candidate=candidate,
@@ -465,13 +909,21 @@ class FailoverEngine:
                     action = outcome.action
                     last_status_code = outcome.last_status_code
                     max_retries_for_key = min(outcome.max_retries, retry_slots_per_key)
+                    if action in {FailoverAction.CONTINUE, FailoverAction.RETRY}:
+                        consecutive_failures += 1
+                        await self._apply_retry_pacing(
+                            candidate=candidate,
+                            consecutive_failures=consecutive_failures,
+                            error=exc,
+                            request_id=request_id,
+                        )
 
                 if action == FailoverAction.CONTINUE:
                     if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
                         # max_retries_for_key may have been shrunk by error handler;
                         # mark unused up to the *original* retry_slots_per_key to cover
                         # all pre-created records.
-                        self._mark_retry_indices_status(
+                        await self._mark_retry_indices_status(
                             candidate_record_map=candidate_record_map,
                             candidate_idx=candidate_index,
                             retry_indices=range(
@@ -490,15 +942,15 @@ class FailoverEngine:
                 # should not terminate the entire request because other providers may still succeed.
                 # When handler_used=True, TaskService raises directly for true STOP semantics.
                 if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                    self._mark_candidate_remaining_retries_unused(
+                    await self._mark_candidate_remaining_retries_unused(
                         candidate_record_map=candidate_record_map,
                         candidate_idx=candidate_index,
                         from_retry_idx=composite_retry_index + 1,
                         retry_policy=retry_policy,
                     )
-                return None, attempt_count, last_status_code
+                return None, attempt_count, consecutive_failures, last_status_code
 
-        return None, attempt_count, last_status_code
+        return None, attempt_count, consecutive_failures, last_status_code
 
     async def _handle_pool_attempt_error(
         self,
@@ -587,7 +1039,7 @@ class FailoverEngine:
                     candidate, is_success=True, response_text=body_text
                 )
                 if rule_action == FailoverAction.CONTINUE:
-                    self._record_attempt_failure(
+                    await self._record_attempt_failure(
                         record_id,
                         Exception("success_failover_pattern matched"),
                         200,
@@ -597,43 +1049,55 @@ class FailoverEngine:
                         http_status=200,
                     )
 
-        self._record_attempt_success(record_id, attempt_result)
+        await self._record_attempt_success(record_id, attempt_result)
         return attempt_result
 
-    def _record_attempt_success(self, record_id: str | None, attempt_result: AttemptResult) -> None:
+    async def _record_attempt_success(
+        self, record_id: str | None, attempt_result: AttemptResult
+    ) -> None:
         """Mark attempt record as success/streaming."""
         if not record_id:
             return
-        if attempt_result.kind == AttemptKind.STREAM:
-            self._update_record(
-                record_id,
-                status="streaming",
-                status_code=attempt_result.http_status,
-            )
-        else:
-            self._update_record(
-                record_id,
-                status="success",
-                status_code=attempt_result.http_status,
-                finished_at=datetime.now(timezone.utc),
-            )
-        self.db.commit()
 
-    def _record_attempt_failure(
+        def _do() -> None:
+            if attempt_result.kind == AttemptKind.STREAM:
+                self._update_record(
+                    record_id,
+                    status="streaming",
+                    status_code=attempt_result.http_status,
+                )
+            else:
+                self._update_record(
+                    record_id,
+                    status="success",
+                    status_code=attempt_result.http_status,
+                    finished_at=datetime.now(timezone.utc),
+                )
+            self.db.commit()
+
+        await self._db_op(_do)
+
+    async def _record_attempt_failure(
         self, record_id: str | None, exc: Exception, status_code: int | None = None
     ) -> None:
         """Mark attempt record as failed."""
         if not record_id:
             return
-        self._update_record(
-            record_id,
-            status="failed",
-            status_code=status_code,
-            error_type=type(exc).__name__,
-            error_message=self._sanitize(str(exc)),
-            finished_at=datetime.now(timezone.utc),
-        )
-        self.db.commit()
+        error_type = type(exc).__name__
+        error_message = self._sanitize(str(exc))
+
+        def _do() -> None:
+            self._update_record(
+                record_id,
+                status="failed",
+                status_code=status_code,
+                error_type=error_type,
+                error_message=error_message,
+                finished_at=datetime.now(timezone.utc),
+            )
+            self.db.commit()
+
+        await self._db_op(_do)
 
     async def _handle_attempt_error(
         self,
@@ -674,7 +1138,7 @@ class FailoverEngine:
 
         if outcome.action == FailoverAction.STOP:
             if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                self._mark_remaining_slots_unused(
+                await self._mark_remaining_slots_unused(
                     candidate_record_map=candidate_record_map,
                     candidates=candidates,
                     success_candidate_idx=candidate_index,
@@ -748,7 +1212,7 @@ class FailoverEngine:
             last_status_code = int(getattr(exc, "status_code", 0) or 0) or int(
                 getattr(exc, "http_status", 0) or 0
             )
-            self._record_attempt_failure(record_id, exc, last_status_code or None)
+            await self._record_attempt_failure(record_id, exc, last_status_code or None)
 
         return AttemptErrorOutcome(
             action=action,
@@ -822,13 +1286,33 @@ class FailoverEngine:
             )
         return result
 
-    def _commit_before_await(self) -> None:
-        if self.db.in_transaction():
-            try:
-                self.db.commit()
-            except Exception:
-                self.db.rollback()
-                raise
+    async def _commit_before_await(self) -> None:
+        def _do() -> None:
+            if self.db.in_transaction():
+                try:
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
+                    raise
+
+        await self._db_op(_do)
+
+    async def _mark_pending_and_commit(self, record_id: str | None) -> None:
+        """Mark record as pending and commit, all within a worker thread."""
+
+        def _do() -> None:
+            if record_id:
+                self._update_record(
+                    record_id, status="pending", started_at=datetime.now(timezone.utc)
+                )
+            if self.db.in_transaction():
+                try:
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
+                    raise
+
+        await self._db_op(_do)
 
     def _update_record(self, record_id: str, /, **values: Any) -> None:
         self.db.execute(
@@ -844,24 +1328,36 @@ class FailoverEngine:
         retry_index: int,
         user_id: str | None,
         api_key_id: str | None,
+        username: str | None,
+        api_key_name: str | None,
     ) -> str:
         # Create "available" record, then caller will mark pending.
         extra = self._build_pool_extra_data(candidate)
-        row = RequestCandidateService.create_candidate(
-            db=self.db,
-            request_id=request_id,
-            candidate_index=candidate_index,
-            retry_index=retry_index,
-            user_id=user_id,
-            api_key_id=api_key_id,
-            provider_id=str(candidate.provider.id),
-            endpoint_id=str(candidate.endpoint.id),
-            key_id=str(candidate.key.id),
-            status="available",
-            is_cached=bool(getattr(candidate, "is_cached", False)),
-            extra_data=extra,
-        )
-        return str(row.id)
+        provider_id = str(candidate.provider.id)
+        endpoint_id = str(candidate.endpoint.id)
+        key_id = str(candidate.key.id)
+        is_cached = bool(getattr(candidate, "is_cached", False))
+
+        def _do() -> str:
+            row = RequestCandidateService.create_candidate(
+                db=self.db,
+                request_id=request_id,
+                candidate_index=candidate_index,
+                retry_index=retry_index,
+                user_id=user_id,
+                api_key_id=api_key_id,
+                username=username,
+                api_key_name=api_key_name,
+                provider_id=provider_id,
+                endpoint_id=endpoint_id,
+                key_id=key_id,
+                status="available",
+                is_cached=is_cached,
+                extra_data=extra,
+            )
+            return str(row.id)
+
+        return await self._db_op(_do)
 
     async def _create_skipped_record(
         self,
@@ -872,28 +1368,40 @@ class FailoverEngine:
         retry_index: int = 0,
         user_id: str | None,
         api_key_id: str | None,
+        username: str | None,
+        api_key_name: str | None,
         skip_reason: str | None,
     ) -> str:
         extra = self._build_pool_extra_data(candidate)
-        row = RequestCandidateService.create_candidate(
-            db=self.db,
-            request_id=request_id,
-            candidate_index=candidate_index,
-            retry_index=retry_index,
-            user_id=user_id,
-            api_key_id=api_key_id,
-            provider_id=str(candidate.provider.id),
-            endpoint_id=str(candidate.endpoint.id),
-            key_id=str(candidate.key.id),
-            status="skipped",
-            skip_reason=skip_reason,
-            is_cached=bool(getattr(candidate, "is_cached", False)),
-            extra_data=extra,
-        )
-        # ensure visible for subsequent recorder reads
-        if self.db.in_transaction():
-            self.db.commit()
-        return str(row.id)
+        provider_id = str(candidate.provider.id)
+        endpoint_id = str(candidate.endpoint.id)
+        key_id = str(candidate.key.id)
+        is_cached = bool(getattr(candidate, "is_cached", False))
+
+        def _do() -> str:
+            row = RequestCandidateService.create_candidate(
+                db=self.db,
+                request_id=request_id,
+                candidate_index=candidate_index,
+                retry_index=retry_index,
+                user_id=user_id,
+                api_key_id=api_key_id,
+                username=username,
+                api_key_name=api_key_name,
+                provider_id=provider_id,
+                endpoint_id=endpoint_id,
+                key_id=key_id,
+                status="skipped",
+                skip_reason=skip_reason,
+                is_cached=is_cached,
+                extra_data=extra,
+            )
+            # ensure visible for subsequent recorder reads
+            if self.db.in_transaction():
+                self.db.commit()
+            return str(row.id)
+
+        return await self._db_op(_do)
 
     def _build_pool_extra_data(self, candidate: ProviderCandidate) -> dict[str, Any]:
         extra: dict[str, Any] = {}
@@ -1196,7 +1704,7 @@ class FailoverEngine:
                 self._sanitize(str(inner)),
             )
 
-    def _mark_candidate_skipped(
+    async def _mark_candidate_skipped(
         self,
         *,
         candidate_record_map: dict[tuple[int, int], str],
@@ -1206,19 +1714,23 @@ class FailoverEngine:
         skip_reason: str | None,
     ) -> None:
         max_retries = self._get_max_retries(candidate, retry_policy)
-        now = datetime.now(timezone.utc)
-        for retry_index in range(max_retries):
-            record_id = candidate_record_map.get((candidate_index, retry_index))
-            if record_id:
-                self._update_record(
-                    record_id,
-                    status="skipped",
-                    skip_reason=skip_reason,
-                    finished_at=now,
-                )
-        self.db.commit()
+        record_ids = [
+            candidate_record_map[candidate_index, ri]
+            for ri in range(max_retries)
+            if (candidate_index, ri) in candidate_record_map
+        ]
+        if not record_ids:
+            return
 
-    def _mark_remaining_slots_unused(
+        def _do() -> None:
+            now = datetime.now(timezone.utc)
+            for rid in record_ids:
+                self._update_record(rid, status="skipped", skip_reason=skip_reason, finished_at=now)
+            self.db.commit()
+
+        await self._db_op(_do)
+
+    async def _mark_remaining_slots_unused(
         self,
         *,
         candidate_record_map: dict[tuple[int, int], str],
@@ -1227,7 +1739,7 @@ class FailoverEngine:
         success_retry_idx: int,
         retry_policy: RetryPolicy,
     ) -> None:
-        now = datetime.now(timezone.utc)
+        record_ids: list[str] = []
         for candidate_idx, cand in enumerate(candidates):
             max_retries = self._get_max_retries(cand, retry_policy)
             for retry_idx in range(max_retries):
@@ -1237,14 +1749,20 @@ class FailoverEngine:
                     continue
                 record_id = candidate_record_map.get((candidate_idx, retry_idx))
                 if record_id:
-                    self._update_record(
-                        record_id,
-                        status="unused",
-                        finished_at=now,
-                    )
-        self.db.commit()
+                    record_ids.append(record_id)
 
-    def _mark_candidate_remaining_retries_unused(
+        if not record_ids:
+            return
+
+        def _do() -> None:
+            now = datetime.now(timezone.utc)
+            for rid in record_ids:
+                self._update_record(rid, status="unused", finished_at=now)
+            self.db.commit()
+
+        await self._db_op(_do)
+
+    async def _mark_candidate_remaining_retries_unused(
         self,
         *,
         candidate_record_map: dict[tuple[int, int], str],
@@ -1253,21 +1771,27 @@ class FailoverEngine:
         retry_policy: RetryPolicy,
     ) -> None:
         # Only meaningful for PRE_EXPAND.
-        # We don't have access to candidate object list here, so infer max_retries from map keys.
-        # Fallback to retry_policy.max_retries.
-        now = datetime.now(timezone.utc)
-        # try best-effort upper bound
         upper = max(
             (ri for (ci, ri) in candidate_record_map.keys() if ci == candidate_idx),
             default=retry_policy.max_retries - 1,
         )
-        for retry_idx in range(from_retry_idx, upper + 1):
-            record_id = candidate_record_map.get((candidate_idx, retry_idx))
-            if record_id:
-                self._update_record(record_id, status="unused", finished_at=now)
-        self.db.commit()
+        record_ids = [
+            candidate_record_map[candidate_idx, ri]
+            for ri in range(from_retry_idx, upper + 1)
+            if (candidate_idx, ri) in candidate_record_map
+        ]
+        if not record_ids:
+            return
 
-    def _mark_retry_indices_status(
+        def _do() -> None:
+            now = datetime.now(timezone.utc)
+            for rid in record_ids:
+                self._update_record(rid, status="unused", finished_at=now)
+            self.db.commit()
+
+        await self._db_op(_do)
+
+    async def _mark_retry_indices_status(
         self,
         *,
         candidate_record_map: dict[tuple[int, int], str],
@@ -1276,33 +1800,45 @@ class FailoverEngine:
         status: str,
         skip_reason: str | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc)
-        for retry_idx in retry_indices:
-            record_id = candidate_record_map.get((candidate_idx, retry_idx))
-            if not record_id:
-                continue
-            values: dict[str, Any] = {"status": status, "finished_at": now}
-            if status == "skipped":
-                values["skip_reason"] = skip_reason
-            self._update_record(record_id, **values)
-        self.db.commit()
+        record_ids = [
+            candidate_record_map[candidate_idx, ri]
+            for ri in retry_indices
+            if (candidate_idx, ri) in candidate_record_map
+        ]
+        if not record_ids:
+            return
 
-    def _mark_all_remaining_available_unused(
+        def _do() -> None:
+            now = datetime.now(timezone.utc)
+            for rid in record_ids:
+                values: dict[str, Any] = {"status": status, "finished_at": now}
+                if status == "skipped":
+                    values["skip_reason"] = skip_reason
+                self._update_record(rid, **values)
+            self.db.commit()
+
+        await self._db_op(_do)
+
+    async def _mark_all_remaining_available_unused(
         self, candidate_record_map: dict[tuple[int, int], str]
     ) -> None:
         # As a safety net: do not leave available records behind in PRE_EXPAND mode.
-        try:
-            ids = list(candidate_record_map.values())
-            if not ids:
-                return
-            now = datetime.now(timezone.utc)
-            self.db.execute(
-                update(RequestCandidate)
-                .where(RequestCandidate.id.in_(ids))
-                .where(RequestCandidate.status == "available")
-                .values(status="unused", finished_at=now)
-            )
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
+        ids = list(candidate_record_map.values())
+        if not ids:
+            return
+
+        def _do() -> None:
+            try:
+                now = datetime.now(timezone.utc)
+                self.db.execute(
+                    update(RequestCandidate)
+                    .where(RequestCandidate.id.in_(ids))
+                    .where(RequestCandidate.status == "available")
+                    .values(status="unused", finished_at=now)
+                )
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
+
+        await self._db_op(_do)

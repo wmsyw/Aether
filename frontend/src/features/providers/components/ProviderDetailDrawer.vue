@@ -892,6 +892,7 @@
                 :key="`models-${provider.id}`"
                 :provider="provider"
                 :models="providerModels"
+                :endpoints="endpoints"
                 @edit-model="handleEditModel"
                 @batch-assign="handleBatchAssign"
                 @refresh="loadEndpoints"
@@ -935,7 +936,7 @@
     :editing-key="editingKey"
     :provider-id="provider ? provider.id : null"
     :provider-type="provider?.provider_type || null"
-    :available-api-formats="provider?.api_formats || []"
+    :available-api-formats="availableKeyApiFormats"
     @close="keyFormDialogOpen = false"
     @saved="handleKeyChanged"
   />
@@ -1101,7 +1102,7 @@ import {
 import type { UpstreamMetadata, AntigravityModelQuota } from '@/api/endpoints/types'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { isOAuthAccountProviderType, isKeyManagedProviderType } from '../utils/providerTypeUtils'
-import { isAccountLevelBlockReason } from '@/utils/accountBlock'
+import { isAccountLevelBlockReason, cleanAccountBlockReason } from '@/utils/accountBlock'
 
 // 扩展端点类型,包含密钥列表
 interface ProviderEndpointWithKeys extends ProviderEndpoint {
@@ -1256,6 +1257,65 @@ const allKeys = computed(() => {
 
   return result
 })
+
+const availableKeyApiFormats = computed(() => {
+  const formatSet = new Set<string>()
+
+  for (const format of provider.value?.api_formats || []) {
+    if (format) {
+      formatSet.add(format)
+    }
+  }
+
+  for (const endpoint of endpoints.value) {
+    if (endpoint.api_format) {
+      formatSet.add(endpoint.api_format)
+    }
+  }
+
+  return sortApiFormats([...formatSet])
+})
+
+function syncCurrentSelections(
+  nextEndpoints: ProviderEndpointWithKeys[] = endpoints.value,
+  nextProviderKeys: EndpointAPIKey[] = providerKeys.value
+) {
+  if (currentEndpoint.value) {
+    currentEndpoint.value = nextEndpoints.find(endpoint => endpoint.id === currentEndpoint.value?.id) ?? null
+  }
+
+  if (!editingKey.value) {
+    return
+  }
+
+  const latestKeys: EndpointAPIKey[] = []
+  const seenKeyIds = new Set<string>()
+
+  for (const key of nextProviderKeys) {
+    if (!seenKeyIds.has(key.id)) {
+      seenKeyIds.add(key.id)
+      latestKeys.push(key)
+    }
+  }
+
+  for (const endpoint of nextEndpoints) {
+    for (const key of endpoint.keys || []) {
+      if (!seenKeyIds.has(key.id)) {
+        seenKeyIds.add(key.id)
+        latestKeys.push(key)
+      }
+    }
+  }
+
+  const latestEditingKey = latestKeys.find(key => key.id === editingKey.value?.id) || null
+  editingKey.value = latestEditingKey
+
+  if (!latestEditingKey) {
+    keyFormDialogOpen.value = false
+    keyPermissionsDialogOpen.value = false
+    oauthKeyEditDialogOpen.value = false
+  }
+}
 
 // ===== 账号列表智能分页 =====
 const keysListRef = ref<HTMLElement | null>(null)
@@ -1557,6 +1617,7 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
       const freshKeys = await getProviderKeys(props.providerId).catch(() => null)
       if (freshKeys) {
         providerKeys.value = freshKeys
+        syncCurrentSelections(endpoints.value, freshKeys)
       }
     }
     // Antigravity：token 刷新后可能完成了账号激活，触发配额获取
@@ -2504,7 +2565,10 @@ function getOAuthStatusTitle(key: EndpointAPIKey): string {
   const status = getKeyOAuthExpires(key)
   if (!status) return ''
   if (status.isInvalid) {
-    return status.invalidReason ? `Token 已失效: ${status.invalidReason}` : 'Token 已失效'
+    const cleaned = status.invalidReason && isAccountLevelBlockReason(status.invalidReason)
+      ? cleanAccountBlockReason(status.invalidReason)
+      : status.invalidReason
+    return cleaned ? `Token 已失效: ${cleaned}` : 'Token 已失效'
   }
   if (status.isExpired) {
     return 'Token 已过期，请重新授权'
@@ -2636,7 +2700,7 @@ async function loadEndpoints() {
     providerKeys.value = providerKeysResult
     providerModels.value = modelsResult
     // 按 API 格式排序
-    endpoints.value = endpointsList.sort((a, b) => {
+    const sortedEndpoints = endpointsList.sort((a, b) => {
       const aIdx = API_FORMAT_ORDER.indexOf(a.api_format)
       const bIdx = API_FORMAT_ORDER.indexOf(b.api_format)
       if (aIdx === -1 && bIdx === -1) return 0
@@ -2644,6 +2708,8 @@ async function loadEndpoints() {
       if (bIdx === -1) return -1
       return aIdx - bIdx
     })
+    endpoints.value = sortedEndpoints
+    syncCurrentSelections(sortedEndpoints, providerKeysResult)
   } catch (err: unknown) {
     if (requestId !== endpointsLoadRequestId) return
     showError(parseApiError(err, '加载端点失败'), '错误')
