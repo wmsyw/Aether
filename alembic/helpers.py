@@ -46,7 +46,8 @@ class _SchemaCache:
             sa.text(
                 "SELECT table_name, column_name, data_type "
                 "FROM information_schema.columns "
-                "WHERE table_name = ANY(:tables)"
+                "WHERE table_name = ANY(:tables) "
+                "  AND table_schema = current_schema()"
             ),
             {"tables": need},
         ).fetchall()
@@ -68,7 +69,9 @@ class _SchemaCache:
                 "FROM information_schema.referential_constraints rc "
                 "JOIN information_schema.table_constraints tc "
                 "  ON rc.constraint_name = tc.constraint_name "
-                "WHERE tc.table_name = ANY(:tables)"
+                " AND rc.constraint_schema = tc.constraint_schema "
+                "WHERE tc.table_name = ANY(:tables) "
+                "  AND tc.table_schema = current_schema()"
             ),
             {"tables": need},
         ).fetchall()
@@ -105,6 +108,22 @@ def new_cache() -> _SchemaCache:
 # ---------------------------------------------------------------------------
 
 
+def _fk_exists(constraint_name: str, table_name: str) -> bool:
+    """Check if a FK constraint exists via pg_constraint (definitive)."""
+    bind = op.get_bind()
+    result = bind.execute(
+        sa.text(
+            "SELECT 1 FROM pg_constraint c "
+            "JOIN pg_class r ON c.conrelid = r.oid "
+            "JOIN pg_namespace n ON r.relnamespace = n.oid "
+            "WHERE c.conname = :name AND r.relname = :table "
+            "  AND n.nspname = current_schema() AND c.contype = 'f'"
+        ),
+        {"name": constraint_name, "table": table_name},
+    )
+    return result.scalar() is not None
+
+
 def replace_fk_if_needed(
     cache: _SchemaCache,
     constraint_name: str,
@@ -118,7 +137,8 @@ def replace_fk_if_needed(
     current = cache.fk_ondelete(table_name, constraint_name)
     if current and current.upper() == desired_ondelete.upper():
         return
-    if current:
+    # Cache may miss existing constraints; fall back to pg_constraint lookup
+    if current or _fk_exists(constraint_name, table_name):
         op.drop_constraint(constraint_name, table_name, type_="foreignkey")
     op.create_foreign_key(
         constraint_name,
@@ -133,7 +153,10 @@ def replace_fk_if_needed(
 def index_exists(index_name: str) -> bool:
     bind = op.get_bind()
     result = bind.execute(
-        sa.text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
+        sa.text(
+            "SELECT 1 FROM pg_indexes "
+            "WHERE indexname = :name AND schemaname = current_schema()::text"
+        ),
         {"name": index_name},
     )
     return result.scalar() is not None
@@ -142,6 +165,18 @@ def index_exists(index_name: str) -> bool:
 # ---------------------------------------------------------------------------
 # Batch ALTER TYPE helper
 # ---------------------------------------------------------------------------
+
+
+def _numeric_max(type_spec: str) -> float | None:
+    """Parse NUMERIC(p,s) and return the maximum absolute value, or None."""
+    # e.g. "NUMERIC(20,8)" -> precision=20, scale=8 -> max = 10^(20-8) - 10^(-8)
+    import re
+
+    m = re.match(r"NUMERIC\((\d+),(\d+)\)", type_spec, re.IGNORECASE)
+    if not m:
+        return None
+    precision, scale = int(m.group(1)), int(m.group(2))
+    return 10 ** (precision - scale) - 10 ** (-scale)
 
 
 def batch_alter_type(
@@ -154,6 +189,9 @@ def batch_alter_type(
 
     Skips columns that don't exist.  Each tuple is
     ``(table_name, column_name, nullable, server_default)``.
+
+    When converting to NUMERIC(p,s), values exceeding the target precision
+    are clamped before the type cast to prevent overflow errors.
     """
     by_table: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for table, col, _nullable, _default in columns:
@@ -163,6 +201,17 @@ def batch_alter_type(
 
     bind = op.get_bind()
     for table, col_types in by_table.items():
+        # Clamp out-of-range values before ALTER TYPE
+        for col, target in col_types:
+            cap = _numeric_max(target)
+            if cap is not None:
+                bind.execute(
+                    sa.text(
+                        f"UPDATE {table} SET {col} = :cap "
+                        f"WHERE {col} IS NOT NULL AND abs({col}) > :cap"
+                    ),
+                    {"cap": cap},
+                )
         parts = [
             f"ALTER COLUMN {col} TYPE {target} USING {col}::{cast_suffix}"
             for col, target in col_types

@@ -568,6 +568,9 @@ class CacheAwareScheduler:
             candidates, db, affinity_key, api_format
         )
 
+        # 排序完成后释放 DB 连接，避免后续 Redis 操作期间占用连接
+        release_db_connection_before_await(db)
+
         # 2. 调度模式排序
         if self.scheduling_mode == self.SCHEDULING_MODE_CACHE_AFFINITY:
             if affinity_key and candidates and global_model_id:
