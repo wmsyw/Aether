@@ -312,6 +312,12 @@ class Config:
         # 每个用户最多可创建的 Management Token 数量
         self.management_token_max_per_user = int(os.getenv("MANAGEMENT_TOKEN_MAX_PER_USER", "20"))
 
+        # 启动任务开关
+        # MAINTENANCE_STARTUP_TASKS_ENABLED: 是否在启动时执行维护调度器初始化任务（清理、统计回填等）
+        self.maintenance_startup_tasks_enabled = (
+            os.getenv("MAINTENANCE_STARTUP_TASKS_ENABLED", "true").lower() == "true"
+        )
+
         # API 文档配置
         # DOCS_ENABLED: 是否启用 API 文档（/docs, /redoc, /openapi.json）
         #   - 未设置: 开发环境启用，生产环境禁用

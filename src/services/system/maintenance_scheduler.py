@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy import delete, literal_column, text
 
+from src.config.settings import config
 from src.core.logger import logger
 from src.database import create_session
 from src.models.database import AuditLog, Provider, RequestCandidate, Usage
@@ -232,7 +233,10 @@ class MaintenanceScheduler:
         )
 
         # 启动时执行一次初始化任务
-        asyncio.create_task(self._run_startup_tasks())
+        if config.maintenance_startup_tasks_enabled:
+            asyncio.create_task(self._run_startup_tasks())
+        else:
+            logger.info("维护调度器启动任务已禁用（MAINTENANCE_STARTUP_TASKS_ENABLED=false）")
 
     async def _run_startup_tasks(self) -> None:
         """启动时执行的初始化任务"""
@@ -470,6 +474,7 @@ class MaintenanceScheduler:
                                 StatsAggregatorService.aggregate_daily_stats_bundle(
                                     db, current_date_utc, user_ids=user_ids
                                 )
+                                db.expunge_all()
                             except Exception as e:
                                 failed_dates += 1
                                 logger.warning(f"回填日期 {current_date} 失败: {e}")

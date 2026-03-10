@@ -62,6 +62,10 @@ def get_health_scores(provider_id: str, keys: list[Any]) -> dict[str, float]:
                     payload[kid] = aggregate_health_score(
                         getattr(keys_by_id[kid], "health_by_format", None)
                     )
+                # Trim stale key entries that are no longer in the current key set
+                stale_ids = [sid for sid in payload if sid not in keys_by_id]
+                for sid in stale_ids:
+                    del payload[sid]
                 return {kid: payload[kid] for kid in keys_by_id}
 
     fresh: dict[str, float] = {}
