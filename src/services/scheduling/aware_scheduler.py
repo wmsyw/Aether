@@ -62,7 +62,6 @@ from src.services.rate_limit.adaptive_reservation import (
 )
 from src.services.rate_limit.concurrency_manager import get_concurrency_manager
 from src.services.scheduling.affinity_manager import (
-    CacheAffinityManager,
     get_affinity_manager,
 )
 from src.services.scheduling.candidate_builder import (
@@ -464,12 +463,41 @@ class CacheAwareScheduler:
             return [], global_model_id, queried_provider_count
 
         # 1. 查询 Providers（委托给 CandidateBuilder）
-        providers = self._candidate_builder._query_providers(
-            db=db,
-            provider_offset=provider_offset,
-            provider_limit=provider_limit,
-        )
-        queried_provider_count = len(providers)
+        providers = []
+        if allowed_providers is not None:
+            provider_refs = self._candidate_builder._query_provider_refs(
+                db=db,
+                provider_offset=provider_offset,
+                provider_limit=provider_limit,
+            )
+            queried_provider_count = len(provider_refs)
+
+            allowed_values = {value for value in allowed_providers if value}
+            matched_provider_ids = [
+                provider_id
+                for provider_id, provider_name in provider_refs
+                if provider_id in allowed_values or provider_name in allowed_values
+            ]
+
+            if queried_provider_count != len(matched_provider_ids):
+                logger.debug(
+                    "用户/API Key 过滤 Provider 预加载范围: {} -> {}",
+                    queried_provider_count,
+                    len(matched_provider_ids),
+                )
+
+            if matched_provider_ids:
+                providers = self._candidate_builder._query_providers(
+                    db=db,
+                    provider_ids=matched_provider_ids,
+                )
+        else:
+            providers = self._candidate_builder._query_providers(
+                db=db,
+                provider_offset=provider_offset,
+                provider_limit=provider_limit,
+            )
+            queried_provider_count = len(providers)
 
         # Provider query starts a transaction; release connection before entering async candidate build.
         release_db_connection_before_await(db)
@@ -479,19 +507,6 @@ class CacheAwareScheduler:
             len(providers),
             ", ".join(p.name for p in providers),
         )
-
-        if not providers:
-            return [], global_model_id, queried_provider_count
-
-        # 1.5 根据 allowed_providers 过滤（合并 ApiKey 和 User 的限制）
-        if allowed_providers is not None:
-            original_count = len(providers)
-            # 同时支持 provider id 和 name 匹配
-            providers = [
-                p for p in providers if p.id in allowed_providers or p.name in allowed_providers
-            ]
-            if original_count != len(providers):
-                logger.debug("用户/API Key 过滤 Provider: {} -> {}", original_count, len(providers))
 
         if not providers:
             return [], global_model_id, queried_provider_count
