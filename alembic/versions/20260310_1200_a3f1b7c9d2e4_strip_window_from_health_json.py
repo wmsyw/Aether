@@ -3,7 +3,7 @@
 This data is now maintained in process memory only, no longer persisted to DB.
 
 Revision ID: a3f1b7c9d2e4
-Revises: 2053ab8ed764
+Revises: d7649c1f8e21
 Create Date: 2026-03-10 12:00:00.000000+00:00
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "a3f1b7c9d2e4"
-down_revision = "2053ab8ed764"
+down_revision = "d7649c1f8e21"
 branch_labels = None
 depends_on = None
 
