@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.config.settings import config
 from src.core.enums import UserRole
 from src.core.logger import logger
 from src.database import create_session
@@ -172,4 +173,8 @@ class CacheWarmupService:
 
 async def start_cache_warmup() -> None:
     """启动缓存预热（作为后台任务）"""
+    if not config.cache_warmup_enabled:
+        logger.info("缓存预热已禁用（CACHE_WARMUP_ENABLED=false）")
+        return
+
     asyncio.create_task(CacheWarmupService.warmup_all())
