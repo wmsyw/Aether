@@ -239,4 +239,4 @@ analysis/
 new-api/
 /aether-proxy/target/
 
-.omc
+.omc/*
