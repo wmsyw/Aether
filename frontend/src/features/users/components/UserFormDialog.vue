@@ -82,20 +82,15 @@
             <Input
               :id="`pwd-${formNonce}`"
               v-model="form.password"
-              :type="passwordFocused ? 'password' : 'text'"
+              type="text"
+              :masked="passwordFocused || form.password.length > 0"
               autocomplete="new-password"
-              data-form-type="other"
-              data-lpignore="true"
+              disable-autofill
               :name="`field-${formNonce}`"
               :required="!isEditMode"
               minlength="6"
               :placeholder="isEditMode ? '留空保持原密码' : getPasswordPolicyPlaceholder(passwordPolicyLevel)"
-              :class="[
-                !passwordFocused && form.password.length === 0
-                  ? 'h-10 text-transparent'
-                  : 'h-10',
-                passwordError ? 'border-destructive' : '',
-              ]"
+              :class="`h-10${!passwordFocused && form.password.length === 0 ? ' text-transparent' : ''}${passwordError ? ' border-destructive' : ''}`"
               @focus="passwordFocused = true"
               @blur="passwordFocused = form.password.length > 0"
             />
