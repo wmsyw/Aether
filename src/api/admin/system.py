@@ -1105,7 +1105,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
             keys = sorted(
                 provider.api_keys,
                 key=lambda key: (
-                    key.internal_priority if key.internal_priority is not None else 0,
+                    key.internal_priority if key.internal_priority is not None else float("inf"),
                     _normalize_created_at_for_sort(key.created_at),
                 ),
             )
@@ -3336,6 +3336,8 @@ def _purge_stats_and_reset_counters(db: Session) -> None:
     db.query(ProviderAPIKey).update(
         {
             ProviderAPIKey.request_count: 0,
+            ProviderAPIKey.total_tokens: 0,
+            ProviderAPIKey.total_cost_usd: 0.0,
             ProviderAPIKey.success_count: 0,
             ProviderAPIKey.error_count: 0,
             ProviderAPIKey.total_response_time_ms: 0,
