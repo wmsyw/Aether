@@ -492,6 +492,29 @@
                       >
                         {{ formatOAuthPlanType(key.oauth_plan_type) }}
                       </Badge>
+                      <Badge
+                        v-if="getPrimaryOAuthOrganizationTitle(key)"
+                        variant="secondary"
+                        class="text-[9px] px-1 py-0 h-4 shrink-0 max-w-[92px] truncate"
+                        :title="getOAuthOrganizationsTooltip(key)"
+                      >
+                        {{ getPrimaryOAuthOrganizationTitle(key) }}
+                      </Badge>
+                      <Badge
+                        v-if="key.oauth_account_id"
+                        variant="secondary"
+                        class="text-[9px] px-1 py-0 h-4 shrink-0"
+                        :title="key.oauth_account_id"
+                      >
+                        acct {{ formatOAuthIdentityShort(key.oauth_account_id) }}
+                      </Badge>
+                      <span
+                        v-if="key.oauth_account_user_id"
+                        class="text-[10px] text-muted-foreground shrink-0"
+                        :title="key.oauth_account_user_id"
+                      >
+                        AUID {{ formatOAuthIdentityShort(key.oauth_account_user_id, 10, 8) }}
+                      </span>
                     </div>
                   </div>
                 </TableCell>
@@ -794,6 +817,29 @@
                   >
                     {{ formatOAuthPlanType(key.oauth_plan_type) }}
                   </Badge>
+                  <Badge
+                    v-if="getPrimaryOAuthOrganizationTitle(key)"
+                    variant="secondary"
+                    class="text-[9px] px-1 py-0 h-4 shrink-0 max-w-[92px] truncate"
+                    :title="getOAuthOrganizationsTooltip(key)"
+                  >
+                    {{ getPrimaryOAuthOrganizationTitle(key) }}
+                  </Badge>
+                  <Badge
+                    v-if="key.oauth_account_id"
+                    variant="secondary"
+                    class="text-[9px] px-1 py-0 h-4 shrink-0"
+                    :title="key.oauth_account_id"
+                  >
+                    acct {{ formatOAuthIdentityShort(key.oauth_account_id) }}
+                  </Badge>
+                  <span
+                    v-if="key.oauth_account_user_id"
+                    class="text-[10px] text-muted-foreground shrink-0"
+                    :title="key.oauth_account_user_id"
+                  >
+                    AUID {{ formatOAuthIdentityShort(key.oauth_account_user_id, 10, 8) }}
+                  </span>
                 </div>
               </div>
               <div class="flex items-center gap-0.5 shrink-0 flex-wrap justify-end max-w-[210px]">
@@ -1061,6 +1107,7 @@
       v-model="showAccountBatchDialog"
       :provider-id="selectedProviderId"
       :provider-name="selectedProviderData?.name || ''"
+      :provider-type="selectedProviderData?.provider_type || selectedProviderType"
       :batch-concurrency="selectedProviderConfig?.batch_concurrency"
       @changed="handleAccountBatchChanged"
     />
@@ -1160,7 +1207,12 @@ import type {
   PoolKeysPageResponse,
   PoolPresetMeta,
 } from '@/api/endpoints/pool'
-import type { ClaudeCodeAdvancedConfig, EndpointAPIKey, PoolAdvancedConfig, ProviderWithEndpointsSummary } from '@/api/endpoints/types/provider'
+import type {
+  ClaudeCodeAdvancedConfig,
+  EndpointAPIKey,
+  PoolAdvancedConfig,
+  ProviderWithEndpointsSummary,
+} from '@/api/endpoints/types/provider'
 import { getProvider, updateProvider } from '@/api/endpoints'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import PoolSchedulingDialog from '@/features/pool/components/PoolSchedulingDialog.vue'
@@ -1173,6 +1225,7 @@ import OAuthKeyEditDialog from '@/features/providers/components/OAuthKeyEditDial
 import OAuthAccountDialog from '@/features/providers/components/OAuthAccountDialog.vue'
 import ProxyNodeSelect from '@/features/providers/components/ProxyNodeSelect.vue'
 import { isAccountLevelBlockReason, classifyAccountBlockLabel, cleanAccountBlockReason } from '@/utils/accountBlock'
+import { formatOAuthIdentityShort, getPrimaryOAuthOrganizationTitle, getOAuthOrganizationsTooltip } from '@/utils/oauthIdentity'
 
 const { success, error: showError, warning: showWarning } = useToast()
 const { confirm } = useConfirm()
@@ -1716,7 +1769,11 @@ function toEndpointApiKey(key: PoolKeyDetail): EndpointAPIKey {
     model_include_patterns: key.model_include_patterns || [],
     model_exclude_patterns: key.model_exclude_patterns || [],
     oauth_expires_at: key.oauth_expires_at ?? null,
+    oauth_email: null,
     oauth_plan_type: key.oauth_plan_type ?? null,
+    oauth_account_id: key.oauth_account_id ?? null,
+    oauth_account_user_id: key.oauth_account_user_id ?? null,
+    oauth_organizations: key.oauth_organizations ?? [],
     oauth_invalid_at: key.oauth_invalid_at ?? null,
     oauth_invalid_reason: key.oauth_invalid_reason ?? null,
     proxy: key.proxy ?? null,
