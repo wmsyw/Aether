@@ -159,6 +159,27 @@ class BatchImportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Batch selection
+# ---------------------------------------------------------------------------
+
+
+class PoolKeySelectionRequest(BaseModel):
+    search: str = ""
+    quick_selectors: list[str] = Field(default_factory=list, max_length=10)
+
+
+class PoolKeySelectionItem(BaseModel):
+    key_id: str
+    key_name: str = ""
+    auth_type: str = "api_key"
+
+
+class PoolKeySelectionResponse(BaseModel):
+    total: int = 0
+    items: list[PoolKeySelectionItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Batch action
 # ---------------------------------------------------------------------------
 
