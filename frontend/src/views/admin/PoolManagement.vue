@@ -1061,6 +1061,7 @@
       v-model="showAccountBatchDialog"
       :provider-id="selectedProviderId"
       :provider-name="selectedProviderData?.name || ''"
+      :provider-type="selectedProviderData?.provider_type || selectedProviderType"
       :batch-concurrency="selectedProviderConfig?.batch_concurrency"
       @changed="handleAccountBatchChanged"
     />
