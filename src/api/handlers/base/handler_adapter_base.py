@@ -321,6 +321,22 @@ class HandlerAdapterBase(ApiAdapter):
         _ = base_url, provider_type
         return build_test_request_body(cls.FORMAT_ID, request_data)
 
+    @staticmethod
+    def _normalize_test_base_url(base_url: Any) -> str:
+        """归一化 test-model 场景传入的 base_url。"""
+        if isinstance(base_url, str):
+            normalized = base_url.strip()
+            if normalized:
+                return normalized
+        elif isinstance(base_url, dict):
+            for key in ("base_url", "url"):
+                value = base_url.get(key)
+                if isinstance(value, str) and value.strip():
+                    logger.debug("[check_endpoint] 兼容字典形式的 base_url 输入: key={}", key)
+                    return value.strip()
+
+        raise TypeError("base_url must be a non-empty string or a dict containing 'base_url'/'url'")
+
     @classmethod
     async def check_endpoint(
         cls,
@@ -359,6 +375,7 @@ class HandlerAdapterBase(ApiAdapter):
         from src.core.api_format.headers import HeaderBuilder
         from src.core.provider_types import ProviderType
 
+        normalized_base_url = cls._normalize_test_base_url(base_url)
         is_antigravity = provider_type == ProviderType.ANTIGRAVITY
         is_gemini_cli = provider_type == ProviderType.GEMINI_CLI
         is_vertex = provider_type == ProviderType.VERTEX_AI
@@ -376,7 +393,9 @@ class HandlerAdapterBase(ApiAdapter):
             _kiro_cfg = KiroAuthConfig.from_dict(decrypted_auth_config or {})
             region = _kiro_cfg.effective_api_region()
             effective_base_url = (
-                base_url.replace("{region}", region) if "{region}" in base_url else base_url
+                normalized_base_url.replace("{region}", region)
+                if "{region}" in normalized_base_url
+                else normalized_base_url
             )
             url = f"{str(effective_base_url).rstrip('/')}{KIRO_GENERATE_ASSISTANT_PATH}"
         elif is_antigravity:
@@ -422,11 +441,17 @@ class HandlerAdapterBase(ApiAdapter):
             )
         else:
             url = cls.build_endpoint_url(
-                base_url, request_data, model_name, provider_type=provider_type
+                normalized_base_url,
+                request_data,
+                model_name,
+                provider_type=provider_type,
             )
 
         # ---- Headers ----
-        cli_extra = cls.get_cli_extra_headers(base_url=base_url, provider_type=provider_type)
+        cli_extra = cls.get_cli_extra_headers(
+            base_url=normalized_base_url,
+            provider_type=provider_type,
+        )
         merged_extra = dict(extra_headers) if extra_headers else {}
         merged_extra.update(cli_extra)
 
@@ -480,7 +505,11 @@ class HandlerAdapterBase(ApiAdapter):
                 headers[auth_header_name] = f"Bearer {api_key}"
 
         # ---- Body ----
-        body = cls.build_request_body(request_data, base_url=base_url, provider_type=provider_type)
+        body = cls.build_request_body(
+            request_data,
+            base_url=normalized_base_url,
+            provider_type=provider_type,
+        )
 
         if body_rules:
             body = apply_body_rules(body, body_rules)
