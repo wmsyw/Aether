@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1773156180914,
+  "lastScanned": 1773298118696,
   "projectRoot": "/Users/shenxt/Dev/OpenCode/Aether",
   "techStack": {
     "languages": [
@@ -60,7 +60,7 @@
       "path": "aether-hub",
       "purpose": null,
       "fileCount": 6,
-      "lastAccessed": 1773156180897,
+      "lastAccessed": 1773298118679,
       "keyFiles": [
         "Cargo.lock",
         "Cargo.toml",
@@ -73,7 +73,7 @@
       "path": "aether-proxy",
       "purpose": null,
       "fileCount": 6,
-      "lastAccessed": 1773156180897,
+      "lastAccessed": 1773298118679,
       "keyFiles": [
         "Cargo.lock",
         "Cargo.toml",
@@ -86,7 +86,7 @@
       "path": "alembic",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1773156180898,
+      "lastAccessed": 1773298118679,
       "keyFiles": [
         "env.py",
         "script.py.mako"
@@ -96,14 +96,14 @@
       "path": "docs",
       "purpose": "Documentation",
       "fileCount": 0,
-      "lastAccessed": 1773156180898,
+      "lastAccessed": 1773298118680,
       "keyFiles": []
     },
     "frontend": {
       "path": "frontend",
       "purpose": null,
       "fileCount": 14,
-      "lastAccessed": 1773156180899,
+      "lastAccessed": 1773298118680,
       "keyFiles": [
         "DESIGN_SYSTEM.md",
         "components.json",
@@ -116,7 +116,7 @@
       "path": "htmlcov",
       "purpose": null,
       "fileCount": 542,
-      "lastAccessed": 1773156180904,
+      "lastAccessed": 1773298118685,
       "keyFiles": [
         "class_index.html",
         "coverage_html_cb_dd2e7eb5.js",
@@ -129,7 +129,7 @@
       "path": "logs",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1773156180905,
+      "lastAccessed": 1773298118686,
       "keyFiles": [
         "app.log",
         "error.log"
@@ -139,7 +139,7 @@
       "path": "src",
       "purpose": "Source code",
       "fileCount": 3,
-      "lastAccessed": 1773156180905,
+      "lastAccessed": 1773298118686,
       "keyFiles": [
         "__init__.py",
         "_version.py",
@@ -150,7 +150,7 @@
       "path": "tests",
       "purpose": "Test files",
       "fileCount": 5,
-      "lastAccessed": 1773156180905,
+      "lastAccessed": 1773298118686,
       "keyFiles": [
         "__init__.py",
         "test_architecture_import_rules.py",
@@ -163,7 +163,7 @@
       "path": "aether-hub/src",
       "purpose": "Source code",
       "fileCount": 5,
-      "lastAccessed": 1773156180905,
+      "lastAccessed": 1773298118686,
       "keyFiles": [
         "hub.rs",
         "main.rs",
@@ -174,7 +174,7 @@
       "path": "aether-proxy/src",
       "purpose": "Source code",
       "fileCount": 10,
-      "lastAccessed": 1773156180906,
+      "lastAccessed": 1773298118686,
       "keyFiles": [
         "app.rs",
         "config.rs",
@@ -185,7 +185,7 @@
       "path": "frontend/dist",
       "purpose": "Distribution/build output",
       "fileCount": 6,
-      "lastAccessed": 1773156180906,
+      "lastAccessed": 1773298118687,
       "keyFiles": [
         "aether.svg",
         "aether_adaptive.svg",
@@ -196,14 +196,14 @@
       "path": "frontend/node_modules",
       "purpose": "Dependencies",
       "fileCount": 1,
-      "lastAccessed": 1773156180908,
+      "lastAccessed": 1773298118689,
       "keyFiles": []
     },
     "src/api": {
       "path": "src/api",
       "purpose": "API routes",
       "fileCount": 1,
-      "lastAccessed": 1773156180909,
+      "lastAccessed": 1773298118690,
       "keyFiles": [
         "__init__.py"
       ]
@@ -212,7 +212,7 @@
       "path": "src/config",
       "purpose": "Configuration files",
       "fileCount": 3,
-      "lastAccessed": 1773156180909,
+      "lastAccessed": 1773298118690,
       "keyFiles": [
         "__init__.py",
         "constants.py",
@@ -223,7 +223,7 @@
       "path": "src/middleware",
       "purpose": "Middleware",
       "fileCount": 3,
-      "lastAccessed": 1773156180909,
+      "lastAccessed": 1773298118690,
       "keyFiles": [
         "__init__.py",
         "plugin_middleware.py",
@@ -233,19 +233,19 @@
     "tests/api": {
       "path": "tests/api",
       "purpose": "API routes",
-      "fileCount": 6,
-      "lastAccessed": 1773156180910,
+      "fileCount": 9,
+      "lastAccessed": 1773298118690,
       "keyFiles": [
         "test_admin_api_key_scope_routes.py",
         "test_admin_pool_batch_action_routes.py",
-        "test_payment_routes.py"
+        "test_admin_usage_routes.py"
       ]
     },
     "tests/services": {
       "path": "tests/services",
       "purpose": "Business logic services",
-      "fileCount": 76,
-      "lastAccessed": 1773156180910,
+      "fileCount": 80,
+      "lastAccessed": 1773298118690,
       "keyFiles": [
         "__init__.py",
         "test_admin_provider_defaults.py",
