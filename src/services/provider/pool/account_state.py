@@ -14,6 +14,7 @@ from src.services.provider_keys.quota_reader import get_quota_reader
 OAUTH_ACCOUNT_BLOCK_PREFIX = "[ACCOUNT_BLOCK] "
 OAUTH_REFRESH_FAILED_PREFIX = "[REFRESH_FAILED] "
 OAUTH_EXPIRED_PREFIX = "[OAUTH_EXPIRED] "
+OAUTH_REQUEST_FAILED_PREFIX = "[REQUEST_FAILED] "
 
 # -- 按原因细分的关键词组 --
 # 封禁类 (suspended / banned)
@@ -192,6 +193,12 @@ def _resolve_from_oauth_invalid_reason(reason: str | None) -> PoolAccountState |
             reason=cleaned or "OAuth Token 已过期且无法续期",
         )
 
+    if text.startswith(OAUTH_REFRESH_FAILED_PREFIX) or text.startswith(OAUTH_REQUEST_FAILED_PREFIX):
+        return None
+
+    if text.startswith("["):
+        return None
+
     lowered = text.lower()
     if any(keyword in lowered for keyword in ACCOUNT_BLOCK_REASON_KEYWORDS):
         code, label = _classify_block_reason(text)
@@ -229,6 +236,7 @@ __all__ = [
     "OAUTH_ACCOUNT_BLOCK_PREFIX",
     "OAUTH_EXPIRED_PREFIX",
     "OAUTH_REFRESH_FAILED_PREFIX",
+    "OAUTH_REQUEST_FAILED_PREFIX",
     "PoolAccountState",
     "resolve_pool_account_state",
 ]

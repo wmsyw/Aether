@@ -25,6 +25,8 @@ from src.models.admin_requests import (
 # 实际验证在 headers.py 的 apply_rules 中处理
 HeaderRule = dict[str, Any]
 
+_HEADER_RULE_ACTIONS: frozenset[str] = frozenset({"set", "drop", "rename"})
+
 
 # ========== Body Rule 类型定义 ==========
 # 请求体规则支持六种操作：
@@ -79,6 +81,8 @@ _TYPE_IS_VALUES: frozenset[str] = frozenset(
     {"string", "number", "boolean", "array", "object", "null"}
 )
 
+_CONDITION_SOURCES: frozenset[str] = frozenset({"current", "original"})
+
 
 def parse_re_flags(flags_str: str) -> int:
     """将 flags 字符串（i/m/s）转换为 re 标志位。
@@ -96,21 +100,42 @@ def parse_re_flags(flags_str: str) -> int:
     return result
 
 
-def _validate_condition(condition: Any, rule_idx: int) -> None:
-    """校验单条规则的 condition 结构"""
+def _validate_condition(condition: Any, rule_label: str) -> None:
+    """校验单条规则的 condition 结构。"""
     if not isinstance(condition, dict):
-        raise ValueError(f"body_rules[{rule_idx}]: condition 必须是 JSON 对象")
+        raise ValueError(f"{rule_label}: condition 必须是 JSON 对象")
+
+    has_all = "all" in condition
+    has_any = "any" in condition
+    if has_all or has_any:
+        if has_all and has_any:
+            raise ValueError(f"{rule_label}: condition 不能同时包含 all 和 any")
+
+        key = "all" if has_all else "any"
+        children = condition.get(key)
+        if not isinstance(children, list) or not children:
+            raise ValueError(f"{rule_label}: condition.{key} 必须是非空数组")
+
+        for idx, child in enumerate(children):
+            _validate_condition(child, f"{rule_label}: condition.{key}[{idx}]")
+        return
+
+    source = condition.get("source", "current")
+    if not isinstance(source, str) or source not in _CONDITION_SOURCES:
+        raise ValueError(
+            f"{rule_label}: condition.source 必须是 {sorted(_CONDITION_SOURCES)} 之一，"
+            f"当前值: {source!r}"
+        )
 
     op = condition.get("op")
     if not isinstance(op, str) or op not in _CONDITION_OPS:
         raise ValueError(
-            f"body_rules[{rule_idx}]: condition.op 必须是 {sorted(_CONDITION_OPS)} 之一，"
-            f"当前值: {op!r}"
+            f"{rule_label}: condition.op 必须是 {sorted(_CONDITION_OPS)} 之一，" f"当前值: {op!r}"
         )
 
     path = condition.get("path")
     if not isinstance(path, str) or not path.strip():
-        raise ValueError(f"body_rules[{rule_idx}]: condition 必须提供非空 path")
+        raise ValueError(f"{rule_label}: condition 必须提供非空 path")
 
     # exists / not_exists 不需要 value
     if op in ("exists", "not_exists"):
@@ -121,38 +146,76 @@ def _validate_condition(condition: Any, rule_idx: int) -> None:
     # 数值操作符校验
     if op in ("gt", "lt", "gte", "lte"):
         if not isinstance(value, (int, float)) or isinstance(value, bool):
-            raise ValueError(f"body_rules[{rule_idx}]: condition op={op!r} 的 value 必须为数值")
+            raise ValueError(f"{rule_label}: condition op={op!r} 的 value 必须为数值")
 
     # matches 正则校验
     if op == "matches":
         if not isinstance(value, str) or not value:
-            raise ValueError(
-                f"body_rules[{rule_idx}]: condition op=matches 的 value 必须为非空字符串"
-            )
+            raise ValueError(f"{rule_label}: condition op=matches 的 value 必须为非空字符串")
         try:
             re.compile(value)
         except re.error as e:
-            raise ValueError(
-                f"body_rules[{rule_idx}]: condition op=matches 的 value 不是合法正则: {e}"
-            )
+            raise ValueError(f"{rule_label}: condition op=matches 的 value 不是合法正则: {e}")
 
     # in 校验
     if op == "in":
         if not isinstance(value, list):
-            raise ValueError(f"body_rules[{rule_idx}]: condition op=in 的 value 必须为数组")
+            raise ValueError(f"{rule_label}: condition op=in 的 value 必须为数组")
 
     # type_is 校验
     if op == "type_is":
         if not isinstance(value, str) or value not in _TYPE_IS_VALUES:
             raise ValueError(
-                f"body_rules[{rule_idx}]: condition op=type_is 的 value 必须是 "
+                f"{rule_label}: condition op=type_is 的 value 必须是 "
                 f"{sorted(_TYPE_IS_VALUES)} 之一"
             )
 
     # starts_with / ends_with / contains 对 value 做字符串校验
     if op in ("starts_with", "ends_with"):
         if not isinstance(value, str):
-            raise ValueError(f"body_rules[{rule_idx}]: condition op={op!r} 的 value 必须为字符串")
+            raise ValueError(f"{rule_label}: condition op={op!r} 的 value 必须为字符串")
+
+
+def _validate_header_rules(rules: list[HeaderRule]) -> list[HeaderRule]:
+    """校验 header_rules 列表的结构和 condition 合法性。"""
+    for idx, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise ValueError(f"header_rules[{idx}]: 规则必须是 JSON 对象")
+
+        action = rule.get("action")
+        if not isinstance(action, str) or action.strip().lower() not in _HEADER_RULE_ACTIONS:
+            raise ValueError(
+                f"header_rules[{idx}]: action 必须是 {sorted(_HEADER_RULE_ACTIONS)} 之一，"
+                f"当前值: {action!r}"
+            )
+        action = action.strip().lower()
+
+        if action == "set":
+            key = rule.get("key")
+            value = rule.get("value")
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"header_rules[{idx}]: set 必须提供非空 key")
+            if not isinstance(value, str):
+                raise ValueError(f"header_rules[{idx}]: set 的 value 必须为字符串")
+
+        if action == "drop":
+            key = rule.get("key")
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"header_rules[{idx}]: drop 必须提供非空 key")
+
+        if action == "rename":
+            from_val = rule.get("from")
+            to_val = rule.get("to")
+            if not isinstance(from_val, str) or not from_val.strip():
+                raise ValueError(f"header_rules[{idx}]: rename 必须提供非空 from")
+            if not isinstance(to_val, str) or not to_val.strip():
+                raise ValueError(f"header_rules[{idx}]: rename 必须提供非空 to")
+
+        condition = rule.get("condition")
+        if condition is not None:
+            _validate_condition(condition, f"header_rules[{idx}]")
+
+    return rules
 
 
 def _validate_body_rules(rules: list[BodyRule]) -> list[BodyRule]:
@@ -246,7 +309,7 @@ def _validate_body_rules(rules: list[BodyRule]) -> list[BodyRule]:
         # ---------- condition 校验 ----------
         condition = rule.get("condition")
         if condition is not None:
-            _validate_condition(condition, idx)
+            _validate_condition(condition, f"body_rules[{idx}]")
 
     return rules
 
@@ -322,6 +385,14 @@ class ProviderEndpointCreate(BaseModel):
             return v
         return _validate_body_rules(v)
 
+    @field_validator("header_rules")
+    @classmethod
+    def validate_header_rules(cls, v: list[HeaderRule] | None) -> list[HeaderRule] | None:
+        """校验 header_rules 结构和 condition 合法性"""
+        if v is None:
+            return v
+        return _validate_header_rules(v)
+
 
 class ProviderEndpointUpdate(BaseModel):
     """更新 Endpoint 请求"""
@@ -373,6 +444,14 @@ class ProviderEndpointUpdate(BaseModel):
         if v is None:
             return v
         return _validate_body_rules(v)
+
+    @field_validator("header_rules")
+    @classmethod
+    def validate_header_rules(cls, v: list[HeaderRule] | None) -> list[HeaderRule] | None:
+        """校验 header_rules 结构和 condition 合法性"""
+        if v is None:
+            return v
+        return _validate_header_rules(v)
 
 
 class ProviderEndpointResponse(BaseModel):

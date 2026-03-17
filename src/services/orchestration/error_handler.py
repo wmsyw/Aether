@@ -24,7 +24,7 @@ from src.core.exceptions import (
 )
 from src.core.logger import logger
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
-from src.services.health.monitor import health_monitor
+from src.services.health.monitor import get_health_monitor
 from src.services.provider.format import normalize_endpoint_signature
 from src.services.provider.pool.config import parse_pool_config
 from src.services.rate_limit.adaptive_rpm import get_adaptive_rpm_manager
@@ -157,7 +157,7 @@ class ErrorHandlerService:
                 )
             if key:
                 await asyncio.to_thread(
-                    health_monitor.record_failure,
+                    get_health_monitor().record_failure,
                     db=self.db,
                     key_id=str(key.id),
                     api_format=provider_format_str,
@@ -226,7 +226,7 @@ class ErrorHandlerService:
         # 记录健康失败
         if key:
             await asyncio.to_thread(
-                health_monitor.record_failure,
+                get_health_monitor().record_failure,
                 db=self.db,
                 key_id=str(key.id),
                 api_format=provider_format_str,
@@ -271,7 +271,7 @@ class ErrorHandlerService:
         # 记录健康失败
         if key:
             await asyncio.to_thread(
-                health_monitor.record_failure,
+                get_health_monitor().record_failure,
                 db=self.db,
                 key_id=str(key.id),
                 api_format=provider_format_str,
@@ -407,7 +407,8 @@ class ErrorHandlerService:
 
             key.oauth_invalid_at = datetime.now(timezone.utc)
             key.oauth_invalid_reason = f"{OAUTH_ACCOUNT_BLOCK_PREFIX}{reason}"
-            key.is_active = False
+            # 不设 is_active=False：oauth_invalid 标记已足够阻止调度，
+            # 保持 is_active=True 使配额刷新仍能覆盖该 key，账号恢复后可自动解除。
 
             pool_cfg = parse_pool_config(getattr(provider, "config", None))
             auto_remove_enabled = bool(pool_cfg and pool_cfg.auto_remove_banned_keys)

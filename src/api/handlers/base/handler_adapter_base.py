@@ -366,7 +366,11 @@ class HandlerAdapterBase(ApiAdapter):
         统一的 endpoint 测试方法，支持 OAuth/Antigravity/Kiro 等特殊路由。
         """
         from src.api.handlers.base.endpoint_checker import run_endpoint_check
-        from src.api.handlers.base.request_builder import apply_body_rules
+        from src.api.handlers.base.request_builder import (
+            apply_body_rules,
+            evaluate_condition,
+            get_cache_sensitive_protected_body_keys,
+        )
         from src.core.api_format.headers import HeaderBuilder
         from src.core.provider_types import ProviderType
 
@@ -507,7 +511,12 @@ class HandlerAdapterBase(ApiAdapter):
         )
 
         if body_rules:
-            body = apply_body_rules(body, body_rules)
+            body = apply_body_rules(
+                body,
+                body_rules,
+                protected_keys=get_cache_sensitive_protected_body_keys(cls.FORMAT_ID),
+                original_body=body,
+            )
 
         if is_antigravity:
             from src.services.provider.adapters.antigravity.envelope import (
@@ -560,7 +569,13 @@ class HandlerAdapterBase(ApiAdapter):
 
             header_builder = HeaderBuilder()
             header_builder.add_many(headers)
-            header_builder.apply_rules(header_rules, protected_keys)
+            header_builder.apply_rules(
+                header_rules,
+                protected_keys,
+                body=body,
+                original_body=body,
+                condition_evaluator=evaluate_condition,
+            )
             headers = header_builder.build()
 
         # ---- Execute ----

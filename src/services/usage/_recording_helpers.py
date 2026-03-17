@@ -38,12 +38,32 @@ METADATA_KEEP_KEYS: frozenset[str] = frozenset(
     {
         "billing_snapshot",
         "billing_updated_at",
+        "cache_fingerprint",
         "perf",
         "pool_summary",
         "scheduling_audit",
         "_metadata_truncated",
     }
 )
+
+
+def deserialize_body_if_json(value: Any) -> Any:
+    """写库前按需反序列化 body JSON 字符串。
+
+    仅对 JSON object/array 字符串做 json.loads，其他值保持原样。
+    """
+    if not isinstance(value, str):
+        return value
+    stripped = value.lstrip()
+    if not stripped or stripped[0] not in "{[":
+        return value
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return value
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    return value
 
 
 def build_usage_params(

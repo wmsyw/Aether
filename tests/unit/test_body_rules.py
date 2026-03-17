@@ -1,6 +1,9 @@
 from typing import Any
 
-from src.api.handlers.base.request_builder import apply_body_rules
+from src.api.handlers.base.request_builder import (
+    apply_body_rules,
+    get_cache_sensitive_protected_body_keys,
+)
 
 
 class TestApplyBodyRulesNestedPaths:
@@ -47,7 +50,7 @@ class TestApplyBodyRulesNestedPaths:
         assert result["extra"]["model"] == "y"  # extra 不受保护
 
     def test_escaped_dot(self) -> None:
-        body = {}
+        body: dict[str, Any] = {}
         result = apply_body_rules(
             body,
             [
@@ -80,7 +83,7 @@ class TestApplyBodyRulesNestedPaths:
         assert result == {"a": {"b": 2}}
 
     def test_set_complex_value(self) -> None:
-        body = {}
+        body: dict[str, Any] = {}
         result = apply_body_rules(
             body,
             [
@@ -976,7 +979,7 @@ class TestConditionalBodyRules:
         assert result["feature"] is True
 
     def test_condition_on_missing_nested_path(self) -> None:
-        body = {"config": {}}
+        body: dict[str, Any] = {"config": {}}
         result = apply_body_rules(
             body,
             [
@@ -1408,3 +1411,220 @@ class TestItemCondition:
         # flag=False，全局条件不满足，所有元素都不变
         assert "active" not in result["tools"][0]
         assert "active" not in result["tools"][1]
+
+    def test_nested_all_any_condition_with_item_ref(self) -> None:
+        """嵌套 all/any 中包含 $item 时，按元素递归评估。"""
+        body = {
+            "flag": True,
+            "tools": [
+                {"name": "a", "type": "read"},
+                {"name": "b", "type": "write"},
+                {"name": "c", "type": "other"},
+            ],
+        }
+        result = apply_body_rules(
+            body,
+            [
+                {
+                    "action": "set",
+                    "path": "tools[*].enabled",
+                    "value": True,
+                    "condition": {
+                        "all": [
+                            {"path": "flag", "op": "eq", "value": True},
+                            {
+                                "any": [
+                                    {"path": "$item.type", "op": "eq", "value": "read"},
+                                    {"path": "$item.type", "op": "eq", "value": "write"},
+                                ]
+                            },
+                        ]
+                    },
+                }
+            ],
+        )
+        assert result["tools"][0]["enabled"] is True
+        assert result["tools"][1]["enabled"] is True
+        assert "enabled" not in result["tools"][2]
+
+    def test_condition_source_original_uses_original_body_after_current_mutation(self) -> None:
+        """source=original 在前序规则改写 current body 后仍读取原始请求体。"""
+        original_body = {"metadata": {"mode": "prod"}}
+        result = apply_body_rules(
+            original_body,
+            [
+                {"action": "set", "path": "metadata.mode", "value": "test"},
+                {
+                    "action": "set",
+                    "path": "audit.from_original",
+                    "value": True,
+                    "condition": {
+                        "path": "metadata.mode",
+                        "op": "eq",
+                        "value": "prod",
+                        "source": "original",
+                    },
+                },
+                {
+                    "action": "set",
+                    "path": "audit.from_current",
+                    "value": True,
+                    "condition": {
+                        "path": "metadata.mode",
+                        "op": "eq",
+                        "value": "prod",
+                    },
+                },
+            ],
+            original_body=original_body,
+        )
+        assert result["metadata"]["mode"] == "test"
+        assert result["audit"]["from_original"] is True
+        assert "from_current" not in result["audit"]
+
+    def test_condition_all_any_can_mix_original_and_current_sources(self) -> None:
+        """组合条件允许 current/original 混用。"""
+        original_body = {"mode": "prod", "count": 0}
+        result = apply_body_rules(
+            original_body,
+            [
+                {"action": "set", "path": "count", "value": 3},
+                {
+                    "action": "set",
+                    "path": "matched",
+                    "value": True,
+                    "condition": {
+                        "all": [
+                            {"path": "count", "op": "gte", "value": 1},
+                            {
+                                "any": [
+                                    {
+                                        "path": "mode",
+                                        "op": "eq",
+                                        "value": "prod",
+                                        "source": "original",
+                                    },
+                                    {"path": "mode", "op": "eq", "value": "stage"},
+                                ]
+                            },
+                        ]
+                    },
+                },
+            ],
+            original_body=original_body,
+        )
+        assert result["matched"] is True
+
+
+class TestProtectedBodyKeys:
+    def test_get_cache_sensitive_protected_body_keys_by_format(self) -> None:
+        assert get_cache_sensitive_protected_body_keys("openai:chat") == frozenset(
+            {"model", "stream", "messages", "tools", "tool_choice"}
+        )
+        assert get_cache_sensitive_protected_body_keys("openai:cli") == frozenset(
+            {
+                "model",
+                "stream",
+                "input",
+                "instructions",
+                "tools",
+                "tool_choice",
+                "prompt_cache_key",
+            }
+        )
+        assert get_cache_sensitive_protected_body_keys("claude:chat") == frozenset(
+            {"model", "stream", "messages", "system", "tools", "tool_choice"}
+        )
+        assert get_cache_sensitive_protected_body_keys("gemini:chat") == frozenset(
+            {
+                "model",
+                "stream",
+                "contents",
+                "system_instruction",
+                "systemInstruction",
+                "tools",
+                "tool_config",
+                "toolConfig",
+                "generation_config",
+                "generationConfig",
+            }
+        )
+
+    def test_gemini_camelcase_alias_prompt_fields_are_protected(self) -> None:
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "systemInstruction": {"parts": [{"text": "system"}]},
+            "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+            "generationConfig": {"temperature": 0.1},
+            "metadata": {"safe": True},
+        }
+        protected_keys = get_cache_sensitive_protected_body_keys("gemini:chat")
+
+        result = apply_body_rules(
+            body,
+            [
+                {"action": "set", "path": "systemInstruction.parts[0].text", "value": "mutated"},
+                {"action": "drop", "path": "toolConfig"},
+                {"action": "rename", "from": "generationConfig", "to": "generation_config"},
+                {"action": "append", "path": "contents", "value": {"role": "model", "parts": []}},
+                {
+                    "action": "insert",
+                    "path": "contents",
+                    "index": 0,
+                    "value": {"role": "user", "parts": [{"text": "preface"}]},
+                },
+                {"action": "set", "path": "metadata.safe", "value": False},
+            ],
+            protected_keys=protected_keys,
+        )
+
+        assert result["contents"] == [{"role": "user", "parts": [{"text": "hi"}]}]
+        assert result["systemInstruction"] == {"parts": [{"text": "system"}]}
+        assert result["toolConfig"] == {"functionCallingConfig": {"mode": "AUTO"}}
+        assert result["generationConfig"] == {"temperature": 0.1}
+        assert "generation_config" not in result
+        assert result["metadata"]["safe"] is False
+
+    def test_protected_prompt_fields_block_all_mutating_actions(self) -> None:
+        body = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "ReadFile"}],
+            "tool_choice": {"type": "function", "function": {"name": "ReadFile"}},
+            "metadata": {"safe": True},
+        }
+        protected_keys = get_cache_sensitive_protected_body_keys("openai:chat")
+
+        result = apply_body_rules(
+            body,
+            [
+                {"action": "set", "path": "messages", "value": []},
+                {"action": "drop", "path": "tools"},
+                {"action": "rename", "from": "tool_choice", "to": "choice"},
+                {
+                    "action": "append",
+                    "path": "messages",
+                    "value": {"role": "assistant", "content": "x"},
+                },
+                {
+                    "action": "insert",
+                    "path": "messages",
+                    "index": 0,
+                    "value": {"role": "system", "content": "x"},
+                },
+                {
+                    "action": "regex_replace",
+                    "path": "tools[0].name",
+                    "pattern": "Read",
+                    "replacement": "Write",
+                },
+                {"action": "name_style", "path": "tools[*].name", "style": "snake_case"},
+                {"action": "set", "path": "metadata.safe", "value": False},
+            ],
+            protected_keys=protected_keys,
+        )
+
+        assert result["messages"] == [{"role": "user", "content": "hi"}]
+        assert result["tools"] == [{"name": "ReadFile"}]
+        assert result["tool_choice"] == {"type": "function", "function": {"name": "ReadFile"}}
+        assert "choice" not in result
+        assert result["metadata"]["safe"] is False

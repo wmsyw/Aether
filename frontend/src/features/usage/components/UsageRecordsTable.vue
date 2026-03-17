@@ -11,26 +11,19 @@
             :disabled="deletingRecords"
             @click="$emit('delete-filtered-records')"
           >
-            <Loader2
-              v-if="deletingRecords"
-              class="h-3.5 w-3.5 animate-spin"
-            />
-            <Trash2
-              v-else
-              class="h-3.5 w-3.5"
-            />
+            <Loader2 v-if="deletingRecords" class="h-3.5 w-3.5 animate-spin" />
+            <Trash2 v-else class="h-3.5 w-3.5" />
             删除
           </Button>
 
-          <TimeRangePicker
-            v-model="timeRangeModel"
-            :show-granularity="false"
-          />
+          <TimeRangePicker v-model="timeRangeModel" :show-granularity="false" />
 
           <div class="h-5 w-px bg-border" />
 
           <div class="relative">
-            <Search class="absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Search
+              class="absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none"
+            />
             <Input
               id="usage-records-search"
               v-model="localSearch"
@@ -39,18 +32,19 @@
             />
           </div>
 
+          <!-- 用户筛选（仅管理员可见） -->
           <Select
             v-if="isAdmin && availableUsers.length > 0"
             :model-value="filterUser"
             @update:model-value="$emit('update:filterUser', $event)"
           >
-            <SelectTrigger class="h-9 w-36 text-xs border-border/60">
+            <SelectTrigger
+              class="flex-1 min-w-0 sm:flex-none sm:w-36 h-8 text-xs border-border/60"
+            >
               <SelectValue placeholder="用户" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">
-                全部用户
-              </SelectItem>
+              <SelectItem value="__all__"> 全部用户 </SelectItem>
               <SelectItem
                 v-for="user in availableUsers"
                 :key="user.id"
@@ -61,39 +55,41 @@
             </SelectContent>
           </Select>
 
+          <!-- 模型筛选 -->
           <Select
             :model-value="filterModel"
             @update:model-value="$emit('update:filterModel', $event)"
           >
-            <SelectTrigger class="h-9 w-40 text-xs border-border/60">
+            <SelectTrigger
+              class="flex-1 min-w-0 sm:flex-none sm:w-40 h-8 text-xs border-border/60"
+            >
               <SelectValue placeholder="模型" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">
-                全部模型
-              </SelectItem>
+              <SelectItem value="__all__"> 全部模型 </SelectItem>
               <SelectItem
                 v-for="model in availableModels"
                 :key="model"
                 :value="model"
               >
-                {{ model.replace('claude-', '') }}
+                {{ model.replace("claude-", "") }}
               </SelectItem>
             </SelectContent>
           </Select>
 
+          <!-- 提供商筛选（仅管理员可见） -->
           <Select
             v-if="isAdmin"
             :model-value="filterProvider"
             @update:model-value="$emit('update:filterProvider', $event)"
           >
-            <SelectTrigger class="h-9 w-36 text-xs border-border/60">
+            <SelectTrigger
+              class="flex-1 min-w-0 sm:flex-none sm:w-32 h-8 text-xs border-border/60"
+            >
               <SelectValue placeholder="提供商" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">
-                全部提供商
-              </SelectItem>
+              <SelectItem value="__all__"> 全部提供商 </SelectItem>
               <SelectItem
                 v-for="provider in availableProviders"
                 :key="provider"
@@ -104,17 +100,18 @@
             </SelectContent>
           </Select>
 
+          <!-- API格式筛选 -->
           <Select
             :model-value="filterApiFormat"
             @update:model-value="$emit('update:filterApiFormat', $event)"
           >
-            <SelectTrigger class="h-9 w-36 text-xs border-border/60">
+            <SelectTrigger
+              class="flex-1 min-w-0 sm:flex-none sm:w-32 h-8 text-xs border-border/60"
+            >
               <SelectValue placeholder="格式" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">
-                全部格式
-              </SelectItem>
+              <SelectItem value="__all__"> 全部格式 </SelectItem>
               <SelectItem
                 v-for="format in availableApiFormats"
                 :key="format.value"
@@ -125,38 +122,25 @@
             </SelectContent>
           </Select>
 
+          <!-- 状态筛选 -->
           <Select
             :model-value="filterStatus"
             @update:model-value="$emit('update:filterStatus', $event)"
           >
-            <SelectTrigger class="h-9 w-32 text-xs border-border/60">
+            <SelectTrigger
+              class="flex-1 min-w-0 sm:flex-none sm:w-28 h-8 text-xs border-border/60"
+            >
               <SelectValue placeholder="状态" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">
-                全部状态
-              </SelectItem>
-              <SelectItem value="stream">
-                流式
-              </SelectItem>
-              <SelectItem value="standard">
-                标准
-              </SelectItem>
-              <SelectItem value="active">
-                活跃
-              </SelectItem>
-              <SelectItem value="failed">
-                失败
-              </SelectItem>
-              <SelectItem value="cancelled">
-                已取消
-              </SelectItem>
-              <SelectItem value="has_retry">
-                发生重试
-              </SelectItem>
-              <SelectItem value="has_fallback">
-                发生转移
-              </SelectItem>
+              <SelectItem value="__all__"> 全部状态 </SelectItem>
+              <SelectItem value="stream"> 流式 </SelectItem>
+              <SelectItem value="standard"> 标准 </SelectItem>
+              <SelectItem value="active"> 活跃 </SelectItem>
+              <SelectItem value="failed"> 失败 </SelectItem>
+              <SelectItem value="cancelled"> 已取消 </SelectItem>
+              <SelectItem value="has_retry"> 发生重试 </SelectItem>
+              <SelectItem value="has_fallback"> 发生转移 </SelectItem>
             </SelectContent>
           </Select>
 
@@ -167,7 +151,9 @@
             size="icon"
             class="h-9 w-9"
             :class="autoRefresh ? 'text-primary' : ''"
-            :title="autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5秒刷新）'"
+            :title="
+              autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每5秒刷新）'
+            "
             @click="$emit('update:autoRefresh', !autoRefresh)"
           >
             <RefreshCcw
@@ -192,33 +178,52 @@
         v-else
         :key="record.id"
         class="border-b border-border/40 py-2.5 px-2"
-        :class="isAdmin ? 'cursor-pointer active:bg-muted/30 transition-colors' : ''"
+        :class="
+          isAdmin ? 'cursor-pointer active:bg-muted/30 transition-colors' : ''
+        "
         @click="isAdmin && emit('showDetail', record.id)"
       >
         <!-- 第一行：模型 + 费用 -->
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0 flex-1">
-            <span class="text-sm font-medium truncate block">{{ record.model }}</span>
+            <span class="text-sm font-medium truncate block">{{
+              record.model
+            }}</span>
             <span
               v-if="getActualModel(record)"
               class="text-[11px] text-muted-foreground truncate block"
-            >-> {{ getActualModel(record) }}</span>
+              >-> {{ getActualModel(record) }}</span
+            >
           </div>
           <div class="flex flex-col items-end flex-shrink-0">
-            <span class="text-xs text-primary font-medium">{{ formatCurrency(record.cost || 0) }}</span>
+            <span class="text-xs text-primary font-medium">{{
+              formatCurrency(record.cost || 0)
+            }}</span>
             <span
-              v-if="showActualCost && record.actual_cost !== undefined && record.rate_multiplier && record.rate_multiplier !== 1.0"
+              v-if="
+                showActualCost &&
+                record.actual_cost !== undefined &&
+                record.rate_multiplier &&
+                record.rate_multiplier !== 1.0
+              "
               class="text-[10px] text-muted-foreground"
-            >{{ formatCurrency(record.actual_cost) }}</span>
+              >{{ formatCurrency(record.actual_cost) }}</span
+            >
           </div>
         </div>
 
         <!-- 第二行：状态 | 时间 | API格式 | 耗时 | Tokens -->
-        <div class="flex items-center justify-between text-[11px] text-muted-foreground mt-1 leading-4">
+        <div
+          class="flex items-center justify-between text-[11px] text-muted-foreground mt-1 leading-4"
+        >
           <div class="flex items-center gap-1.5">
             <!-- 状态 Badge -->
             <Badge
-              v-if="record.status === 'failed' || (record.status_code && record.status_code >= 400) || record.error_message"
+              v-if="
+                record.status === 'failed' ||
+                (record.status_code && record.status_code >= 400) ||
+                record.error_message
+              "
               variant="destructive"
               class="whitespace-nowrap text-[10px] px-1.5 h-4 leading-4 inline-flex items-center"
             >
@@ -269,24 +274,32 @@
           <div class="flex items-center gap-1.5">
             <!-- 耗时 -->
             <span
-              v-if="record.status === 'pending' || record.status === 'streaming'"
+              v-if="
+                record.status === 'pending' || record.status === 'streaming'
+              "
               class="text-primary tabular-nums"
-            ><ElapsedTimeText
-              :created-at="record.created_at"
-              :status="record.status"
-              :response-time-ms="record.response_time_ms ?? null"
+              ><ElapsedTimeText
+                :created-at="record.created_at"
+                :status="record.status"
+                :response-time-ms="record.response_time_ms ?? null"
             /></span>
             <span
               v-else-if="record.response_time_ms != null"
               class="tabular-nums"
-            >{{ record.first_byte_time_ms != null ? (record.first_byte_time_ms / 1000).toFixed(1) + '/' : '' }}{{ (record.response_time_ms / 1000).toFixed(1) }}s</span>
-            <span
-              v-else
-              class="tabular-nums"
-            >-</span>
+              >{{
+                record.first_byte_time_ms != null
+                  ? (record.first_byte_time_ms / 1000).toFixed(1) + "/"
+                  : ""
+              }}{{ (record.response_time_ms / 1000).toFixed(1) }}s</span
+            >
+            <span v-else class="tabular-nums">-</span>
             <span class="text-muted-foreground/50">|</span>
             <!-- Tokens -->
-            <span>{{ formatTokens(record.input_tokens || 0) }}/{{ formatTokens(record.output_tokens || 0) }}</span>
+            <span
+              >{{ formatTokens(record.input_tokens || 0) }}/{{
+                formatTokens(record.output_tokens || 0)
+              }}</span
+            >
           </div>
         </div>
       </div>
@@ -296,33 +309,18 @@
     <Table class="hidden md:table">
       <TableHeader>
         <TableRow class="border-b border-border/60 hover:bg-transparent">
-          <TableHead class="h-12 font-semibold w-[70px]">
-            时间
-          </TableHead>
-          <TableHead
-            v-if="isAdmin"
-            class="h-12 font-semibold w-[100px]"
-          >
+          <TableHead class="h-12 font-semibold w-[70px]"> 时间 </TableHead>
+          <TableHead v-if="isAdmin" class="h-12 font-semibold w-[100px]">
             用户
           </TableHead>
-          <TableHead
-            v-if="!isAdmin"
-            class="h-12 font-semibold w-[100px]"
-          >
+          <TableHead v-if="!isAdmin" class="h-12 font-semibold w-[100px]">
             密钥
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[140px]">
-            模型
-          </TableHead>
-          <TableHead
-            v-if="isAdmin"
-            class="h-12 font-semibold w-[100px]"
-          >
+          <TableHead class="h-12 font-semibold w-[140px]"> 模型 </TableHead>
+          <TableHead v-if="isAdmin" class="h-12 font-semibold w-[100px]">
             提供商
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[120px]">
-            API格式
-          </TableHead>
+          <TableHead class="h-12 font-semibold w-[120px]"> API格式 </TableHead>
           <TableHead class="h-12 font-semibold w-[70px] text-center">
             类型
           </TableHead>
@@ -353,7 +351,11 @@
           v-for="record in records"
           v-else
           :key="record.id"
-          :class="isAdmin ? 'cursor-pointer border-b border-border/40 hover:bg-muted/30 transition-colors h-[72px]' : 'border-b border-border/40 hover:bg-muted/30 transition-colors h-[72px]'"
+          :class="
+            isAdmin
+              ? 'cursor-pointer border-b border-border/40 hover:bg-muted/30 transition-colors h-[72px]'
+              : 'border-b border-border/40 hover:bg-muted/30 transition-colors h-[72px]'
+          "
           @mousedown="handleMouseDown"
           @click="handleRowClick($event, record.id)"
         >
@@ -363,11 +365,19 @@
           <TableCell
             v-if="isAdmin"
             class="py-4 w-[100px] truncate"
-            :title="record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户')"
+            :title="
+              record.username ||
+              record.user_email ||
+              (record.user_id ? `User ${record.user_id}` : '已删除用户')
+            "
           >
             <div class="flex flex-col text-xs gap-0.5">
               <span class="truncate">
-                {{ record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户') }}
+                {{
+                  record.username ||
+                  record.user_email ||
+                  (record.user_id ? `User ${record.user_id}` : "已删除用户")
+                }}
               </span>
               <span
                 v-if="record.api_key?.name"
@@ -385,7 +395,7 @@
             :title="record.api_key?.name || '-'"
           >
             <div class="flex flex-col text-xs gap-0.5">
-              <span class="truncate">{{ record.api_key?.name || '-' }}</span>
+              <span class="truncate">{{ record.api_key?.name || "-" }}</span>
               <span
                 v-if="record.api_key?.display"
                 class="text-muted-foreground truncate"
@@ -417,17 +427,13 @@
                   />
                 </svg>
               </div>
-              <span class="text-muted-foreground truncate">{{ getActualModel(record) }}</span>
+              <span class="text-muted-foreground truncate">{{
+                getActualModel(record)
+              }}</span>
             </div>
-            <span
-              v-else
-              class="truncate block"
-            >{{ record.model }}</span>
+            <span v-else class="truncate block">{{ record.model }}</span>
           </TableCell>
-          <TableCell
-            v-if="isAdmin"
-            class="py-4 w-[60px]"
-          >
+          <TableCell v-if="isAdmin" class="py-4 w-[60px]">
             <div class="flex items-center gap-1">
               <div class="flex flex-col text-xs gap-0.5">
                 <span>{{ record.provider }}</span>
@@ -438,9 +444,12 @@
                 >
                   {{ record.api_key_name }}
                   <span
-                    v-if="record.rate_multiplier && record.rate_multiplier !== 1.0"
+                    v-if="
+                      record.rate_multiplier && record.rate_multiplier !== 1.0
+                    "
                     class="text-foreground/60"
-                  >({{ record.rate_multiplier }}x)</span>
+                    >({{ record.rate_multiplier }}x)</span
+                  >
                 </span>
               </div>
               <!-- 故障转移图标（优先显示） -->
@@ -505,17 +514,17 @@
                   />
                 </svg>
               </div>
-              <span class="text-muted-foreground whitespace-nowrap">{{ formatApiFormat(record.endpoint_api_format!) }}</span>
+              <span class="text-muted-foreground whitespace-nowrap">{{
+                formatApiFormat(record.endpoint_api_format!)
+              }}</span>
             </div>
             <!-- 无格式转换：单行显示 -->
             <span
               v-else-if="record.api_format"
               class="text-xs whitespace-nowrap"
-            >{{ formatApiFormat(record.api_format) }}</span>
-            <span
-              v-else
-              class="text-muted-foreground text-xs"
-            >-</span>
+              >{{ formatApiFormat(record.api_format) }}</span
+            >
+            <span v-else class="text-muted-foreground text-xs">-</span>
           </TableCell>
           <TableCell class="text-center py-4 w-[70px]">
             <!-- 优先显示请求状态 -->
@@ -534,7 +543,11 @@
               传输中
             </Badge>
             <Badge
-              v-else-if="record.status === 'failed' || (record.status_code && record.status_code >= 400) || record.error_message"
+              v-else-if="
+                record.status === 'failed' ||
+                (record.status_code && record.status_code >= 400) ||
+                record.error_message
+              "
               variant="destructive"
               class="whitespace-nowrap"
             >
@@ -570,17 +583,44 @@
                 <span>{{ formatTokens(record.output_tokens || 0) }}</span>
               </div>
               <div class="flex items-center gap-1 text-muted-foreground">
-                <span :class="record.cache_creation_input_tokens ? 'text-foreground/70' : ''">{{ record.cache_creation_input_tokens ? formatTokens(record.cache_creation_input_tokens) : '-' }}</span>
+                <span
+                  :class="
+                    record.cache_creation_input_tokens
+                      ? 'text-foreground/70'
+                      : ''
+                  "
+                  >{{
+                    record.cache_creation_input_tokens
+                      ? formatTokens(record.cache_creation_input_tokens)
+                      : "-"
+                  }}</span
+                >
                 <span>/</span>
-                <span :class="record.cache_read_input_tokens ? 'text-foreground/70' : ''">{{ record.cache_read_input_tokens ? formatTokens(record.cache_read_input_tokens) : '-' }}</span>
+                <span
+                  :class="
+                    record.cache_read_input_tokens ? 'text-foreground/70' : ''
+                  "
+                  >{{
+                    record.cache_read_input_tokens
+                      ? formatTokens(record.cache_read_input_tokens)
+                      : "-"
+                  }}</span
+                >
               </div>
             </div>
           </TableCell>
           <TableCell class="text-right py-4 w-[100px]">
             <div class="flex flex-col items-end text-xs gap-0.5">
-              <span class="text-primary font-medium">{{ formatCurrency(record.cost || 0) }}</span>
+              <span class="text-primary font-medium">{{
+                formatCurrency(record.cost || 0)
+              }}</span>
               <span
-                v-if="showActualCost && record.actual_cost !== undefined && record.rate_multiplier && record.rate_multiplier !== 1.0"
+                v-if="
+                  showActualCost &&
+                  record.actual_cost !== undefined &&
+                  record.rate_multiplier &&
+                  record.rate_multiplier !== 1.0
+                "
                 class="text-muted-foreground"
               >
                 {{ formatCurrency(record.actual_cost) }}
@@ -594,10 +634,11 @@
               class="flex flex-col items-end text-xs gap-0.5"
             >
               <span class="text-muted-foreground">-</span>
-              <span class="text-primary tabular-nums"><ElapsedTimeText
-                :created-at="record.created_at"
-                :status="record.status"
-                :response-time-ms="record.response_time_ms ?? null"
+              <span class="text-primary tabular-nums"
+                ><ElapsedTimeText
+                  :created-at="record.created_at"
+                  :status="record.status"
+                  :response-time-ms="record.response_time_ms ?? null"
               /></span>
             </div>
             <!-- streaming 状态：首字固定 + 总时间增长 -->
@@ -608,15 +649,14 @@
               <span
                 v-if="record.first_byte_time_ms != null"
                 class="tabular-nums"
-              >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span>
-              <span
-                v-else
-                class="text-muted-foreground"
-              >-</span>
-              <span class="text-primary tabular-nums"><ElapsedTimeText
-                :created-at="record.created_at"
-                :status="record.status"
-                :response-time-ms="record.response_time_ms ?? null"
+                >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span
+              >
+              <span v-else class="text-muted-foreground">-</span>
+              <span class="text-primary tabular-nums"
+                ><ElapsedTimeText
+                  :created-at="record.created_at"
+                  :status="record.status"
+                  :response-time-ms="record.response_time_ms ?? null"
               /></span>
             </div>
             <!-- 已完成状态：首字 + 总耗时 -->
@@ -627,17 +667,14 @@
               <span
                 v-if="record.first_byte_time_ms != null"
                 class="tabular-nums"
-              >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span>
-              <span
-                v-else
-                class="text-muted-foreground"
-              >-</span>
-              <span class="text-muted-foreground tabular-nums">{{ (record.response_time_ms / 1000).toFixed(2) }}s</span>
+                >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span
+              >
+              <span v-else class="text-muted-foreground">-</span>
+              <span class="text-muted-foreground tabular-nums"
+                >{{ (record.response_time_ms / 1000).toFixed(2) }}s</span
+              >
             </div>
-            <span
-              v-else
-              class="text-muted-foreground"
-            >-</span>
+            <span v-else class="text-muted-foreground">-</span>
           </TableCell>
         </TableRow>
       </TableBody>
@@ -660,8 +697,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import { useDebounceFn } from '@vueuse/core'
+import { ref, computed, watch } from "vue";
+import { useDebounceFn } from "@vueuse/core";
 import {
   TableCard,
   Badge,
@@ -679,110 +716,113 @@ import {
   TableHead,
   TableCell,
   Pagination,
-} from '@/components/ui'
-import { Loader2, RefreshCcw, Search, Trash2 } from 'lucide-vue-next'
-import { formatTokens, formatCurrency } from '@/utils/format'
-import { formatDateTime } from '../composables'
-import { useRowClick } from '@/composables/useRowClick'
-import { formatApiFormat } from '@/api/endpoints/types/api-format'
-import type { DateRangeParams, UsageRecord } from '../types'
-import { TimeRangePicker } from '@/components/common'
-import ElapsedTimeText from './ElapsedTimeText.vue'
+} from "@/components/ui";
+import { Loader2, RefreshCcw, Search, Trash2 } from "lucide-vue-next";
+import { formatTokens, formatCurrency } from "@/utils/format";
+import { formatDateTime } from "../composables";
+import { useRowClick } from "@/composables/useRowClick";
+import { formatApiFormat } from "@/api/endpoints/types/api-format";
+import type { DateRangeParams, UsageRecord } from "../types";
+import { TimeRangePicker } from "@/components/common";
+import ElapsedTimeText from "./ElapsedTimeText.vue";
 
 export interface UserOption {
-  id: string
-  username: string
-  email: string
+  id: string;
+  username: string;
+  email: string;
 }
 
 const props = defineProps<{
-  records: UsageRecord[]
-  isAdmin: boolean
-  showActualCost: boolean
-  loading: boolean
-  deletingRecords: boolean
+  records: UsageRecord[];
+  isAdmin: boolean;
+  showActualCost: boolean;
+  loading: boolean;
+  deletingRecords: boolean;
   // 时间范围
-  timeRange: DateRangeParams
+  timeRange: DateRangeParams;
   // 筛选
-  filterSearch: string
-  filterUser: string
-  filterModel: string
-  filterProvider: string
-  filterApiFormat: string
-  filterStatus: string
-  availableUsers: UserOption[]
-  availableModels: string[]
-  availableProviders: string[]
+  filterSearch: string;
+  filterUser: string;
+  filterModel: string;
+  filterProvider: string;
+  filterApiFormat: string;
+  filterStatus: string;
+  availableUsers: UserOption[];
+  availableModels: string[];
+  availableProviders: string[];
   // 分页
-  currentPage: number
-  pageSize: number
-  totalRecords: number
-  pageSizeOptions: number[]
+  currentPage: number;
+  pageSize: number;
+  totalRecords: number;
+  pageSizeOptions: number[];
   // 自动刷新
-  autoRefresh: boolean
-}>()
+  autoRefresh: boolean;
+}>();
 
 const emit = defineEmits<{
-  'update:timeRange': [value: DateRangeParams]
-  'update:filterSearch': [value: string]
-  'update:filterUser': [value: string]
-  'update:filterModel': [value: string]
-  'update:filterProvider': [value: string]
-  'update:filterApiFormat': [value: string]
-  'update:filterStatus': [value: string]
-  'update:currentPage': [value: number]
-  'update:pageSize': [value: number]
-  'update:autoRefresh': [value: boolean]
-  'refresh': []
-  'delete-filtered-records': []
-  'showDetail': [id: string]
-}>()
+  "update:timeRange": [value: DateRangeParams];
+  "update:filterSearch": [value: string];
+  "update:filterUser": [value: string];
+  "update:filterModel": [value: string];
+  "update:filterProvider": [value: string];
+  "update:filterApiFormat": [value: string];
+  "update:filterStatus": [value: string];
+  "update:currentPage": [value: number];
+  "update:pageSize": [value: number];
+  "update:autoRefresh": [value: boolean];
+  refresh: [];
+  "delete-filtered-records": [];
+  showDetail: [id: string];
+}>();
 
 // 静态常量（放在 defineProps/defineEmits 之后）
 const AVAILABLE_API_FORMATS = [
-  { value: 'openai:chat', label: 'OpenAI Chat' },
-  { value: 'openai:cli', label: 'OpenAI CLI' },
-  { value: 'openai:compact', label: 'OpenAI Compact' },
-  { value: 'openai:video', label: 'OpenAI Video' },
-  { value: 'claude:chat', label: 'Claude Chat' },
-  { value: 'claude:cli', label: 'Claude CLI' },
-  { value: 'gemini:chat', label: 'Gemini Chat' },
-  { value: 'gemini:cli', label: 'Gemini CLI' },
-  { value: 'gemini:video', label: 'Gemini Video' },
-] as const
+  { value: "openai:chat", label: "OpenAI Chat" },
+  { value: "openai:cli", label: "OpenAI CLI" },
+  { value: "openai:compact", label: "OpenAI Compact" },
+  { value: "openai:video", label: "OpenAI Video" },
+  { value: "claude:chat", label: "Claude Chat" },
+  { value: "claude:cli", label: "Claude CLI" },
+  { value: "gemini:chat", label: "Gemini Chat" },
+  { value: "gemini:cli", label: "Gemini CLI" },
+  { value: "gemini:video", label: "Gemini Video" },
+] as const;
 
 // 使用模块级常量
-const availableApiFormats = AVAILABLE_API_FORMATS
+const availableApiFormats = AVAILABLE_API_FORMATS;
 
 const timeRangeModel = computed({
   get: () => props.timeRange,
-  set: (value: DateRangeParams) => emit('update:timeRange', value)
-})
+  set: (value: DateRangeParams) => emit("update:timeRange", value),
+});
 
 // 通用搜索（输入防抖）
-const localSearch = ref(props.filterSearch)
+const localSearch = ref(props.filterSearch);
 const emitSearchDebounced = useDebounceFn((value: string) => {
-  emit('update:filterSearch', value)
-}, 300)
+  emit("update:filterSearch", value);
+}, 300);
 
-watch(() => props.filterSearch, (value) => {
-  if (value !== localSearch.value) {
-    localSearch.value = value
-  }
-})
+watch(
+  () => props.filterSearch,
+  (value) => {
+    if (value !== localSearch.value) {
+      localSearch.value = value;
+    }
+  },
+);
 
 watch(localSearch, (value) => {
-  emitSearchDebounced(value)
-})
+  emitSearchDebounced(value);
+});
 
 // 使用复用的行点击逻辑
-const { handleMouseDown, shouldTriggerRowClick } = useRowClick()
+const { handleMouseDown, shouldTriggerRowClick } = useRowClick();
 
 // 处理行点击，排除文本选择操作
 function handleRowClick(event: MouseEvent, id: string) {
-  if (!props.isAdmin) return
-  if (!shouldTriggerRowClick(event)) return
-  emit('showDetail', id)
+  if (!props.isAdmin) return;
+  if (!shouldTriggerRowClick(event)) return;
+  emit("showDetail", id);
 }
 
 // useDebounceFn 自动处理清理，无需 onUnmounted
@@ -791,32 +831,37 @@ function handleRowClick(event: MouseEvent, id: string) {
 // 包括：1. 跨格式转换（has_format_conversion=true）2. 同族格式差异（如 CLAUDE_CLI → CLAUDE）
 function shouldShowFormatConversion(record: UsageRecord): boolean {
   if (!record.api_format || !record.endpoint_api_format) {
-    return false
+    return false;
   }
   // 跨格式转换
   if (record.has_format_conversion) {
-    return true
+    return true;
   }
   // 同族格式差异（精确字符串比较，不区分大小写）
-  return record.api_format.trim().toLowerCase() !== record.endpoint_api_format.trim().toLowerCase()
+  return (
+    record.api_format.trim().toLowerCase() !==
+    record.endpoint_api_format.trim().toLowerCase()
+  );
 }
 
 // 获取 API 格式的 tooltip（包含转换信息）
 function getApiFormatTooltip(record: UsageRecord): string {
   if (!record.api_format) {
-    return ''
+    return "";
   }
-  const displayFormat = formatApiFormat(record.api_format)
+  const displayFormat = formatApiFormat(record.api_format);
 
   // 如果发生了格式转换或同族格式差异，显示详细信息
   if (shouldShowFormatConversion(record)) {
-    const endpointApiFormat = record.endpoint_api_format ?? record.api_format
-    const endpointDisplayFormat = formatApiFormat(endpointApiFormat)
-    const conversionType = record.has_format_conversion ? '格式转换' : '格式兼容（无需转换）'
-    return `用户请求格式: ${displayFormat}\n端点原生格式: ${endpointDisplayFormat}\n${conversionType}`
+    const endpointApiFormat = record.endpoint_api_format ?? record.api_format;
+    const endpointDisplayFormat = formatApiFormat(endpointApiFormat);
+    const conversionType = record.has_format_conversion
+      ? "格式转换"
+      : "格式兼容（无需转换）";
+    return `用户请求格式: ${displayFormat}\n端点原生格式: ${endpointDisplayFormat}\n${conversionType}`;
   }
 
-  return record.api_format
+  return record.api_format;
 }
 
 // 获取实际使用的模型（优先 target_model，其次列表接口下发的 model_version）
@@ -824,21 +869,21 @@ function getApiFormatTooltip(record: UsageRecord): string {
 function getActualModel(record: UsageRecord): string | null {
   // 优先显示模型映射
   if (record.target_model && record.target_model !== record.model) {
-    return record.target_model
+    return record.target_model;
   }
   // 其次显示 Provider 返回的实际版本（如 Gemini 的 modelVersion）
   if (record.model_version && record.model_version !== record.model) {
-    return record.model_version
+    return record.model_version;
   }
-  return null
+  return null;
 }
 
 // 获取模型列的 tooltip
 function getModelTooltip(record: UsageRecord): string {
-  const actualModel = getActualModel(record)
+  const actualModel = getActualModel(record);
   if (actualModel) {
-    return `${record.model} -> ${actualModel}`
+    return `${record.model} -> ${actualModel}`;
   }
-  return record.model
+  return record.model;
 }
 </script>

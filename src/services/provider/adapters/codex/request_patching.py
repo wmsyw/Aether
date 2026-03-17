@@ -1,8 +1,8 @@
-"""Codex provider request patching helpers (passthrough path).
+"""Codex provider request patching helpers.
 
-Codex requests are now treated as passthrough:
-- Do not mutate client payload fields.
-- Only strip internal sentinel fields that must never reach upstream.
+Codex requests are mostly passthrough:
+- Do not mutate client payload fields unless Codex-specific compatibility requires it.
+- Strip internal sentinel fields that must never reach upstream.
 """
 
 from __future__ import annotations
@@ -12,7 +12,9 @@ from typing import Any
 from src.core.provider_types import ProviderType
 
 
-def patch_openai_cli_request_for_codex(request_body: dict[str, Any]) -> dict[str, Any]:
+def patch_openai_cli_request_for_codex(
+    request_body: dict[str, Any],
+) -> dict[str, Any]:
     """
     Patch an OpenAI CLI (Responses API style) request body for Codex gateways.
 

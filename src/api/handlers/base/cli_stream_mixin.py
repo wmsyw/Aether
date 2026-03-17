@@ -18,13 +18,14 @@ from src.api.handlers.base.base_handler import (
     wait_for_with_disconnect_detection,
 )
 from src.api.handlers.base.parsers import get_parser_for_format
-from src.api.handlers.base.request_builder import get_provider_auth
-from src.api.handlers.base.stream_context import StreamContext
-from src.api.handlers.base.upstream_stream_bridge import (
-    aggregate_upstream_stream_to_internal_response,
+from src.api.handlers.base.request_builder import (
+    get_cache_sensitive_protected_body_keys,
+    get_provider_auth,
 )
+from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.utils import (
     build_sse_headers,
+    ensure_stream_buffer_limit,
     filter_proxy_response_headers,
     get_format_converter_registry,
     resolve_client_content_encoding,
@@ -40,6 +41,9 @@ from src.core.exceptions import (
 )
 from src.core.logger import logger
 from src.services.provider.behavior import get_provider_behavior
+from src.services.provider.prompt_cache import (
+    maybe_patch_request_with_prompt_cache_key,
+)
 from src.services.provider.stream_policy import (
     enforce_stream_mode_for_upstream,
     get_upstream_stream_policy,
@@ -49,7 +53,6 @@ from src.services.provider.transport import build_provider_url
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.system.config import SystemConfigService
 from src.utils.sse_parser import SSEEventParser
-from src.utils.timeout import read_first_chunk_with_ttfb_timeout
 
 from .cli_sse_helpers import _format_converted_events_to_sse
 
@@ -269,8 +272,6 @@ class CliStreamMixin:
         client_content_encoding: str | None = None,
     ) -> AsyncGenerator[bytes]:
         """执行流式请求并返回流生成器"""
-        from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
-
         # 重置上下文状态（重试时清除之前的数据，避免累积）
         ctx.parsed_chunks = []
         ctx.provider_parsed_chunks = []
@@ -351,6 +352,7 @@ class CliStreamMixin:
             envelope_tls_profile = envelope.prepare_context(
                 provider_config=getattr(provider, "config", None),
                 key_id=str(getattr(key, "id", "") or ""),
+                user_api_key_id=str(getattr(self.api_key, "id", "") or ""),
                 is_stream=upstream_is_stream,
                 provider_id=str(getattr(provider, "id", "") or ""),
                 key=key,
@@ -399,6 +401,15 @@ class CliStreamMixin:
                 upstream_is_stream=upstream_is_stream,
             )
 
+        request_body = maybe_patch_request_with_prompt_cache_key(
+            request_body,
+            provider_api_format=provider_api_format,
+            provider_type=provider_type,
+            base_url=getattr(endpoint, "base_url", None),
+            user_api_key_id=str(getattr(self.api_key, "id", "") or ""),
+            request_headers=original_headers,
+        )
+
         # 获取认证信息（处理 Service Account 等异步认证场景）
         auth_info = await get_provider_auth(endpoint, key)
 
@@ -431,6 +442,8 @@ class CliStreamMixin:
             extra_headers=extra_headers if extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             envelope=envelope,
+            protected_body_keys=get_cache_sensitive_protected_body_keys(provider_api_format),
+            provider_api_format=provider_api_format,
         )
         if upstream_is_stream:
             from src.core.api_format.headers import set_accept_if_absent
@@ -931,6 +944,11 @@ class CliStreamMixin:
 
             async for chunk in chunk_source:
                 buffer += chunk
+                ensure_stream_buffer_limit(
+                    buffer,
+                    request_id=self.request_id,
+                    provider_name=ctx.provider_name,
+                )
                 # 处理缓冲区中的完整行
                 while b"\n" in buffer:
                     line_bytes, buffer = buffer.split(b"\n", 1)
