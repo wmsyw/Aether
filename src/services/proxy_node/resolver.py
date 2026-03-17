@@ -27,7 +27,7 @@ from src.core.logger import logger
 # ---------------------------------------------------------------------------
 _proxy_node_cache: dict[str, tuple[dict[str, Any] | None, float]] = {}
 _proxy_node_cache_lock = threading.Lock()
-_PROXY_NODE_CACHE_TTL_SECONDS = 15.0
+_PROXY_NODE_CACHE_TTL_SECONDS = 3.0
 _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS = 5.0  # 不可用节点使用更短的 TTL，加速恢复感知
 _PROXY_NODE_CACHE_MAX_SIZE = 256
 
