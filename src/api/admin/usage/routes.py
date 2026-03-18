@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -27,6 +28,7 @@ from src.models.database import (
     Usage,
     UserModelUsageCount,
     User,
+    Wallet,
 )
 from src.services.system.stats_aggregator import (
     AggregatedStats,
@@ -482,7 +484,9 @@ async def get_usage_detail(
     - `tiered_pricing`: 阶梯计费信息（如适用）
     """
     adapter = AdminUsageDetailAdapter(usage_id=usage_id, include_bodies=include_bodies)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 class AdminUsageStatsAdapter(AdminApiAdapter):
@@ -899,13 +903,21 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
                     "provider_id": provider_id_str,
                     "provider": provider_map.get(provider_id_str, "Unknown"),
                     "request_count": attempt_count,  # 尝试次数
-                    "total_tokens": int(usage_stat.total_tokens or 0) if usage_stat else 0,
+                    "total_tokens": int(usage_stat.total_tokens or 0)
+                    if usage_stat
+                    else 0,
                     "total_input_context": (
                         int(usage_stat.total_input_context or 0) if usage_stat else 0
                     ),
-                    "output_tokens": int(usage_stat.output_tokens or 0) if usage_stat else 0,
-                    "total_cost": float(usage_stat.total_cost or 0) if usage_stat else 0,
-                    "actual_cost": float(usage_stat.actual_cost or 0) if usage_stat else 0,
+                    "output_tokens": int(usage_stat.output_tokens or 0)
+                    if usage_stat
+                    else 0,
+                    "total_cost": float(usage_stat.total_cost or 0)
+                    if usage_stat
+                    else 0,
+                    "actual_cost": float(usage_stat.actual_cost or 0)
+                    if usage_stat
+                    else 0,
                     "avg_response_time_ms": float(stat.avg_latency_ms or 0),
                     "success_rate": round(success_rate, 2),
                     "error_count": failed_count,
@@ -916,8 +928,12 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
                         int(usage_stat.cache_creation_tokens or 0) if usage_stat else 0
                     ),
                     "cache_hit_rate": _calculate_token_cache_hit_rate(
-                        total_input_context=(usage_stat.total_input_context if usage_stat else 0),
-                        cache_read_tokens=(usage_stat.cache_read_tokens if usage_stat else 0),
+                        total_input_context=(
+                            usage_stat.total_input_context if usage_stat else 0
+                        ),
+                        cache_read_tokens=(
+                            usage_stat.cache_read_tokens if usage_stat else 0
+                        ),
                     ),
                 }
             )
@@ -1111,7 +1127,14 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         )
 
         query = (
-            db.query(Usage, User, ProviderEndpoint, ProviderAPIKey, ApiKey, usage_model_version)
+            db.query(
+                Usage,
+                User,
+                ProviderEndpoint,
+                ProviderAPIKey,
+                ApiKey,
+                usage_model_version,
+            )
             .outerjoin(User, Usage.user_id == User.id)
             .outerjoin(
                 ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id
@@ -1280,7 +1303,9 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             .all()
         )
 
-        request_ids = [usage.request_id for usage, _, _, _, _, _ in records if usage.request_id]
+        request_ids = [
+            usage.request_id for usage, _, _, _, _, _ in records if usage.request_id
+        ]
         fallback_map = {}
         retry_map = {}
         rectified_map = {}
@@ -1364,7 +1389,14 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
 
         data = []
         api_key_display_cache: dict[str, str] = {}
-        for usage, user, endpoint, provider_api_key, user_api_key, model_version in records:
+        for (
+            usage,
+            user,
+            endpoint,
+            provider_api_key,
+            user_api_key,
+            model_version,
+        ) in records:
             actual_cost = (
                 float(usage.actual_total_cost_usd)
                 if usage.actual_total_cost_usd is not None
@@ -1499,6 +1531,7 @@ class AdminUsageDeleteRecordsAdapter(AdminApiAdapter):
             Usage.request_id,
             Usage.user_id,
             Usage.api_key_id,
+            Usage.wallet_id,
             Usage.model,
             Usage.total_cost_usd,
         )
@@ -1631,8 +1664,10 @@ class AdminUsageDeleteRecordsAdapter(AdminApiAdapter):
         request_ids: set[str] = set()
         affected_user_ids: set[str] = set()
         deleted_cost_by_user: dict[str, float] = {}
+        deleted_cost_by_wallet: dict[str, Decimal] = {}
         deleted_cost_by_api_key: dict[str, float] = {}
         deleted_requests_by_api_key: dict[str, int] = {}
+        unresolved_wallet_rows: list[tuple[str | None, str | None, Decimal]] = []
 
         for row in matched_rows:
             usage_ids.append(str(row.id))
@@ -1640,11 +1675,27 @@ class AdminUsageDeleteRecordsAdapter(AdminApiAdapter):
                 request_ids.add(str(row.request_id))
 
             row_cost = float(row.total_cost_usd or 0.0)
+            row_cost_decimal = Decimal(str(row.total_cost_usd or 0))
             if row.user_id:
                 user_id = str(row.user_id)
                 affected_user_ids.add(user_id)
                 deleted_cost_by_user[user_id] = (
                     deleted_cost_by_user.get(user_id, 0.0) + row_cost
+                )
+
+            if row.wallet_id:
+                wallet_id = str(row.wallet_id)
+                deleted_cost_by_wallet[wallet_id] = (
+                    deleted_cost_by_wallet.get(wallet_id, Decimal("0"))
+                    + row_cost_decimal
+                )
+            else:
+                unresolved_wallet_rows.append(
+                    (
+                        str(row.user_id) if row.user_id else None,
+                        str(row.api_key_id) if row.api_key_id else None,
+                        row_cost_decimal,
+                    )
                 )
 
             if row.api_key_id:
@@ -1672,20 +1723,75 @@ class AdminUsageDeleteRecordsAdapter(AdminApiAdapter):
             or 0
         )
 
-        if deleted_cost_by_user:
-            user_rows = (
-                db.query(User)
-                .filter(User.id.in_(list(deleted_cost_by_user.keys())))
+        if unresolved_wallet_rows:
+            unresolved_api_key_ids = {
+                api_key_id
+                for _, api_key_id, _ in unresolved_wallet_rows
+                if api_key_id is not None
+            }
+
+            wallet_id_by_api_key: dict[str, str] = {}
+            if unresolved_api_key_ids:
+                key_wallet_rows = (
+                    db.query(Wallet.id, Wallet.api_key_id)
+                    .filter(Wallet.api_key_id.in_(list(unresolved_api_key_ids)))
+                    .all()
+                )
+                for wallet_id, api_key_id in key_wallet_rows:
+                    if wallet_id and api_key_id:
+                        wallet_id_by_api_key[str(api_key_id)] = str(wallet_id)
+
+            unresolved_cost_by_user: dict[str, Decimal] = {}
+            for user_id, api_key_id, deleted_cost in unresolved_wallet_rows:
+                wallet_id = (
+                    wallet_id_by_api_key.get(api_key_id)
+                    if api_key_id is not None
+                    else None
+                )
+                if wallet_id is not None:
+                    deleted_cost_by_wallet[wallet_id] = (
+                        deleted_cost_by_wallet.get(wallet_id, Decimal("0"))
+                        + deleted_cost
+                    )
+                    continue
+
+                if user_id is not None:
+                    unresolved_cost_by_user[user_id] = (
+                        unresolved_cost_by_user.get(user_id, Decimal("0"))
+                        + deleted_cost
+                    )
+
+            if unresolved_cost_by_user:
+                user_wallet_rows = (
+                    db.query(Wallet.id, Wallet.user_id)
+                    .filter(Wallet.user_id.in_(list(unresolved_cost_by_user.keys())))
+                    .all()
+                )
+                for wallet_id, user_id in user_wallet_rows:
+                    if not wallet_id or not user_id:
+                        continue
+                    user_id_str = str(user_id)
+                    wallet_id_str = str(wallet_id)
+                    deleted_cost_by_wallet[wallet_id_str] = deleted_cost_by_wallet.get(
+                        wallet_id_str, Decimal("0")
+                    ) + unresolved_cost_by_user.get(user_id_str, Decimal("0"))
+
+        if deleted_cost_by_wallet:
+            wallet_rows = (
+                db.query(Wallet)
+                .filter(Wallet.id.in_(list(deleted_cost_by_wallet.keys())))
                 .all()
             )
-            for user_row in user_rows:
-                user_id = str(user_row.id)
-                deleted_cost = float(deleted_cost_by_user.get(user_id, 0.0) or 0.0)
-                user_row.total_usd = max(
-                    float(user_row.total_usd or 0.0) - deleted_cost, 0.0
+            for wallet_row in wallet_rows:
+                wallet_id = str(wallet_row.id)
+                deleted_cost = deleted_cost_by_wallet.get(wallet_id, Decimal("0"))
+                wallet_total_consumed = Decimal(
+                    str(getattr(wallet_row, "total_consumed", 0) or 0)
                 )
-                user_row.used_usd = max(
-                    float(user_row.used_usd or 0.0) - deleted_cost, 0.0
+                setattr(
+                    wallet_row,
+                    "total_consumed",
+                    max(wallet_total_consumed - deleted_cost, Decimal("0")),
                 )
 
         if deleted_requests_by_api_key:
@@ -1705,11 +1811,6 @@ class AdminUsageDeleteRecordsAdapter(AdminApiAdapter):
                     float(api_key_row.total_cost_usd or 0.0) - deleted_cost,
                     0.0,
                 )
-                if bool(getattr(api_key_row, "is_standalone", False)):
-                    api_key_row.balance_used_usd = max(
-                        float(api_key_row.balance_used_usd or 0.0) - deleted_cost,
-                        0.0,
-                    )
 
         rebuilt_users = 0
         if affected_user_ids:
@@ -1822,7 +1923,8 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             Usage,
             case(
                 (
-                    (Usage.request_body.isnot(None)) | (Usage.request_body_compressed.isnot(None)),
+                    (Usage.request_body.isnot(None))
+                    | (Usage.request_body_compressed.isnot(None)),
                     True,
                 ),
                 else_=False,
@@ -1868,10 +1970,16 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
         return query
 
     def _load_usage_detail_row(self, db: Session) -> Any:
-        usage_row = self._build_usage_detail_query(db).filter(Usage.id == self.usage_id).first()
+        usage_row = (
+            self._build_usage_detail_query(db).filter(Usage.id == self.usage_id).first()
+        )
         if usage_row:
             return usage_row
-        return self._build_usage_detail_query(db).filter(Usage.request_id == self.usage_id).first()
+        return (
+            self._build_usage_detail_query(db)
+            .filter(Usage.request_id == self.usage_id)
+            .first()
+        )
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
@@ -1906,7 +2014,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
         provider_request_body = (
             usage_record.get_provider_request_body() if self.include_bodies else None
         )
-        response_body = usage_record.get_response_body() if self.include_bodies else None
+        response_body = (
+            usage_record.get_response_body() if self.include_bodies else None
+        )
         client_response_body = (
             usage_record.get_client_response_body() if self.include_bodies else None
         )
@@ -1940,10 +2050,16 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             },
             "cache_creation_input_tokens": usage_record.cache_creation_input_tokens,
             "cache_read_input_tokens": usage_record.cache_read_input_tokens,
-            "cache_creation_input_tokens_5m": usage_record.cache_creation_input_tokens_5m or 0,
-            "cache_creation_input_tokens_1h": usage_record.cache_creation_input_tokens_1h or 0,
-            "cache_creation_cost": float(getattr(usage_record, "cache_creation_cost_usd", 0) or 0),
-            "cache_read_cost": float(getattr(usage_record, "cache_read_cost_usd", 0) or 0),
+            "cache_creation_input_tokens_5m": usage_record.cache_creation_input_tokens_5m
+            or 0,
+            "cache_creation_input_tokens_1h": usage_record.cache_creation_input_tokens_1h
+            or 0,
+            "cache_creation_cost": float(
+                getattr(usage_record, "cache_creation_cost_usd", 0) or 0
+            ),
+            "cache_read_cost": float(
+                getattr(usage_record, "cache_read_cost_usd", 0) or 0
+            ),
             "request_cost": float(getattr(usage_record, "request_cost_usd", 0) or 0),
             "input_price_per_1m": (
                 float(usage_record.input_price_per_1m)
@@ -1977,7 +2093,9 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "status": usage_record.status,
             "response_time_ms": usage_record.response_time_ms,
             "first_byte_time_ms": usage_record.first_byte_time_ms,  # 首字时间 (TTFB)
-            "created_at": usage_record.created_at.isoformat() if usage_record.created_at else None,
+            "created_at": usage_record.created_at.isoformat()
+            if usage_record.created_at
+            else None,
             "has_request_body": has_request_body,
             "has_provider_request_body": has_provider_request_body,
             "has_response_body": has_response_body,

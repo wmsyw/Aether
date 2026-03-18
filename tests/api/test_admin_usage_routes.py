@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from src.api.admin.usage.routes import AdminUsageDetailAdapter, AdminUsageRecordsAdapter
+from src.api.admin.usage.routes import AdminUsageDeleteRecordsAdapter
 
 
 class _FakeQuery:
@@ -17,10 +18,12 @@ class _FakeQuery:
         scalar_result: int | None = None,
         all_result: list[Any] | None = None,
         first_result: Any = None,
+        delete_result: int | None = None,
     ) -> None:
         self.scalar_result = scalar_result
         self.all_result = all_result or []
         self.first_result = first_result
+        self.delete_result = delete_result
         self.options_args: tuple[Any, ...] = ()
 
     def outerjoin(self, *args: Any, **kwargs: Any) -> _FakeQuery:
@@ -34,6 +37,18 @@ class _FakeQuery:
 
     def options(self, *args: Any) -> _FakeQuery:
         self.options_args = args
+        return self
+
+    def group_by(self, *args: Any, **kwargs: Any) -> _FakeQuery:
+        return self
+
+    def having(self, *args: Any, **kwargs: Any) -> _FakeQuery:
+        return self
+
+    def distinct(self, *args: Any, **kwargs: Any) -> _FakeQuery:
+        return self
+
+    def subquery(self) -> _FakeQuery:
         return self
 
     def order_by(self, *args: Any, **kwargs: Any) -> _FakeQuery:
@@ -54,15 +69,26 @@ class _FakeQuery:
     def first(self) -> Any:
         return self.first_result
 
+    def delete(self, *args: Any, **kwargs: Any) -> int:
+        return int(self.delete_result or 0)
+
 
 class _FakeDb:
     def __init__(self, queries: list[_FakeQuery]) -> None:
         self._queries = queries
         self.query_calls: list[tuple[Any, ...]] = []
+        self.commits = 0
+        self.added: list[Any] = []
 
     def query(self, *args: Any) -> _FakeQuery:
         self.query_calls.append(args)
         return self._queries[len(self.query_calls) - 1]
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
 
 
 @pytest.mark.asyncio
@@ -114,7 +140,7 @@ async def test_admin_usage_records_returns_model_version_without_request_metadat
         ]
     )
     db = _FakeDb([count_query, data_query])
-    context = SimpleNamespace(
+    context: Any = SimpleNamespace(
         db=db,
         user=SimpleNamespace(id="admin-1"),
         add_audit_metadata=lambda **_: None,
@@ -234,18 +260,20 @@ async def test_admin_usage_detail_defers_large_body_columns_when_bodies_excluded
         first_result=(_UsageRecord(), True, True, True, True),
     )
     user_query = _FakeQuery(
-        first_result=SimpleNamespace(id="user-1", username="tester", email="u@example.com"),
+        first_result=SimpleNamespace(
+            id="user-1", username="tester", email="u@example.com"
+        ),
     )
     api_key_query = _FakeQuery(first_result=_ApiKeyRecord())
     db = _FakeDb([usage_query, user_query, api_key_query])
-    context = SimpleNamespace(
+    context: Any = SimpleNamespace(
         db=db,
         user=SimpleNamespace(id="admin-1"),
         add_audit_metadata=lambda **_: None,
     )
 
     adapter = AdminUsageDetailAdapter(usage_id="usage-1", include_bodies=False)
-    result = await adapter.handle(context)  # type: ignore[arg-type]
+    result = await adapter.handle(context)
 
     assert result["request_body"] is None
     assert result["provider_request_body"] is None
@@ -262,14 +290,177 @@ async def test_admin_usage_detail_defers_large_body_columns_when_bodies_excluded
         for context in getattr(option, "context", ())
     }
     assert "ORM Path[Mapper[Usage(usage)] -> Usage.request_body]" in deferred_paths
-    assert "ORM Path[Mapper[Usage(usage)] -> Usage.provider_request_body]" in deferred_paths
+    assert (
+        "ORM Path[Mapper[Usage(usage)] -> Usage.provider_request_body]"
+        in deferred_paths
+    )
     assert "ORM Path[Mapper[Usage(usage)] -> Usage.response_body]" in deferred_paths
-    assert "ORM Path[Mapper[Usage(usage)] -> Usage.client_response_body]" in deferred_paths
-    assert "ORM Path[Mapper[Usage(usage)] -> Usage.request_body_compressed]" in deferred_paths
     assert (
-        "ORM Path[Mapper[Usage(usage)] -> Usage.provider_request_body_compressed]" in deferred_paths
+        "ORM Path[Mapper[Usage(usage)] -> Usage.client_response_body]" in deferred_paths
     )
-    assert "ORM Path[Mapper[Usage(usage)] -> Usage.response_body_compressed]" in deferred_paths
     assert (
-        "ORM Path[Mapper[Usage(usage)] -> Usage.client_response_body_compressed]" in deferred_paths
+        "ORM Path[Mapper[Usage(usage)] -> Usage.request_body_compressed]"
+        in deferred_paths
     )
+    assert (
+        "ORM Path[Mapper[Usage(usage)] -> Usage.provider_request_body_compressed]"
+        in deferred_paths
+    )
+    assert (
+        "ORM Path[Mapper[Usage(usage)] -> Usage.response_body_compressed]"
+        in deferred_paths
+    )
+    assert (
+        "ORM Path[Mapper[Usage(usage)] -> Usage.client_response_body_compressed]"
+        in deferred_paths
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_usage_delete_records_updates_wallet_and_api_key_without_legacy_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CacheInvalidationService:
+        def clear_all_caches(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "src.services.cache.invalidation.get_cache_invalidation_service",
+        lambda: _CacheInvalidationService(),
+    )
+
+    matched_usage = SimpleNamespace(
+        id="usage-1",
+        request_id="req-1",
+        user_id="user-1",
+        api_key_id="key-1",
+        wallet_id="wallet-1",
+        model="gpt-5",
+        total_cost_usd=Decimal("1.50"),
+    )
+
+    wallet_row = SimpleNamespace(id="wallet-1", total_consumed=Decimal("10.00"))
+    api_key_row = SimpleNamespace(
+        id="key-1",
+        total_requests=5,
+        total_cost_usd=Decimal("7.25"),
+        is_standalone=True,
+    )
+
+    db = _FakeDb(
+        [
+            _FakeQuery(all_result=[matched_usage]),
+            _FakeQuery(delete_result=1),
+            _FakeQuery(delete_result=1),
+            _FakeQuery(all_result=[wallet_row]),
+            _FakeQuery(all_result=[api_key_row]),
+            _FakeQuery(delete_result=1),
+            _FakeQuery(all_result=[]),
+        ]
+    )
+
+    context: Any = SimpleNamespace(
+        db=db,
+        user=SimpleNamespace(id="admin-1"),
+        add_audit_metadata=lambda **_: None,
+    )
+
+    adapter = AdminUsageDeleteRecordsAdapter(
+        time_range=None,
+        search=None,
+        user_id=None,
+        username=None,
+        model=None,
+        provider=None,
+        api_format=None,
+        status=None,
+    )
+
+    result = await adapter.handle(context)
+
+    assert result["deleted"]["usage_records"] == 1
+    assert result["deleted"]["request_candidates"] == 1
+    assert result["updated"]["users"] == 1
+    assert result["updated"]["api_keys"] == 1
+
+    assert float(wallet_row.total_consumed) == pytest.approx(8.5)
+    assert api_key_row.total_requests == 4
+    assert float(api_key_row.total_cost_usd) == pytest.approx(5.75)
+    assert not hasattr(api_key_row, "balance_used_usd")
+    assert db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_usage_delete_records_resolves_wallet_from_standalone_key_when_wallet_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CacheInvalidationService:
+        def clear_all_caches(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "src.services.cache.invalidation.get_cache_invalidation_service",
+        lambda: _CacheInvalidationService(),
+    )
+
+    matched_usage = SimpleNamespace(
+        id="usage-legacy-1",
+        request_id="req-legacy-1",
+        user_id="user-1",
+        api_key_id="key-standalone-1",
+        wallet_id=None,
+        model="gpt-5",
+        total_cost_usd=Decimal("1.50"),
+    )
+
+    wallet_row = SimpleNamespace(
+        id="wallet-standalone-1", total_consumed=Decimal("12.00")
+    )
+    api_key_row = SimpleNamespace(
+        id="key-standalone-1",
+        total_requests=6,
+        total_cost_usd=Decimal("9.00"),
+        is_standalone=True,
+    )
+
+    db = _FakeDb(
+        [
+            _FakeQuery(all_result=[matched_usage]),
+            _FakeQuery(delete_result=1),
+            _FakeQuery(delete_result=1),
+            _FakeQuery(all_result=[("wallet-standalone-1", "key-standalone-1")]),
+            _FakeQuery(all_result=[wallet_row]),
+            _FakeQuery(all_result=[api_key_row]),
+            _FakeQuery(delete_result=1),
+            _FakeQuery(all_result=[]),
+        ]
+    )
+
+    context: Any = SimpleNamespace(
+        db=db,
+        user=SimpleNamespace(id="admin-1"),
+        add_audit_metadata=lambda **_: None,
+    )
+
+    adapter = AdminUsageDeleteRecordsAdapter(
+        time_range=None,
+        search=None,
+        user_id=None,
+        username=None,
+        model=None,
+        provider=None,
+        api_format=None,
+        status=None,
+    )
+
+    result = await adapter.handle(context)
+
+    assert result["deleted"]["usage_records"] == 1
+    assert result["deleted"]["request_candidates"] == 1
+    assert result["updated"]["users"] == 1
+    assert result["updated"]["api_keys"] == 1
+
+    assert float(wallet_row.total_consumed) == pytest.approx(10.5)
+    assert api_key_row.total_requests == 5
+    assert float(api_key_row.total_cost_usd) == pytest.approx(7.5)
+    assert db.commits == 1
