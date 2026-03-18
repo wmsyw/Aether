@@ -42,11 +42,7 @@
       </div>
 
       <!-- 分析统计 -->
-      <!-- 管理员：模型 + 提供商 + API格式（3列） -->
-      <div
-        v-if="isAdminPage"
-        class="grid grid-cols-1 lg:grid-cols-3 gap-4"
-      >
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <UsageModelTable
           :data="enhancedModelStats"
           :is-admin="authStore.isAdmin"
@@ -54,24 +50,6 @@
         <UsageProviderTable
           :data="providerStats"
           :is-admin="authStore.isAdmin"
-        />
-        <UsageApiFormatTable
-          :data="apiFormatStats"
-          :is-admin="authStore.isAdmin"
-        />
-      </div>
-      <!-- 用户：模型 + API格式（2列） -->
-      <div
-        v-else
-        class="grid grid-cols-1 lg:grid-cols-2 gap-4"
-      >
-        <UsageModelTable
-          :data="enhancedModelStats"
-          :is-admin="authStore.isAdmin"
-        />
-        <UsageApiFormatTable
-          :data="apiFormatStats"
-          :is-admin="false"
         />
       </div>
     </div>
@@ -88,7 +66,6 @@
       :filter-user="filterUser"
       :filter-model="filterModel"
       :filter-provider="filterProvider"
-      :filter-api-format="filterApiFormat"
       :filter-status="filterStatus"
       :available-users="availableUsers"
       :available-models="availableModels"
@@ -103,7 +80,6 @@
       @update:filter-user="handleFilterUserChange"
       @update:filter-model="handleFilterModelChange"
       @update:filter-provider="handleFilterProviderChange"
-      @update:filter-api-format="handleFilterApiFormatChange"
       @update:filter-status="handleFilterStatusChange"
       @update:current-page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -135,7 +111,6 @@ import { PanelTopClose, PanelTopOpen } from 'lucide-vue-next'
 import {
   UsageModelTable,
   UsageProviderTable,
-  UsageApiFormatTable,
   UsageRecordsTable,
   ActivityHeatmapCard,
   RequestDetailDrawer,
@@ -177,7 +152,6 @@ const filterSearch = ref('')
 const filterUser = ref('__all__')
 const filterModel = ref('__all__')
 const filterProvider = ref('__all__')
-const filterApiFormat = ref('__all__')
 const filterStatus = ref<FilterStatusValue>('__all__')
 
 // 用户列表（仅管理员页面使用）
@@ -187,7 +161,6 @@ const availableUsers = ref<UserOption[]>([])
 const {
   isLoadingRecords,
   providerStats,
-  apiFormatStats,
   currentRecords,
   totalRecords,
   enhancedModelStats,
@@ -279,18 +252,22 @@ const filteredRecords = computed(() => {
   if (!isAdminPage.value) {
     let records = [...currentRecords.value]
 
+    const searchKeyword = filterSearch.value.trim().toLowerCase()
+    if (searchKeyword) {
+      records = records.filter(record => {
+        const model = record.model?.toLowerCase() || ''
+        const keyName = record.api_key?.name?.toLowerCase() || ''
+        const keyDisplay = record.api_key?.display?.toLowerCase() || ''
+        return model.includes(searchKeyword) || keyName.includes(searchKeyword) || keyDisplay.includes(searchKeyword)
+      })
+    }
+
     if (filterModel.value !== '__all__') {
       records = records.filter(record => record.model === filterModel.value)
     }
 
     if (filterProvider.value !== '__all__') {
       records = records.filter(record => record.provider === filterProvider.value)
-    }
-
-    if (filterApiFormat.value !== '__all__') {
-      records = records.filter(record =>
-        record.api_format?.toUpperCase() === filterApiFormat.value.toUpperCase()
-      )
     }
 
     if (filterStatus.value !== '__all__') {
@@ -616,7 +593,6 @@ function getCurrentFilters() {
     user_id: filterUser.value !== '__all__' ? filterUser.value : undefined,
     model: filterModel.value !== '__all__' ? filterModel.value : undefined,
     provider: filterProvider.value !== '__all__' ? filterProvider.value : undefined,
-    api_format: filterApiFormat.value !== '__all__' ? filterApiFormat.value : undefined,
     status: filterStatus.value !== '__all__' ? filterStatus.value : undefined
   }
 }
@@ -629,8 +605,7 @@ async function handleFilterSearchChange(value: string) {
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
   }
-  // 用户页面：search 需要重新从后端拉取数据（后端支持 search 参数）
-  // 但通过 filteredRecords 做前端过滤已覆盖，无需额外请求
+  // 用户页面通过 filteredRecords 做前端搜索过滤，无需额外请求
 }
 
 async function handleFilterUserChange(value: string) {
@@ -653,15 +628,6 @@ async function handleFilterModelChange(value: string) {
 
 async function handleFilterProviderChange(value: string) {
   filterProvider.value = value
-  currentPage.value = 1
-
-  if (isAdminPage.value) {
-    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
-  }
-}
-
-async function handleFilterApiFormatChange(value: string) {
-  filterApiFormat.value = value
   currentPage.value = 1
 
   if (isAdminPage.value) {
@@ -707,7 +673,7 @@ async function refreshData() {
 
 async function refreshDataWithFreshStats() {
   await loadStats(timeRange.value, { bypassCache: true })
-  await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters())
+  await loadRecords({ page: currentPage.value, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
 }
 
 async function handleDeleteFilteredRecords() {
@@ -720,7 +686,6 @@ async function handleDeleteFilteredRecords() {
   if (filters.user_id) filterLabels.push(`用户:${filters.user_id}`)
   if (filters.model) filterLabels.push(`模型:${filters.model}`)
   if (filters.provider) filterLabels.push(`提供商:${filters.provider}`)
-  if (filters.api_format) filterLabels.push(`格式:${filters.api_format}`)
   if (filters.status) filterLabels.push(`状态:${filters.status}`)
 
   if (timeRange.value.preset) {
@@ -738,6 +703,14 @@ async function handleDeleteFilteredRecords() {
   )
 
   if (!confirmed) return
+
+  const doubleConfirmed = await confirmDanger(
+    '再次确认后将立即删除当前筛选命中的记录，并同步重算统计数据。',
+    '请二次确认删除',
+    '确认删除'
+  )
+
+  if (!doubleConfirmed) return
 
   isDeletingRecords.value = true
   try {

@@ -45,22 +45,19 @@
             v-for="model in data"
             :key="model.model"
           >
-            <TableCell class="font-medium py-2 px-2 max-w-[220px]">
-              <span
-                class="block truncate"
-                :title="model.model"
-              >{{ model.model.replace('claude-', '') }}</span>
+            <TableCell class="font-medium py-2 px-2 whitespace-nowrap">
+              <span :title="model.model">{{ model.model }}</span>
             </TableCell>
             <TableCell class="text-right py-2 px-2">
               {{ model.request_count }}
             </TableCell>
-            <TableCell class="text-right py-2 px-2">
+            <TableCell class="text-right py-2 px-2 whitespace-nowrap">
               <div class="flex flex-col items-end text-xs gap-0.5 whitespace-nowrap">
                 <span>{{ formatTokens(model.total_input_context || 0) }} / {{ formatTokens(model.output_tokens || 0) }}</span>
                 <span class="text-muted-foreground">{{ formatTokens(model.cache_read_tokens || 0) }}</span>
               </div>
             </TableCell>
-            <TableCell class="text-right py-2 px-2">
+            <TableCell class="text-right py-2 px-2 whitespace-nowrap">
               <div class="flex flex-col items-end text-xs gap-0.5">
                 <span class="text-primary font-medium">{{ formatCurrency(model.total_cost) }}</span>
                 <span

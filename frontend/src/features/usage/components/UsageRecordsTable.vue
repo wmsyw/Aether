@@ -100,28 +100,6 @@
             </SelectContent>
           </Select>
 
-          <!-- API格式筛选 -->
-          <Select
-            :model-value="filterApiFormat"
-            @update:model-value="$emit('update:filterApiFormat', $event)"
-          >
-            <SelectTrigger
-              class="flex-1 min-w-0 sm:flex-none sm:w-32 h-8 text-xs border-border/60"
-            >
-              <SelectValue placeholder="格式" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__"> 全部格式 </SelectItem>
-              <SelectItem
-                v-for="format in availableApiFormats"
-                :key="format.value"
-                :value="format.value"
-              >
-                {{ format.label }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-
           <!-- 状态筛选 -->
           <Select
             :model-value="filterStatus"
@@ -139,8 +117,8 @@
               <SelectItem value="active"> 活跃 </SelectItem>
               <SelectItem value="failed"> 失败 </SelectItem>
               <SelectItem value="cancelled"> 已取消 </SelectItem>
-              <SelectItem value="has_retry"> 发生重试 </SelectItem>
-              <SelectItem value="has_fallback"> 发生转移 </SelectItem>
+              <SelectItem v-if="isAdmin" value="has_retry"> 发生重试 </SelectItem>
+              <SelectItem v-if="isAdmin" value="has_fallback"> 发生转移 </SelectItem>
             </SelectContent>
           </Select>
 
@@ -745,7 +723,6 @@ const props = defineProps<{
   filterUser: string;
   filterModel: string;
   filterProvider: string;
-  filterApiFormat: string;
   filterStatus: string;
   availableUsers: UserOption[];
   availableModels: string[];
@@ -765,7 +742,6 @@ const emit = defineEmits<{
   "update:filterUser": [value: string];
   "update:filterModel": [value: string];
   "update:filterProvider": [value: string];
-  "update:filterApiFormat": [value: string];
   "update:filterStatus": [value: string];
   "update:currentPage": [value: number];
   "update:pageSize": [value: number];
@@ -774,22 +750,6 @@ const emit = defineEmits<{
   "delete-filtered-records": [];
   showDetail: [id: string];
 }>();
-
-// 静态常量（放在 defineProps/defineEmits 之后）
-const AVAILABLE_API_FORMATS = [
-  { value: "openai:chat", label: "OpenAI Chat" },
-  { value: "openai:cli", label: "OpenAI CLI" },
-  { value: "openai:compact", label: "OpenAI Compact" },
-  { value: "openai:video", label: "OpenAI Video" },
-  { value: "claude:chat", label: "Claude Chat" },
-  { value: "claude:cli", label: "Claude CLI" },
-  { value: "gemini:chat", label: "Gemini Chat" },
-  { value: "gemini:cli", label: "Gemini CLI" },
-  { value: "gemini:video", label: "Gemini Video" },
-] as const;
-
-// 使用模块级常量
-const availableApiFormats = AVAILABLE_API_FORMATS;
 
 const timeRangeModel = computed({
   get: () => props.timeRange,

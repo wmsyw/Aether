@@ -67,11 +67,11 @@
               <Button
                 variant="outline"
                 size="sm"
-                class="gap-1.5"
+                class="gap-1.5 whitespace-nowrap shrink-0"
                 @click.stop="router.push(tool.href)"
               >
                 <Settings class="w-3.5 h-3.5" />
-                管理
+                <span class="whitespace-nowrap">管理</span>
               </Button>
             </div>
           </div>
@@ -143,15 +143,15 @@
 
           <!-- 操作区域 -->
           <div class="mt-5 pt-4 border-t border-border/50 flex items-center justify-between">
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
               <Switch
                 :model-value="module.enabled"
                 :disabled="!module.available || !module.config_validated || toggling[module.name]"
                 @update:model-value="(val: boolean) => toggleModule(module.name, val)"
               />
-              <div class="flex flex-col">
+              <div class="flex flex-col min-w-0">
                 <span
-                  class="text-sm"
+                  class="text-sm whitespace-nowrap"
                   :class="module.enabled ? 'text-foreground' : 'text-muted-foreground'"
                 >
                   {{ module.enabled ? '启用' : '禁用' }}
@@ -169,11 +169,11 @@
               v-if="module.admin_route"
               variant="outline"
               size="sm"
-              class="gap-1.5"
+              class="gap-1.5 whitespace-nowrap shrink-0"
               @click="router.push(module.admin_route)"
             >
               <Settings class="w-3.5 h-3.5" />
-              配置
+              <span class="whitespace-nowrap">配置</span>
             </Button>
           </div>
         </div>
