@@ -6,9 +6,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import src.api.admin.usage.routes as usage_routes
 
-from src.api.admin.usage.routes import AdminUsageDetailAdapter, AdminUsageRecordsAdapter
-from src.api.admin.usage.routes import AdminUsageDeleteRecordsAdapter
+from src.api.admin.usage.routes import (
+    AdminUsageDeleteRecordsAdapter,
+    AdminUsageDetailAdapter,
+    AdminUsageRecordsAdapter,
+)
 
 
 class _FakeQuery:
@@ -464,3 +468,76 @@ async def test_admin_usage_delete_records_resolves_wallet_from_standalone_key_wh
     assert api_key_row.total_requests == 5
     assert float(api_key_row.total_cost_usd) == pytest.approx(7.5)
     assert db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_replay_model_name_falls_back_to_source_model_when_mapping_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeMapper:
+        def __init__(self, db: Any) -> None:
+            self.db = db
+
+        async def get_mapping(self, source_model: str, provider_id: str) -> None:
+            return None
+
+    monkeypatch.setattr("src.services.model.mapper.ModelMapperMiddleware", _FakeMapper)
+
+    db: Any = SimpleNamespace()
+    target_provider: Any = SimpleNamespace(id="provider-2", name="OpenAI Compatible")
+    target_endpoint: Any = SimpleNamespace(
+        id="endpoint-2", api_format="openai:responses"
+    )
+
+    resolved_model, mapping_source = await usage_routes._resolve_replay_model_name(
+        db,
+        source_model="gpt-4o-mini",
+        target_provider=target_provider,
+        target_endpoint=target_endpoint,
+        target_api_key=None,
+    )
+
+    assert resolved_model == "gpt-4o-mini"
+    assert mapping_source == "none"
+
+
+@pytest.mark.asyncio
+async def test_resolve_replay_model_name_reruns_mapping_for_same_endpoint_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeModel:
+        def select_provider_model_name(
+            self, affinity_key: str | None = None, api_format: str | None = None
+        ) -> str:
+            assert affinity_key == "key-2"
+            assert api_format == "openai:responses"
+            return "provider-model-for-key-2"
+
+    class _FakeMapper:
+        def __init__(self, db: Any) -> None:
+            self.db = db
+
+        async def get_mapping(self, source_model: str, provider_id: str) -> Any:
+            assert source_model == "gpt-4o-mini"
+            assert provider_id == "provider-2"
+            return SimpleNamespace(model=_FakeModel())
+
+    monkeypatch.setattr("src.services.model.mapper.ModelMapperMiddleware", _FakeMapper)
+
+    db: Any = SimpleNamespace()
+    target_provider: Any = SimpleNamespace(id="provider-2", name="OpenAI Compatible")
+    target_endpoint: Any = SimpleNamespace(
+        id="endpoint-2", api_format="openai:responses"
+    )
+    target_api_key: Any = SimpleNamespace(id="key-2")
+
+    resolved_model, mapping_source = await usage_routes._resolve_replay_model_name(
+        db,
+        source_model="gpt-4o-mini",
+        target_provider=target_provider,
+        target_endpoint=target_endpoint,
+        target_api_key=target_api_key,
+    )
+
+    assert resolved_model == "provider-model-for-key-2"
+    assert mapping_source == "model_mapping"
