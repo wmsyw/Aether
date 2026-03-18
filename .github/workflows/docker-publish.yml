@@ -36,8 +36,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Check if base image needs rebuild
         id: check
@@ -117,8 +117,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Calculate base files hash
         id: hash
@@ -187,10 +187,42 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(gh release list --repo "${{ env.GITHUB_REPO }}" --limit 50 --json tagName,isDraft,isPrerelease \
-            --jq '[.[] | select(.tagName | startswith("hub-v")) | select(.isDraft == false and .isPrerelease == false)] | .[0].tagName')
+          set -euo pipefail
+
+          TAG=""
+
+          # Prefer a matching Hub release for the current app release tag, e.g. v1.2.3 -> hub-v1.2.3.
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            CANDIDATE="hub-${GITHUB_REF_NAME}"
+            if gh release view "$CANDIDATE" --repo "${{ env.GITHUB_REPO }}" --json tagName >/dev/null 2>&1; then
+              TAG="$CANDIDATE"
+            fi
+          fi
+
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release list --repo "${{ env.GITHUB_REPO }}" --limit 200 --json tagName,isDraft,isPrerelease \
+              --jq '[.[] | select(.tagName | startswith("hub-v")) | select(.isDraft == false and .isPrerelease == false)] | .[0].tagName')
+          fi
+
           if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            echo "No hub release found"
+            RELEASE_TAGS=$(gh release list --repo "${{ env.GITHUB_REPO }}" --limit 20 --json tagName --jq 'map(.tagName) | join(", ")')
+            HUB_GIT_TAGS=$(gh api "repos/${{ env.GITHUB_REPO }}/tags?per_page=100" --jq '[.[].name | select(startswith("hub-v"))] | .[0:10] | join(", ")')
+
+            if [ -z "$RELEASE_TAGS" ] || [ "$RELEASE_TAGS" = "null" ]; then
+              RELEASE_TAGS="(none)"
+            fi
+            if [ -z "$HUB_GIT_TAGS" ] || [ "$HUB_GIT_TAGS" = "null" ]; then
+              HUB_GIT_TAGS="(none)"
+            fi
+
+            echo "::error::No stable hub release found in ${{ env.GITHUB_REPO }}."
+            echo "::error::Recent release tags: $RELEASE_TAGS"
+            echo "::error::Recent git tags matching hub-v*: $HUB_GIT_TAGS"
+            if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+              echo "::error::Create and push a hub release tag first (example): git tag hub-${GITHUB_REF_NAME} && git push origin hub-${GITHUB_REF_NAME}"
+            else
+              echo "::error::Push a tag like hub-vX.Y.Z to trigger .github/workflows/build-hub.yml and publish Hub binaries."
+            fi
             exit 1
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
@@ -213,8 +245,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
