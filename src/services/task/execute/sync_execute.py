@@ -31,6 +31,7 @@ from src.services.task.execute.state_transition import (
     SyncExecutionState,
     resolve_execution_error_transition,
 )
+from src.services.task.request_state import RequestBodyState
 from src.services.usage.service import UsageService
 
 
@@ -65,7 +66,7 @@ class SyncTaskExecutionService:
         is_stream: bool,
         capability_requirements: dict[str, bool] | None,
         preferred_key_ids: list[str] | None,
-        request_body_ref: dict[str, Any] | None,
+        request_body_state: RequestBodyState | None,
         request_headers: dict[str, Any] | None,
         request_body: dict[str, Any] | None,
     ) -> ExecutionResult:
@@ -197,7 +198,7 @@ class SyncTaskExecutionService:
             # Keep behavior consistent with previous behavior: last_candidate is updated even if skipped.
             execution_state = SyncExecutionState(
                 candidate_record_map=candidate_record_map,
-                request_body_ref=request_body_ref,
+                request_body_state=request_body_state,
                 last_candidate=all_candidates[-1] if all_candidates else None,
             )
 
@@ -334,7 +335,7 @@ class SyncTaskExecutionService:
                     request_id=request_id,
                     attempt=attempt_count,
                     max_attempts=int(max_attempts or 0),
-                    request_body_ref=request_body_ref,
+                    request_body_state=request_body_state,
                     error_classifier=error_classifier,
                 )
                 action = classify_candidate_error_action(raw_action)

@@ -132,13 +132,9 @@ class OpenAICliNormalizer(FormatNormalizer):
         request: dict[str, Any],
         variant: str,
     ) -> dict[str, Any] | None:
-        """Codex 同格式透传：直接在原始请求体上做最小补丁，跳过 internal 转换。"""
-        if variant.lower() != "codex":
-            return None
-        out: dict[str, Any] = dict(request)
-        # 内部路由标记：绝不能透传到上游。
-        out.pop("_aether_compact", None)
-        return out
+        """OpenAI CLI currently has no provider-specific same-format patching."""
+        del request, variant
+        return None
 
     def request_to_internal(self, request: dict[str, Any]) -> InternalRequest:
         model = str(request.get("model") or "")
@@ -254,7 +250,6 @@ class OpenAICliNormalizer(FormatNormalizer):
         openai_extra = internal.extra.get("openai", {})
         openai_cli_extra = internal.extra.get("openai_cli", {})
         request_flags = internal.extra.get("openai_cli_request_flags", {}) if internal.extra else {}
-        is_codex_variant = (target_variant or "").lower() == "codex"
         has_explicit_instructions = bool(
             isinstance(request_flags, dict) and request_flags.get("has_instructions")
         )
@@ -273,7 +268,6 @@ class OpenAICliNormalizer(FormatNormalizer):
         result: dict[str, Any] = {"model": internal.model}
         if instructions_text or has_explicit_instructions:
             result["instructions"] = instructions_text or ""
-        # Keep the stable system prefix ahead of the typically dynamic input payload.
         result["input"] = self._internal_messages_to_input(
             internal.messages,
             system_to_developer=False,
@@ -400,10 +394,7 @@ class OpenAICliNormalizer(FormatNormalizer):
                 ):
                     result[key] = value
 
-        if is_codex_variant and "store" not in result:
-            result["store"] = False
-
-        return self._reorder_request_prefix_keys(result)
+        return result
 
     # =========================
     # Responses
@@ -2128,11 +2119,6 @@ class OpenAICliNormalizer(FormatNormalizer):
         parts = [seg.text for seg in instructions if seg.text]
         joined = "\n\n".join(parts)
         return joined or None
-
-    _REQUEST_PREFIX_KEYS = ("model", "instructions", "tools", "input")
-
-    def _reorder_request_prefix_keys(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._reorder_request_keys(payload, self._REQUEST_PREFIX_KEYS)
 
     def _error_type_from_value(self, value: str) -> ErrorType:
         for t in ErrorType:
