@@ -22,7 +22,7 @@ cd /path/to/Aether
 常用参数：
 
 - `--tag <tag>`: 镜像 tag
-- `--image-name <name>`: 镜像名（默认 `ghcr.io/fawney19/aether-hub`）
+- `--image-name <name>`: 镜像名（默认 `ghcr.io/wmsyw/aether-hub`）
 - `--platforms <list>`: 例如 `linux/amd64,linux/arm64`
 - `--push`: 推送镜像
 - `--load`: 加载到本地 Docker（单平台）
