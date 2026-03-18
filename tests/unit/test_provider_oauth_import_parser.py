@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -26,9 +28,77 @@ def test_parse_standard_oauth_import_entries_keeps_codex_hints() -> None:
     ]
 
 
+def test_parse_standard_oauth_import_entries_parses_api_formats() -> None:
+    entries = module._parse_standard_oauth_import_entries(
+        '[{"refresh_token":"rt_1","apiFormats":["OPENAI_CLI","openai:chat","openai:chat","invalid"]}]'
+    )
+
+    assert entries == [
+        {
+            "refresh_token": "rt_1",
+            "api_formats": ["openai:cli", "openai:chat"],
+        }
+    ]
+
+
+def test_parse_standard_oauth_import_entries_parses_allowed_api_formats_string() -> (
+    None
+):
+    entries = module._parse_standard_oauth_import_entries(
+        '{"refresh_token":"rt_2","allowed_api_formats":"openai:cli, claude:chat"}'
+    )
+
+    assert entries == [
+        {
+            "refresh_token": "rt_2",
+            "api_formats": ["openai:cli", "claude:chat"],
+        }
+    ]
+
+
 def test_parse_tokens_input_compatibility_wrapper() -> None:
     tokens = module._parse_tokens_input("token_a\ntoken_b")
     assert tokens == ["token_a", "token_b"]
+
+
+def test_update_existing_oauth_key_updates_api_formats_when_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(module.crypto_service, "encrypt", lambda value: f"enc:{value}")
+
+    existing_key = SimpleNamespace(
+        api_key="old-api-key",
+        auth_config="old-auth-config",
+        api_formats=["claude:chat"],
+        is_active=False,
+        oauth_invalid_at=123,
+        oauth_invalid_reason="invalid",
+        health_by_format={"claude:chat": {"health_score": 0.1}},
+        circuit_breaker_by_format={"claude:chat": {"open": True}},
+        error_count=8,
+        last_error_at=123,
+        last_error_msg="boom",
+        proxy=None,
+    )
+    db = MagicMock()
+    existing_key_obj: Any = existing_key
+
+    updated = module._update_existing_oauth_key(
+        db,
+        existing_key_obj,
+        "new-access-token",
+        {"refresh_token": "new-refresh-token"},
+        api_formats=["openai:cli", "openai:chat"],
+        flush_only=True,
+    )
+
+    assert updated is existing_key
+    assert existing_key.api_formats == ["openai:cli", "openai:chat"]
+    assert existing_key.is_active is True
+    assert existing_key.oauth_invalid_at is None
+    assert existing_key.oauth_invalid_reason is None
+    db.flush.assert_called_once()
+    db.commit.assert_not_called()
 
 
 def test_apply_codex_import_hints_only_fills_missing_fields() -> None:
@@ -73,7 +143,9 @@ class _DummyDB:
         return _DummyQuery(self._keys)
 
 
-def _make_oauth_key(*, key_id: str, name: str, auth_config: dict[str, object]) -> SimpleNamespace:
+def _make_oauth_key(
+    *, key_id: str, name: str, auth_config: dict[str, object]
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=key_id,
         name=name,
@@ -87,7 +159,9 @@ def _make_oauth_key(*, key_id: str, name: str, auth_config: dict[str, object]) -
 def test_check_duplicate_oauth_account_codex_allows_same_user_different_account_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(module.crypto_service, "decrypt", lambda value, silent=True: value)
+    monkeypatch.setattr(
+        module.crypto_service, "decrypt", lambda value, silent=True: value
+    )
 
     existing_key = _make_oauth_key(
         key_id="key-1",
@@ -122,7 +196,9 @@ def test_check_duplicate_oauth_account_codex_allows_same_user_different_account_
 def test_check_duplicate_oauth_account_codex_rejects_same_account_user_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(module.crypto_service, "decrypt", lambda value, silent=True: value)
+    monkeypatch.setattr(
+        module.crypto_service, "decrypt", lambda value, silent=True: value
+    )
 
     existing_key = _make_oauth_key(
         key_id="key-1",

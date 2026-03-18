@@ -125,7 +125,9 @@ def get_keys_grouped_by_format(db: Session) -> dict:
                 masked_key = "***ERROR***"
 
         # 计算健康度指标
-        success_rate = key.success_count / key.request_count if key.request_count > 0 else None
+        success_rate = (
+            key.success_count / key.request_count if key.request_count > 0 else None
+        )
         avg_response_time_ms = (
             round(key.total_response_time_ms / key.success_count, 2)
             if key.success_count > 0
@@ -142,7 +144,9 @@ def get_keys_grouped_by_format(db: Session) -> dict:
 
         # 构建 Key 信息（基础数据）
         normalized_rate_multipliers = _normalize_format_dict(key.rate_multipliers)
-        normalized_priority_by_format = _normalize_format_dict(key.global_priority_by_format)
+        normalized_priority_by_format = _normalize_format_dict(
+            key.global_priority_by_format
+        )
         key_info = {
             "id": key.id,
             "provider_id": str(provider.id),
@@ -186,8 +190,12 @@ def get_keys_grouped_by_format(db: Session) -> dict:
             # 添加格式特定的健康度数据
             format_health = health_by_format.get(api_format, {})
             format_circuit = circuit_by_format.get(api_format, {})
-            format_key_info["health_score"] = float(format_health.get("health_score") or 1.0)
-            format_key_info["circuit_breaker_open"] = bool(format_circuit.get("open", False))
+            format_key_info["health_score"] = float(
+                format_health.get("health_score") or 1.0
+            )
+            format_key_info["circuit_breaker_open"] = bool(
+                format_circuit.get("open", False)
+            )
             grouped[api_format].append(format_key_info)
 
     # 直接返回分组对象，供前端使用
@@ -208,7 +216,9 @@ def list_provider_keys_responses(
     keys = (
         db.query(ProviderAPIKey)
         .filter(ProviderAPIKey.provider_id == provider_id)
-        .order_by(ProviderAPIKey.internal_priority.asc(), ProviderAPIKey.created_at.asc())
+        .order_by(
+            ProviderAPIKey.internal_priority.asc(), ProviderAPIKey.created_at.asc()
+        )
         .offset(skip)
         .limit(limit)
         .all()
@@ -248,7 +258,9 @@ def reveal_endpoint_key_payload(
             if decrypted_key == "__placeholder__":
                 logger.error(f"Service Account Key 缺少 auth_config: ID={key_id}")
                 raise InvalidRequestException("认证配置丢失，请重新添加该密钥。")
-            logger.info(f"[REVEAL] 查看完整 Key (legacy SA): ID={key_id}, Name={key.name}")
+            logger.info(
+                f"[REVEAL] 查看完整 Key (legacy SA): ID={key_id}, Name={key.name}"
+            )
             return {"auth_type": auth_type, "auth_config": decrypted_key}
         except InvalidRequestException:
             raise
@@ -275,7 +287,9 @@ def reveal_endpoint_key_payload(
         decrypted_key = crypto_service.decrypt(key.api_key)
     except Exception as e:
         logger.error(f"解密 Key 失败: ID={key_id}, Error={e}")
-        raise InvalidRequestException("无法解密 API Key，可能是加密密钥已更改。请重新添加该密钥。")
+        raise InvalidRequestException(
+            "无法解密 API Key，可能是加密密钥已更改。请重新添加该密钥。"
+        )
 
     logger.info(f"[REVEAL] 查看完整 Key: ID={key_id}, Name={key.name}")
     return {"auth_type": "api_key", "api_key": decrypted_key}
@@ -301,7 +315,9 @@ def export_oauth_key_data(
         raise InvalidRequestException("缺少认证配置，无法导出")
 
     try:
-        auth_config: dict[str, Any] = json.loads(crypto_service.decrypt(encrypted_auth_config))
+        auth_config: dict[str, Any] = json.loads(
+            crypto_service.decrypt(encrypted_auth_config)
+        )
     except Exception:
         raise InvalidRequestException("无法解密认证配置")
 
@@ -312,6 +328,12 @@ def export_oauth_key_data(
     upstream = getattr(key, "upstream_metadata", None)
 
     export_data = build_export_data(provider_type, auth_config, upstream)
+    raw_api_formats = getattr(key, "api_formats", None)
+    export_data["api_formats"] = (
+        [str(item).strip() for item in raw_api_formats if str(item).strip()]
+        if isinstance(raw_api_formats, list)
+        else []
+    )
     export_data["name"] = key.name or ""
     export_data["exported_at"] = datetime.now(timezone.utc).isoformat()
 

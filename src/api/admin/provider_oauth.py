@@ -33,6 +33,7 @@ from redis.asyncio import Redis
 from sqlalchemy.orm import Session
 
 from src.clients.redis_client import get_redis_client
+from src.core.api_format.signature import normalize_signature_key
 from src.core.crypto import crypto_service
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
@@ -142,7 +143,9 @@ async def _create_state(
         "pkce_verifier": pkce_verifier,
         "created_at": int(time.time()),
     }
-    await redis.setex(_state_key(nonce), _PROVIDER_OAUTH_STATE_TTL_SECONDS, json.dumps(data))
+    await redis.setex(
+        _state_key(nonce), _PROVIDER_OAUTH_STATE_TTL_SECONDS, json.dumps(data)
+    )
     return nonce
 
 
@@ -193,7 +196,9 @@ def _batch_task_key(task_id: str) -> str:
 
 def _cleanup_in_memory_batch_tasks(now_ts: int | None = None) -> None:
     ts = now_ts or int(time.time())
-    expired = [k for k, (expire_at, _) in _in_memory_batch_tasks.items() if expire_at <= ts]
+    expired = [
+        k for k, (expire_at, _) in _in_memory_batch_tasks.items() if expire_at <= ts
+    ]
     for key in expired:
         _in_memory_batch_tasks.pop(key, None)
 
@@ -209,7 +214,9 @@ async def _save_batch_task_state(
     state["updated_at"] = now_ts
     payload = json.dumps(state, ensure_ascii=False)
 
-    redis_client = redis if redis is not None else await get_redis_client(require_redis=False)
+    redis_client = (
+        redis if redis is not None else await get_redis_client(require_redis=False)
+    )
     if redis_client is not None:
         try:
             await redis_client.setex(
@@ -219,7 +226,9 @@ async def _save_batch_task_state(
             )
             return
         except Exception as exc:
-            logger.debug("[BATCH_IMPORT_TASK] redis setex failed, fallback to memory: {}", exc)
+            logger.debug(
+                "[BATCH_IMPORT_TASK] redis setex failed, fallback to memory: {}", exc
+            )
 
     _in_memory_batch_tasks[task_id] = (
         now_ts + _PROVIDER_OAUTH_BATCH_TASK_TTL_SECONDS,
@@ -232,12 +241,16 @@ async def _load_batch_task_state(
 ) -> dict[str, Any] | None:
     now_ts = int(time.time())
     _cleanup_in_memory_batch_tasks(now_ts)
-    redis_client = redis if redis is not None else await get_redis_client(require_redis=False)
+    redis_client = (
+        redis if redis is not None else await get_redis_client(require_redis=False)
+    )
     if redis_client is not None:
         try:
             raw = await redis_client.get(_batch_task_key(task_id))
         except Exception as exc:
-            logger.debug("[BATCH_IMPORT_TASK] redis get failed, fallback to memory: {}", exc)
+            logger.debug(
+                "[BATCH_IMPORT_TASK] redis get failed, fallback to memory: {}", exc
+            )
             raw = None
         if raw:
             try:
@@ -270,7 +283,9 @@ class StartOAuthResponse(BaseModel):
 
 
 class CompleteOAuthRequest(BaseModel):
-    callback_url: str = Field(..., min_length=5, description="浏览器地址栏中的完整回调 URL")
+    callback_url: str = Field(
+        ..., min_length=5, description="浏览器地址栏中的完整回调 URL"
+    )
 
 
 class CompleteOAuthResponse(BaseModel):
@@ -281,7 +296,9 @@ class CompleteOAuthResponse(BaseModel):
 
 
 class ProviderCompleteOAuthRequest(BaseModel):
-    callback_url: str = Field(..., min_length=5, description="浏览器地址栏中的完整回调 URL")
+    callback_url: str = Field(
+        ..., min_length=5, description="浏览器地址栏中的完整回调 URL"
+    )
     name: str | None = Field(None, max_length=100, description="账号名称（可选）")
     proxy_node_id: str | None = Field(
         None,
@@ -324,9 +341,13 @@ def _supports_oauth(template: Any | None) -> bool:
 
 
 def _require_fixed_provider(provider: Provider) -> str:
-    provider_type = str(getattr(provider, "provider_type", "custom") or "custom").strip().lower()
+    provider_type = (
+        str(getattr(provider, "provider_type", "custom") or "custom").strip().lower()
+    )
     if not _get_fixed_template(provider_type):
-        raise InvalidRequestException("该 Provider 不是固定类型，无法使用 provider-oauth")
+        raise InvalidRequestException(
+            "该 Provider 不是固定类型，无法使用 provider-oauth"
+        )
     return provider_type
 
 
@@ -388,7 +409,9 @@ def _pkce_s256(verifier: str) -> str:
 def _parse_callback_params(callback_url: str) -> dict[str, str]:
     parsed = urlparse(callback_url.strip())
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    fragment = dict(parse_qsl((parsed.fragment or "").lstrip("#"), keep_blank_values=True))
+    fragment = dict(
+        parse_qsl((parsed.fragment or "").lstrip("#"), keep_blank_values=True)
+    )
     merged = {**query, **fragment}
 
     # Claude 参考实现里：code 参数可能包含 "<code>#<state>" 的拼接形式
@@ -414,6 +437,69 @@ def _get_provider_api_formats(provider: Provider) -> list[str]:
         for ep in provider.endpoints
         if getattr(ep, "api_format", None) and getattr(ep, "is_active", False)
     ]
+
+
+_IMPORT_API_FORMAT_LEGACY_MAP: dict[str, str] = {
+    "CLAUDE": "claude:chat",
+    "CLAUDE_CLI": "claude:cli",
+    "OPENAI": "openai:chat",
+    "OPENAI_CLI": "openai:cli",
+    "OPENAI_COMPACT": "openai:compact",
+    "OPENAI_VIDEO": "openai:video",
+    "GEMINI": "gemini:chat",
+    "GEMINI_CLI": "gemini:cli",
+    "GEMINI_VIDEO": "gemini:video",
+}
+
+
+def _normalize_import_api_format(value: Any) -> str | None:
+    raw = _coerce_import_str(value)
+    if not raw:
+        return None
+
+    try:
+        return normalize_signature_key(raw)
+    except Exception:
+        pass
+
+    legacy = raw.upper().replace("-", "_")
+    return _IMPORT_API_FORMAT_LEGACY_MAP.get(legacy)
+
+
+def _coerce_import_api_formats(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+
+    raw_values: list[Any]
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return []
+        parsed: Any = None
+        if normalized.startswith("["):
+            try:
+                parsed = json.loads(normalized)
+            except json.JSONDecodeError:
+                parsed = None
+        if isinstance(parsed, list):
+            raw_values = parsed
+        else:
+            raw_values = [part.strip() for part in normalized.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        return None
+
+    api_formats: list[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        format_key = _normalize_import_api_format(item)
+        if not format_key or format_key in seen:
+            continue
+        seen.add(format_key)
+        api_formats.append(format_key)
+
+    return api_formats
 
 
 def _create_oauth_key(
@@ -464,12 +550,15 @@ def _update_existing_oauth_key(
     existing_key: "ProviderAPIKey",
     access_token: str,
     auth_config: dict[str, Any],
+    api_formats: list[str] | None = None,
     flush_only: bool = False,
     proxy: dict[str, Any] | None = None,
 ) -> "ProviderAPIKey":
     """覆盖更新已失效的 OAuth Key，恢复为活跃状态。"""
     existing_key.api_key = crypto_service.encrypt(access_token)
     existing_key.auth_config = crypto_service.encrypt(json.dumps(auth_config))
+    if api_formats is not None:
+        existing_key.api_formats = api_formats
     existing_key.is_active = True
     existing_key.oauth_invalid_at = None
     existing_key.oauth_invalid_reason = None
@@ -506,7 +595,9 @@ async def _fetch_kiro_email(
             if parsed and parsed.get("email"):
                 return parsed["email"]
     except Exception as e:
-        logger.warning("[KIRO] 获取用户邮箱失败: {} | {}", type(e).__name__, e, exc_info=True)
+        logger.warning(
+            "[KIRO] 获取用户邮箱失败: {} | {}", type(e).__name__, e, exc_info=True
+        )
 
     return None
 
@@ -570,10 +661,15 @@ def _match_codex_identity(
     """
     new_provider_type = new_auth_config.get("provider_type")
     existing_provider_type = existing_auth_config.get("provider_type")
-    if not (_is_codex_provider(new_provider_type) or _is_codex_provider(existing_provider_type)):
+    if not (
+        _is_codex_provider(new_provider_type)
+        or _is_codex_provider(existing_provider_type)
+    ):
         return None
 
-    new_account_user_id = _normalize_codex_identity_value(new_auth_config.get("account_user_id"))
+    new_account_user_id = _normalize_codex_identity_value(
+        new_auth_config.get("account_user_id")
+    )
     existing_account_user_id = _normalize_codex_identity_value(
         existing_auth_config.get("account_user_id")
     )
@@ -581,9 +677,13 @@ def _match_codex_identity(
         return new_account_user_id == existing_account_user_id
 
     new_account_id = _normalize_codex_identity_value(new_auth_config.get("account_id"))
-    existing_account_id = _normalize_codex_identity_value(existing_auth_config.get("account_id"))
+    existing_account_id = _normalize_codex_identity_value(
+        existing_auth_config.get("account_id")
+    )
     new_user_id = _normalize_codex_identity_value(new_auth_config.get("user_id"))
-    existing_user_id = _normalize_codex_identity_value(existing_auth_config.get("user_id"))
+    existing_user_id = _normalize_codex_identity_value(
+        existing_auth_config.get("user_id")
+    )
     new_email = _normalize_codex_identity_value(new_auth_config.get("email"))
     existing_email = _normalize_codex_identity_value(existing_auth_config.get("email"))
 
@@ -708,7 +808,9 @@ def _check_duplicate_oauth_account(
                 and existing_email
                 and new_email == existing_email
             ):
-                is_kiro = new_provider_type == "kiro" or existing_provider_type == "kiro"
+                is_kiro = (
+                    new_provider_type == "kiro" or existing_provider_type == "kiro"
+                )
                 if is_kiro:
                     # Kiro: 只有 email + auth_method 都相同才视为重复
                     if (
@@ -1023,8 +1125,12 @@ async def refresh_oauth(
         if provider_type == ProviderType.KIRO.value:
             from datetime import datetime, timezone
 
-            from src.services.provider.adapters.kiro.models.credentials import KiroAuthConfig
-            from src.services.provider.adapters.kiro.token_manager import refresh_access_token
+            from src.services.provider.adapters.kiro.models.credentials import (
+                KiroAuthConfig,
+            )
+            from src.services.provider.adapters.kiro.token_manager import (
+                refresh_access_token,
+            )
 
             encrypted_auth_config = getattr(key, "auth_config", None)
             if not encrypted_auth_config:
@@ -1042,15 +1148,21 @@ async def refresh_oauth(
                 getattr(provider, "proxy", None), getattr(key, "proxy", None)
             )
             try:
-                access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
+                access_token, new_cfg = await refresh_access_token(
+                    cfg, proxy_config=proxy_config
+                )
             except Exception as e:
                 await run_in_threadpool(
                     _mark_refresh_failed_sync,
                     key_id,
                     f"[REFRESH_FAILED] Token 续期失败: {e}",
                 )
-                logger.warning("Kiro Key {} token 刷新失败，已标记为刷新失效: {}", key_id, e)
-                raise InvalidRequestException("Kiro token refresh 失败，请检查凭据是否有效")
+                logger.warning(
+                    "Kiro Key {} token 刷新失败，已标记为刷新失效: {}", key_id, e
+                )
+                raise InvalidRequestException(
+                    "Kiro token refresh 失败，请检查凭据是否有效"
+                )
 
             await run_in_threadpool(
                 _store_refreshed_oauth_sync,
@@ -1135,7 +1247,9 @@ async def refresh_oauth(
                         error_body.get("error_description") or error_body.get("error")
                     )
             except Exception:
-                error_reason = resp.text[:100] if resp.text else f"HTTP {resp.status_code}"
+                error_reason = (
+                    resp.text[:100] if resp.text else f"HTTP {resp.status_code}"
+                )
 
             if resp.status_code in (400, 401, 403):
                 await run_in_threadpool(
@@ -1144,7 +1258,9 @@ async def refresh_oauth(
                     f"[REFRESH_FAILED] Token 续期失败 ({resp.status_code}): {error_reason}",
                 )
                 logger.warning(
-                    "Key {} OAuth token 刷新失败，已标记为刷新失效: {}", key_id, error_reason
+                    "Key {} OAuth token 刷新失败，已标记为刷新失效: {}",
+                    key_id,
+                    error_reason,
                 )
 
             raise InvalidRequestException(f"token refresh 失败: {error_reason}")
@@ -1185,7 +1301,9 @@ async def refresh_oauth(
                 key_id,
             )
 
-        await run_in_threadpool(_store_refreshed_oauth_sync, key_id, access_token, parsed)
+        await run_in_threadpool(
+            _store_refreshed_oauth_sync, key_id, access_token, parsed
+        )
 
         return CompleteOAuthResponse(
             provider_type=provider_type,
@@ -1274,7 +1392,9 @@ async def start_provider_oauth(
     )
 
 
-@router.post("/providers/{provider_id}/complete", response_model=ProviderCompleteOAuthResponse)
+@router.post(
+    "/providers/{provider_id}/complete", response_model=ProviderCompleteOAuthResponse
+)
 async def complete_provider_oauth(
     provider_id: str,
     payload: ProviderCompleteOAuthRequest,
@@ -1394,10 +1514,16 @@ async def complete_provider_oauth(
     # 检查是否存在重复的 OAuth 账号（失效账号允许覆盖）
     existing_key = _check_duplicate_oauth_account(db, provider_id, auth_config)
     replaced = False
+    provider_api_formats = _get_provider_api_formats(provider)
 
     if existing_key:
         new_key = _update_existing_oauth_key(
-            db, existing_key, access_token, auth_config, proxy=key_proxy
+            db,
+            existing_key,
+            access_token,
+            auth_config,
+            api_formats=provider_api_formats,
+            proxy=key_proxy,
         )
         replaced = True
     else:
@@ -1412,7 +1538,7 @@ async def complete_provider_oauth(
             name=name,
             access_token=access_token,
             auth_config=auth_config,
-            api_formats=_get_provider_api_formats(provider),
+            api_formats=provider_api_formats,
             proxy=key_proxy,
         )
 
@@ -1426,7 +1552,9 @@ async def complete_provider_oauth(
     )
 
     # 单个导入完成后，后台触发一次配额刷新
-    safe_create_task(_refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)]))
+    safe_create_task(
+        _refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)])
+    )
 
     return response
 
@@ -1459,6 +1587,16 @@ def _extract_standard_oauth_import_entry(item: Any) -> dict[str, Any] | None:
         return None
 
     entry: dict[str, Any] = {"refresh_token": refresh_token}
+
+    api_formats = _coerce_import_api_formats(item.get("api_formats"))
+    if api_formats is None:
+        api_formats = _coerce_import_api_formats(item.get("apiFormats"))
+    if api_formats is None:
+        api_formats = _coerce_import_api_formats(item.get("allowed_api_formats"))
+    if api_formats is None:
+        api_formats = _coerce_import_api_formats(item.get("allowedApiFormats"))
+    if api_formats is not None:
+        entry["api_formats"] = api_formats
 
     account_id = (
         _coerce_import_str(item.get("account_id"))
@@ -1551,7 +1689,10 @@ def _parse_standard_oauth_import_entries(raw_input: str) -> list[dict[str, Any]]
 
 def _parse_tokens_input(raw_input: str) -> list[str]:
     """兼容旧逻辑：仅返回 refresh_token 列表。"""
-    return [entry["refresh_token"] for entry in _parse_standard_oauth_import_entries(raw_input)]
+    return [
+        entry["refresh_token"]
+        for entry in _parse_standard_oauth_import_entries(raw_input)
+    ]
 
 
 def _parse_kiro_import_input(raw_input: str) -> list[dict[str, Any]]:
@@ -1746,7 +1887,9 @@ BatchImportProgressHook = Callable[
 def _task_state_to_response(state: dict[str, Any]) -> BatchImportTaskStatusResponse:
     raw_status = str(state.get("status") or "failed")
     status: BatchImportTaskStatus = (
-        raw_status if raw_status in _PROVIDER_OAUTH_BATCH_TASK_ALLOWED_STATUSES else "failed"
+        raw_status
+        if raw_status in _PROVIDER_OAUTH_BATCH_TASK_ALLOWED_STATUSES
+        else "failed"
     )
     error_samples: list[BatchImportResultItem] = []
     for item in state.get("error_samples") or []:
@@ -1769,8 +1912,12 @@ def _task_state_to_response(state: dict[str, Any]) -> BatchImportTaskStatusRespo
         error=(str(state["error"]) if state.get("error") is not None else None),
         error_samples=error_samples,
         created_at=int(state.get("created_at") or int(time.time())),
-        started_at=(int(state["started_at"]) if state.get("started_at") is not None else None),
-        finished_at=(int(state["finished_at"]) if state.get("finished_at") is not None else None),
+        started_at=(
+            int(state["started_at"]) if state.get("started_at") is not None else None
+        ),
+        finished_at=(
+            int(state["finished_at"]) if state.get("finished_at") is not None else None
+        ),
         updated_at=int(state.get("updated_at") or int(time.time())),
     )
 
@@ -1802,7 +1949,9 @@ def _commit_batch_import_writes_if_needed(db: Session, pending_writes: int) -> i
     return 0
 
 
-def _apply_codex_import_hints(auth_config: dict[str, Any], import_entry: dict[str, Any]) -> None:
+def _apply_codex_import_hints(
+    auth_config: dict[str, Any], import_entry: dict[str, Any]
+) -> None:
     """将导入文件中可用的 Codex 账号信息作为兜底补全（不覆盖已有值）。"""
     for field in ("account_user_id", "account_id", "plan_type", "user_id", "email"):
         value = import_entry.get(field)
@@ -1847,8 +1996,12 @@ async def import_refresh_token(
         # 单条导入只取第一个
         raw_cfg = credentials[0]
 
-        from src.services.provider.adapters.kiro.models.credentials import KiroAuthConfig
-        from src.services.provider.adapters.kiro.token_manager import refresh_access_token
+        from src.services.provider.adapters.kiro.models.credentials import (
+            KiroAuthConfig,
+        )
+        from src.services.provider.adapters.kiro.token_manager import (
+            refresh_access_token,
+        )
 
         # 验证必需字段
         is_valid, error_msg = KiroAuthConfig.validate_required_fields(raw_cfg)
@@ -1860,10 +2013,14 @@ async def import_refresh_token(
         cfg.provider_type = ProviderType.KIRO.value
 
         try:
-            access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
+            access_token, new_cfg = await refresh_access_token(
+                cfg, proxy_config=proxy_config
+            )
         except Exception as e:
             logger.warning("Kiro Refresh Token 验证失败: {} | {}", type(e).__name__, e)
-            raise InvalidRequestException(f"Kiro Refresh Token 验证失败: {type(e).__name__}")
+            raise InvalidRequestException(
+                f"Kiro Refresh Token 验证失败: {type(e).__name__}"
+            )
 
         # 先获取 email，确保重复检查时有 email 可用
         email = await _fetch_kiro_email(new_cfg.to_dict(), proxy_config=proxy_config)
@@ -1871,17 +2028,27 @@ async def import_refresh_token(
             new_cfg.email = email
 
         # 检查是否存在重复的 Kiro 账号（失效账号允许覆盖）
-        existing_key = _check_duplicate_oauth_account(db, provider_id, new_cfg.to_dict())
+        existing_key = _check_duplicate_oauth_account(
+            db, provider_id, new_cfg.to_dict()
+        )
         replaced = False
+        provider_api_formats = _get_provider_api_formats(provider)
 
         # Kiro 确定账号名称：email + auth_method 区分不同来源
         name = (payload.name or "").strip()
         if not name:
-            name = _build_kiro_key_name(email, new_cfg.auth_method, new_cfg.refresh_token)
+            name = _build_kiro_key_name(
+                email, new_cfg.auth_method, new_cfg.refresh_token
+            )
 
         if existing_key:
             new_key = _update_existing_oauth_key(
-                db, existing_key, access_token, new_cfg.to_dict(), proxy=key_proxy
+                db,
+                existing_key,
+                access_token,
+                new_cfg.to_dict(),
+                api_formats=provider_api_formats,
+                proxy=key_proxy,
             )
             replaced = True
         else:
@@ -1891,7 +2058,7 @@ async def import_refresh_token(
                 name=name,
                 access_token=access_token,
                 auth_config=new_cfg.to_dict(),
-                api_formats=_get_provider_api_formats(provider),
+                api_formats=provider_api_formats,
                 proxy=key_proxy,
             )
 
@@ -1905,7 +2072,9 @@ async def import_refresh_token(
         )
 
         # 单个导入完成后，后台触发一次配额刷新
-        safe_create_task(_refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)]))
+        safe_create_task(
+            _refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)])
+        )
 
         return response
 
@@ -1962,7 +2131,9 @@ async def import_refresh_token(
         try:
             error_body = resp.json()
             if "error" in error_body:
-                error_reason = str(error_body.get("error_description") or error_body.get("error"))
+                error_reason = str(
+                    error_body.get("error_description") or error_body.get("error")
+                )
         except Exception:
             error_reason = resp.text[:100] if resp.text else f"HTTP {resp.status_code}"
         raise InvalidRequestException(f"Refresh Token 验证失败: {error_reason}")
@@ -2002,10 +2173,16 @@ async def import_refresh_token(
     # 检查是否存在重复的 OAuth 账号（失效账号允许覆盖）
     existing_key = _check_duplicate_oauth_account(db, provider_id, auth_config)
     replaced = False
+    provider_api_formats = _get_provider_api_formats(provider)
 
     if existing_key:
         new_key = _update_existing_oauth_key(
-            db, existing_key, access_token, auth_config, proxy=key_proxy
+            db,
+            existing_key,
+            access_token,
+            auth_config,
+            api_formats=provider_api_formats,
+            proxy=key_proxy,
         )
         replaced = True
     else:
@@ -2020,7 +2197,7 @@ async def import_refresh_token(
             name=name,
             access_token=access_token,
             auth_config=auth_config,
-            api_formats=_get_provider_api_formats(provider),
+            api_formats=provider_api_formats,
             proxy=key_proxy,
         )
 
@@ -2034,7 +2211,9 @@ async def import_refresh_token(
     )
 
     # 单个导入完成后，后台触发一次配额刷新
-    safe_create_task(_refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)]))
+    safe_create_task(
+        _refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)])
+    )
 
     return response
 
@@ -2075,7 +2254,9 @@ async def _refresh_quota_after_import(
         finally:
             db.close()
     except Exception as exc:
-        logger.warning("[BATCH_IMPORT] 导入后配额刷新失败 (provider={}): {}", provider_id, exc)
+        logger.warning(
+            "[BATCH_IMPORT] 导入后配额刷新失败 (provider={}): {}", provider_id, exc
+        )
 
 
 # ==============================================================================
@@ -2103,7 +2284,7 @@ async def _batch_import_standard_oauth_internal(
     if not import_entries:
         raise InvalidRequestException("未找到有效的 Token 数据")
 
-    api_formats = _get_provider_api_formats(provider)
+    default_api_formats = _get_provider_api_formats(provider)
     token_url = template.oauth.token_url
     is_json = "anthropic.com" in token_url
     scope_str = " ".join(template.oauth.scopes) if template.oauth.scopes else ""
@@ -2188,7 +2369,11 @@ async def _batch_import_standard_oauth_internal(
                         if progress_hook is not None:
                             _release_batch_import_db_connection_before_await(db)
                             await progress_hook(
-                                total, processed_count, success_count, failed_count, result_item
+                                total,
+                                processed_count,
+                                success_count,
+                                failed_count,
+                                result_item,
                             )
                         return
 
@@ -2198,11 +2383,14 @@ async def _batch_import_standard_oauth_internal(
                             error_body = resp.json()
                             if "error" in error_body:
                                 error_reason = str(
-                                    error_body.get("error_description") or error_body.get("error")
+                                    error_body.get("error_description")
+                                    or error_body.get("error")
                                 )
                         except Exception:
                             error_reason = (
-                                resp.text[:100] if resp.text else f"HTTP {resp.status_code}"
+                                resp.text[:100]
+                                if resp.text
+                                else f"HTTP {resp.status_code}"
                             )
 
                         result_item = BatchImportResultItem(
@@ -2216,13 +2404,19 @@ async def _batch_import_standard_oauth_internal(
                         if progress_hook is not None:
                             _release_batch_import_db_connection_before_await(db)
                             await progress_hook(
-                                total, processed_count, success_count, failed_count, result_item
+                                total,
+                                processed_count,
+                                success_count,
+                                failed_count,
+                                result_item,
                             )
                         return
 
                     token_data = resp.json()
                     access_token = str(token_data.get("access_token") or "")
-                    new_refresh_token = str(token_data.get("refresh_token") or "") or refresh_token
+                    new_refresh_token = (
+                        str(token_data.get("refresh_token") or "") or refresh_token
+                    )
 
                     if not access_token:
                         result_item = BatchImportResultItem(
@@ -2236,7 +2430,11 @@ async def _batch_import_standard_oauth_internal(
                         if progress_hook is not None:
                             _release_batch_import_db_connection_before_await(db)
                             await progress_hook(
-                                total, processed_count, success_count, failed_count, result_item
+                                total,
+                                processed_count,
+                                success_count,
+                                failed_count,
+                                result_item,
                             )
                         return
 
@@ -2267,10 +2465,21 @@ async def _batch_import_standard_oauth_internal(
                             proxy_config=proxy_config,
                         )
                     except Exception as exc:
-                        logger.warning("批量导入: enrich_auth_config 失败 (index={}): {}", idx, exc)
+                        logger.warning(
+                            "批量导入: enrich_auth_config 失败 (index={}): {}", idx, exc
+                        )
 
                     if provider_type == ProviderType.CODEX.value:
                         _apply_codex_import_hints(auth_config, import_entry)
+
+                    import_entry_api_formats = _coerce_import_api_formats(
+                        import_entry.get("api_formats")
+                    )
+                    resolved_api_formats = (
+                        list(import_entry_api_formats)
+                        if import_entry_api_formats is not None
+                        else list(default_api_formats)
+                    )
 
                     async with db_lock:
                         try:
@@ -2304,6 +2513,7 @@ async def _batch_import_standard_oauth_internal(
                                 existing_key,
                                 access_token,
                                 auth_config,
+                                api_formats=resolved_api_formats,
                                 flush_only=True,
                                 proxy=key_proxy,
                             )
@@ -2324,7 +2534,7 @@ async def _batch_import_standard_oauth_internal(
                                 name=name,
                                 access_token=access_token,
                                 auth_config=auth_config,
-                                api_formats=api_formats,
+                                api_formats=resolved_api_formats,
                                 flush_only=True,
                                 proxy=key_proxy,
                             )
@@ -2356,7 +2566,9 @@ async def _batch_import_standard_oauth_internal(
         results[idx] = result_item
         if progress_hook is not None:
             _release_batch_import_db_connection_before_await(db)
-            await progress_hook(total, processed_count, success_count, failed_count, result_item)
+            await progress_hook(
+                total, processed_count, success_count, failed_count, result_item
+            )
 
     await asyncio.gather(
         *[_process_entry(i, e) for i, e in enumerate(import_entries)],
@@ -2368,7 +2580,9 @@ async def _batch_import_standard_oauth_internal(
 
     final_results = [r for r in results if r is not None]
     if len(final_results) != total:
-        logger.warning("[BATCH_IMPORT] 结果不完整: expected={}, got={}", total, len(final_results))
+        logger.warning(
+            "[BATCH_IMPORT] 结果不完整: expected={}, got={}", total, len(final_results)
+        )
 
     logger.info(
         "[BATCH_IMPORT] Provider {} ({}): 成功 {}/{}, 失败 {}",
@@ -2448,7 +2662,9 @@ async def batch_import_oauth(
     # 导入完成后，后台触发一次配额刷新
     success_key_ids = _extract_success_key_ids(result)
     if success_key_ids:
-        safe_create_task(_refresh_quota_after_import(provider_id, provider_type, success_key_ids))
+        safe_create_task(
+            _refresh_quota_after_import(provider_id, provider_type, success_key_ids)
+        )
 
     return result
 
@@ -2497,7 +2713,9 @@ async def _run_batch_import_task(
             state["processed"] = processed
             state["success"] = success_count
             state["failed"] = failed_count
-            state["progress_percent"] = int((processed * 100) / total) if total > 0 else 0
+            state["progress_percent"] = (
+                int((processed * 100) / total) if total > 0 else 0
+            )
             state["message"] = f"处理中 {processed}/{total}"
             if result_item.status == "error":
                 state["error"] = result_item.error
@@ -2511,7 +2729,9 @@ async def _run_batch_import_task(
                 await _save_batch_task_state(task_id, state, redis=redis)
             except Exception as exc:
                 logger.debug(
-                    "[BATCH_IMPORT_TASK] save progress failed (task_id={}): {}", task_id, exc
+                    "[BATCH_IMPORT_TASK] save progress failed (task_id={}): {}",
+                    task_id,
+                    exc,
                 )
 
         if provider_type == ProviderType.KIRO.value:
@@ -2550,7 +2770,9 @@ async def _run_batch_import_task(
         # 导入完成后触发一次配额刷新
         success_key_ids = _extract_success_key_ids(result)
         if success_key_ids:
-            await _refresh_quota_after_import(provider_id, provider_type, success_key_ids)
+            await _refresh_quota_after_import(
+                provider_id, provider_type, success_key_ids
+            )
 
     except Exception as exc:
         try:
@@ -2678,7 +2900,7 @@ async def _batch_import_kiro_internal(
         raise InvalidRequestException("未找到有效的凭据数据")
     timeout_seconds = _resolve_batch_import_timeout_seconds(proxy_config)
 
-    api_formats = _get_provider_api_formats(provider)
+    default_api_formats = _get_provider_api_formats(provider)
 
     total = len(credentials)
     results: list[BatchImportResultItem] = [None] * total  # type: ignore[list-item]
@@ -2710,7 +2932,11 @@ async def _batch_import_kiro_internal(
                     if progress_hook is not None:
                         _release_batch_import_db_connection_before_await(db)
                         await progress_hook(
-                            total, processed_count, success_count, failed_count, result_item
+                            total,
+                            processed_count,
+                            success_count,
+                            failed_count,
+                            result_item,
                         )
                     return
 
@@ -2736,12 +2962,18 @@ async def _batch_import_kiro_internal(
                     if progress_hook is not None:
                         _release_batch_import_db_connection_before_await(db)
                         await progress_hook(
-                            total, processed_count, success_count, failed_count, result_item
+                            total,
+                            processed_count,
+                            success_count,
+                            failed_count,
+                            result_item,
                         )
                     return
 
                 _release_batch_import_db_connection_before_await(db)
-                email = await _fetch_kiro_email(new_cfg.to_dict(), proxy_config=proxy_config)
+                email = await _fetch_kiro_email(
+                    new_cfg.to_dict(), proxy_config=proxy_config
+                )
                 if email and not new_cfg.email:
                     new_cfg.email = email
 
@@ -2771,12 +3003,21 @@ async def _batch_import_kiro_internal(
                         return
 
                     replaced = False
+                    import_entry_api_formats = _coerce_import_api_formats(
+                        cred.get("api_formats")
+                    )
+                    resolved_api_formats = (
+                        list(import_entry_api_formats)
+                        if import_entry_api_formats is not None
+                        else list(default_api_formats)
+                    )
                     if existing_key:
                         new_key = _update_existing_oauth_key(
                             db,
                             existing_key,
                             access_token,
                             new_cfg.to_dict(),
+                            api_formats=resolved_api_formats,
                             flush_only=True,
                             proxy=key_proxy,
                         )
@@ -2792,7 +3033,7 @@ async def _batch_import_kiro_internal(
                             name=name,
                             access_token=access_token,
                             auth_config=new_cfg.to_dict(),
-                            api_formats=api_formats,
+                            api_formats=resolved_api_formats,
                             flush_only=True,
                             proxy=key_proxy,
                         )
@@ -2825,7 +3066,9 @@ async def _batch_import_kiro_internal(
         results[idx] = result_item
         if progress_hook is not None:
             _release_batch_import_db_connection_before_await(db)
-            await progress_hook(total, processed_count, success_count, failed_count, result_item)
+            await progress_hook(
+                total, processed_count, success_count, failed_count, result_item
+            )
 
     await asyncio.gather(
         *[_process_entry(i, c) for i, c in enumerate(credentials)],
@@ -2839,7 +3082,9 @@ async def _batch_import_kiro_internal(
     final_results = [r for r in results if r is not None]
     if len(final_results) != total:
         logger.warning(
-            "[KIRO_BATCH_IMPORT] 结果不完整: expected={}, got={}", total, len(final_results)
+            "[KIRO_BATCH_IMPORT] 结果不完整: expected={}, got={}",
+            total,
+            len(final_results),
         )
 
     logger.info(
@@ -2952,7 +3197,9 @@ async def _sso_oidc_post(
                 resp.status_code,
                 resp.text[:200],
             )
-            raise InvalidRequestException(f"AWS SSO OIDC 请求失败: HTTP {resp.status_code}")
+            raise InvalidRequestException(
+                f"AWS SSO OIDC 请求失败: HTTP {resp.status_code}"
+            )
     return resp.json()
 
 
@@ -3071,7 +3318,9 @@ async def device_authorize(
         or device_auth.get("verificationUrlComplete")
         or verification_uri
     )
-    expires_in = int(device_auth.get("expiresIn") or device_auth.get("expires_in") or 600)
+    expires_in = int(
+        device_auth.get("expiresIn") or device_auth.get("expires_in") or 600
+    )
     interval = int(device_auth.get("interval") or 5)
 
     # 3. 存入 Redis
@@ -3213,10 +3462,14 @@ async def device_poll(
 
     # 用 refresh_token 验证有效性并获取最新 token
     try:
-        verified_access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
+        verified_access_token, new_cfg = await refresh_access_token(
+            cfg, proxy_config=proxy_config
+        )
     except Exception as e:
         logger.warning("设备授权 token 验证失败: {}", e)
-        return DevicePollResponse(status="error", error=f"token 验证失败: {type(e).__name__}")
+        return DevicePollResponse(
+            status="error", error=f"token 验证失败: {type(e).__name__}"
+        )
 
     # 获取邮箱
     email = await _fetch_kiro_email(new_cfg.to_dict(), proxy_config=proxy_config)
@@ -3225,7 +3478,9 @@ async def device_poll(
 
     # 检查重复
     try:
-        existing_key = _check_duplicate_oauth_account(db, provider_id, new_cfg.to_dict())
+        existing_key = _check_duplicate_oauth_account(
+            db, provider_id, new_cfg.to_dict()
+        )
     except InvalidRequestException as e:
         return DevicePollResponse(status="error", error=str(e))
 
@@ -3236,7 +3491,12 @@ async def device_poll(
 
     if existing_key:
         new_key = _update_existing_oauth_key(
-            db, existing_key, verified_access_token, new_cfg.to_dict(), proxy=key_proxy
+            db,
+            existing_key,
+            verified_access_token,
+            new_cfg.to_dict(),
+            api_formats=api_formats,
+            proxy=key_proxy,
         )
         replaced = True
     else:
@@ -3259,7 +3519,9 @@ async def device_poll(
 
     # 单个导入完成后，后台触发一次配额刷新
     provider_type = ProviderType.KIRO.value
-    safe_create_task(_refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)]))
+    safe_create_task(
+        _refresh_quota_after_import(provider_id, provider_type, [str(new_key.id)])
+    )
 
     return DevicePollResponse(
         status="authorized",
