@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div :class="rootClass">
     <div
       v-if="!data || (typeof data === 'object' && Object.keys(data).length === 0)"
       class="text-sm text-muted-foreground"
@@ -9,16 +9,16 @@
     <!-- 纯字符串数据（非 JSON 对象） -->
     <Card
       v-else-if="typeof data === 'string'"
-      class="bg-muted/30 overflow-hidden"
+      :class="cardClass"
     >
-      <div class="p-4 overflow-x-auto max-h-[500px] overflow-y-auto">
+      <div :class="contentScrollClass">
         <pre class="text-xs font-mono whitespace-pre-wrap">{{ data }}</pre>
       </div>
     </Card>
     <!-- 非 JSON 响应（如 HTML 错误页面） -->
     <Card
       v-else-if="hasParseError"
-      class="bg-muted/30 overflow-hidden"
+      :class="cardClass"
     >
       <div class="p-3 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">
         <div class="flex items-start gap-2">
@@ -26,18 +26,18 @@
           <span class="text-xs text-amber-700 dark:text-amber-300">{{ parseErrorMessage }}</span>
         </div>
       </div>
-      <div class="p-4 overflow-x-auto max-h-[500px] overflow-y-auto">
+      <div :class="contentScrollClass">
         <pre class="text-xs font-mono whitespace-pre-wrap text-muted-foreground">{{ rawResponseContent }}</pre>
       </div>
     </Card>
     <Card
       v-else
-      class="bg-muted/30 overflow-hidden"
+      :class="cardClass"
     >
       <!-- JSON 查看器 -->
       <div
         class="json-viewer"
-        :class="{ 'theme-dark': isDark }"
+        :class="{ 'theme-dark': isDark, 'fill-height': fillHeight }"
       >
         <div class="json-lines">
           <template
@@ -117,13 +117,30 @@ interface DisplayLine extends JsonLine {
 /** JSON data can be any serializable value: object, array, string, number, boolean, null */
 type JsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null | undefined
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   data: JsonValue
   viewMode: 'formatted' | 'raw' | 'compare'
   expandDepth: number
   isDark: boolean
   emptyMessage: string
-}>()
+  fillHeight?: boolean
+}>(), {
+  fillHeight: false,
+})
+
+const fillHeight = computed(() => props.fillHeight)
+
+const rootClass = computed(() => fillHeight.value
+  ? 'h-full min-h-0 flex flex-col'
+  : '')
+
+const cardClass = computed(() => fillHeight.value
+  ? 'bg-muted/30 overflow-hidden h-full min-h-0 flex flex-col'
+  : 'bg-muted/30 overflow-hidden')
+
+const contentScrollClass = computed(() => fillHeight.value
+  ? 'p-4 overflow-x-auto overflow-y-auto flex-1 min-h-0'
+  : 'p-4 overflow-x-auto max-h-[500px] overflow-y-auto')
 
 /** Safely cast data to an object for property access in templates */
 const dataAsObject = computed(() => {
@@ -411,6 +428,12 @@ watch(() => props.expandDepth, () => {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 20px;
+}
+
+.json-viewer.fill-height {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
 }
 
 .json-lines {

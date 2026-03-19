@@ -448,8 +448,8 @@
               <div class="min-w-0 h-full">
 
               <!-- Tabs 区域 -->
-              <Card class="h-full">
-                <div class="p-3 sm:p-4">
+              <Card class="h-full flex flex-col">
+                <div class="p-3 sm:p-4 h-full min-h-0 flex flex-col detail-tabs-wrapper">
                   <Tabs
                     v-model="activeTab"
                     :default-value="activeTab"
@@ -470,9 +470,9 @@
                     </div>
 
                     <!-- Tab 内容（统一容器） -->
-                    <div class="content-block rounded-md border overflow-hidden">
+                    <div class="content-block rounded-md border overflow-hidden flex-1 min-h-0 flex flex-col">
                       <!-- 表头栏：工具按钮 -->
-                      <div class="flex items-center justify-end gap-0.5 px-3 py-1 border-b bg-muted/40">
+                      <div class="flex items-center justify-end gap-0.5 px-3 py-1 border-b bg-muted/40 shrink-0">
                         <!-- 区域1：条件性按钮（cURL、视图切换、对比） -->
                         <!-- cURL 复制（仅在请求头/请求体 Tab） -->
                         <template v-if="['request-headers', 'request-body'].includes(activeTab)">
@@ -592,7 +592,10 @@
                           />
                         </button>
                       </div>
-                      <TabsContent value="request-headers">
+                      <TabsContent
+                        value="request-headers"
+                        class="flex-1 min-h-0"
+                      >
                         <RequestHeadersContent
                           :detail="detail"
                           :view-mode="viewMode"
@@ -605,7 +608,10 @@
                         />
                       </TabsContent>
 
-                      <TabsContent value="request-body">
+                      <TabsContent
+                        value="request-body"
+                        class="flex-1 min-h-0"
+                      >
                         <div
                           v-if="isRequestBodyLoading"
                           class="p-4"
@@ -623,11 +629,15 @@
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
+                          fill-height
                           empty-message="无请求体信息"
                         />
                       </TabsContent>
 
-                      <TabsContent value="response-headers">
+                      <TabsContent
+                        value="response-headers"
+                        class="flex-1 min-h-0"
+                      >
                         <RequestHeadersContent
                           v-if="viewMode === 'compare'"
                           :detail="detail"
@@ -650,11 +660,15 @@
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
+                          fill-height
                           empty-message="无响应头信息"
                         />
                       </TabsContent>
 
-                      <TabsContent value="response-body">
+                      <TabsContent
+                        value="response-body"
+                        class="flex-1 min-h-0"
+                      >
                         <div
                           v-if="isResponseBodyLoading"
                           class="p-4"
@@ -672,16 +686,21 @@
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
+                          fill-height
                           empty-message="无响应体信息"
                         />
                       </TabsContent>
 
-                      <TabsContent value="metadata">
+                      <TabsContent
+                        value="metadata"
+                        class="flex-1 min-h-0"
+                      >
                         <JsonContent
                           :data="detail.metadata"
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
+                          fill-height
                           empty-message="无元数据信息"
                         />
                       </TabsContent>
@@ -1886,6 +1905,14 @@ useEscapeKey(() => {
   border: none !important;
   border-radius: 0 !important;
   box-shadow: none !important;
+}
+
+/* 右侧 Tabs 区域纵向拉伸，让内层边框跟随列高到底部 */
+.detail-tabs-wrapper :deep(.tabs-root) {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 </style>
 
