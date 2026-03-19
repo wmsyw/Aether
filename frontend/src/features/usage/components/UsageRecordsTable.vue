@@ -11,12 +11,21 @@
             :disabled="deletingRecords"
             @click="$emit('delete-filtered-records')"
           >
-            <Loader2 v-if="deletingRecords" class="h-3.5 w-3.5 animate-spin" />
-            <Trash2 v-else class="h-3.5 w-3.5" />
+            <Loader2
+              v-if="deletingRecords"
+              class="h-3.5 w-3.5 animate-spin"
+            />
+            <Trash2
+              v-else
+              class="h-3.5 w-3.5"
+            />
             删除
           </Button>
 
-          <TimeRangePicker v-model="timeRangeModel" :show-granularity="false" />
+          <TimeRangePicker
+            v-model="timeRangeModel"
+            :show-granularity="false"
+          />
 
           <div class="h-5 w-px bg-border" />
 
@@ -44,7 +53,9 @@
               <SelectValue placeholder="用户" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__"> 全部用户 </SelectItem>
+              <SelectItem value="__all__">
+                全部用户
+              </SelectItem>
               <SelectItem
                 v-for="user in availableUsers"
                 :key="user.id"
@@ -66,7 +77,9 @@
               <SelectValue placeholder="模型" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__"> 全部模型 </SelectItem>
+              <SelectItem value="__all__">
+                全部模型
+              </SelectItem>
               <SelectItem
                 v-for="model in availableModels"
                 :key="model"
@@ -89,7 +102,9 @@
               <SelectValue placeholder="提供商" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__"> 全部提供商 </SelectItem>
+              <SelectItem value="__all__">
+                全部提供商
+              </SelectItem>
               <SelectItem
                 v-for="provider in availableProviders"
                 :key="provider"
@@ -111,14 +126,36 @@
               <SelectValue placeholder="状态" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__"> 全部状态 </SelectItem>
-              <SelectItem value="stream"> 流式 </SelectItem>
-              <SelectItem value="standard"> 标准 </SelectItem>
-              <SelectItem value="active"> 活跃 </SelectItem>
-              <SelectItem value="failed"> 失败 </SelectItem>
-              <SelectItem value="cancelled"> 已取消 </SelectItem>
-              <SelectItem v-if="isAdmin" value="has_retry"> 发生重试 </SelectItem>
-              <SelectItem v-if="isAdmin" value="has_fallback"> 发生转移 </SelectItem>
+              <SelectItem value="__all__">
+                全部状态
+              </SelectItem>
+              <SelectItem value="stream">
+                流式
+              </SelectItem>
+              <SelectItem value="standard">
+                标准
+              </SelectItem>
+              <SelectItem value="active">
+                活跃
+              </SelectItem>
+              <SelectItem value="failed">
+                失败
+              </SelectItem>
+              <SelectItem value="cancelled">
+                已取消
+              </SelectItem>
+              <SelectItem
+                v-if="isAdmin"
+                value="has_retry"
+              >
+                发生重试
+              </SelectItem>
+              <SelectItem
+                v-if="isAdmin"
+                value="has_fallback"
+              >
+                发生转移
+              </SelectItem>
             </SelectContent>
           </Select>
 
@@ -170,8 +207,7 @@
             <span
               v-if="getActualModel(record)"
               class="text-[11px] text-muted-foreground truncate block"
-              >-> {{ getActualModel(record) }}</span
-            >
+            >-> {{ getActualModel(record) }}</span>
           </div>
           <div class="flex flex-col items-end flex-shrink-0">
             <span class="text-xs text-primary font-medium">{{
@@ -180,13 +216,12 @@
             <span
               v-if="
                 showActualCost &&
-                record.actual_cost !== undefined &&
-                record.rate_multiplier &&
-                record.rate_multiplier !== 1.0
+                  record.actual_cost !== undefined &&
+                  record.rate_multiplier &&
+                  record.rate_multiplier !== 1.0
               "
               class="text-[10px] text-muted-foreground"
-              >{{ formatCurrency(record.actual_cost) }}</span
-            >
+            >{{ formatCurrency(record.actual_cost) }}</span>
           </div>
         </div>
 
@@ -199,8 +234,8 @@
             <Badge
               v-if="
                 record.status === 'failed' ||
-                (record.status_code && record.status_code >= 400) ||
-                record.error_message
+                  (record.status_code && record.status_code >= 400) ||
+                  record.error_message
               "
               variant="destructive"
               class="whitespace-nowrap text-[10px] px-1.5 h-4 leading-4 inline-flex items-center"
@@ -256,28 +291,28 @@
                 record.status === 'pending' || record.status === 'streaming'
               "
               class="text-primary tabular-nums"
-              ><ElapsedTimeText
-                :created-at="record.created_at"
-                :status="record.status"
-                :response-time-ms="record.response_time_ms ?? null"
+            ><ElapsedTimeText
+              :created-at="record.created_at"
+              :status="record.status"
+              :response-time-ms="record.response_time_ms ?? null"
             /></span>
             <span
               v-else-if="record.response_time_ms != null"
               class="tabular-nums"
-              >{{
-                record.first_byte_time_ms != null
-                  ? (record.first_byte_time_ms / 1000).toFixed(1) + "/"
-                  : ""
-              }}{{ (record.response_time_ms / 1000).toFixed(1) }}s</span
-            >
-            <span v-else class="tabular-nums">-</span>
+            >{{
+              record.first_byte_time_ms != null
+                ? (record.first_byte_time_ms / 1000).toFixed(1) + "/"
+                : ""
+            }}{{ (record.response_time_ms / 1000).toFixed(1) }}s</span>
+            <span
+              v-else
+              class="tabular-nums"
+            >-</span>
             <span class="text-muted-foreground/50">|</span>
             <!-- Tokens -->
-            <span
-              >{{ formatTokens(record.input_tokens || 0) }}/{{
-                formatTokens(record.output_tokens || 0)
-              }}</span
-            >
+            <span>{{ formatTokens(record.input_tokens || 0) }}/{{
+              formatTokens(record.output_tokens || 0)
+            }}</span>
           </div>
         </div>
       </div>
@@ -287,18 +322,33 @@
     <Table class="hidden md:table">
       <TableHeader>
         <TableRow class="border-b border-border/60 hover:bg-transparent">
-          <TableHead class="h-12 font-semibold w-[70px]"> 时间 </TableHead>
-          <TableHead v-if="isAdmin" class="h-12 font-semibold w-[100px]">
+          <TableHead class="h-12 font-semibold w-[70px]">
+            时间
+          </TableHead>
+          <TableHead
+            v-if="isAdmin"
+            class="h-12 font-semibold w-[100px]"
+          >
             用户
           </TableHead>
-          <TableHead v-if="!isAdmin" class="h-12 font-semibold w-[100px]">
+          <TableHead
+            v-if="!isAdmin"
+            class="h-12 font-semibold w-[100px]"
+          >
             密钥
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[140px]"> 模型 </TableHead>
-          <TableHead v-if="isAdmin" class="h-12 font-semibold w-[100px]">
+          <TableHead class="h-12 font-semibold w-[140px]">
+            模型
+          </TableHead>
+          <TableHead
+            v-if="isAdmin"
+            class="h-12 font-semibold w-[100px]"
+          >
             提供商
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[120px]"> API格式 </TableHead>
+          <TableHead class="h-12 font-semibold w-[120px]">
+            API格式
+          </TableHead>
           <TableHead class="h-12 font-semibold w-[70px] text-center">
             类型
           </TableHead>
@@ -345,16 +395,16 @@
             class="py-4 w-[100px] truncate"
             :title="
               record.username ||
-              record.user_email ||
-              (record.user_id ? `User ${record.user_id}` : '已删除用户')
+                record.user_email ||
+                (record.user_id ? `User ${record.user_id}` : '已删除用户')
             "
           >
             <div class="flex flex-col text-xs gap-0.5">
               <span class="truncate">
                 {{
                   record.username ||
-                  record.user_email ||
-                  (record.user_id ? `User ${record.user_id}` : "已删除用户")
+                    record.user_email ||
+                    (record.user_id ? `User ${record.user_id}` : "已删除用户")
                 }}
               </span>
               <span
@@ -409,9 +459,15 @@
                 getActualModel(record)
               }}</span>
             </div>
-            <span v-else class="truncate block">{{ record.model }}</span>
+            <span
+              v-else
+              class="truncate block"
+            >{{ record.model }}</span>
           </TableCell>
-          <TableCell v-if="isAdmin" class="py-4 w-[60px]">
+          <TableCell
+            v-if="isAdmin"
+            class="py-4 w-[60px]"
+          >
             <div class="flex items-center gap-1">
               <div class="flex flex-col text-xs gap-0.5">
                 <span>{{ record.provider }}</span>
@@ -426,8 +482,7 @@
                       record.rate_multiplier && record.rate_multiplier !== 1.0
                     "
                     class="text-foreground/60"
-                    >({{ record.rate_multiplier }}x)</span
-                  >
+                  >({{ record.rate_multiplier }}x)</span>
                 </span>
               </div>
               <!-- 故障转移图标（优先显示） -->
@@ -500,9 +555,11 @@
             <span
               v-else-if="record.api_format"
               class="text-xs whitespace-nowrap"
-              >{{ formatApiFormat(record.api_format) }}</span
-            >
-            <span v-else class="text-muted-foreground text-xs">-</span>
+            >{{ formatApiFormat(record.api_format) }}</span>
+            <span
+              v-else
+              class="text-muted-foreground text-xs"
+            >-</span>
           </TableCell>
           <TableCell class="text-center py-4 w-[70px]">
             <!-- 优先显示请求状态 -->
@@ -523,8 +580,8 @@
             <Badge
               v-else-if="
                 record.status === 'failed' ||
-                (record.status_code && record.status_code >= 400) ||
-                record.error_message
+                  (record.status_code && record.status_code >= 400) ||
+                  record.error_message
               "
               variant="destructive"
               class="whitespace-nowrap"
@@ -567,23 +624,21 @@
                       ? 'text-foreground/70'
                       : ''
                   "
-                  >{{
-                    record.cache_creation_input_tokens
-                      ? formatTokens(record.cache_creation_input_tokens)
-                      : "-"
-                  }}</span
-                >
+                >{{
+                  record.cache_creation_input_tokens
+                    ? formatTokens(record.cache_creation_input_tokens)
+                    : "-"
+                }}</span>
                 <span>/</span>
                 <span
                   :class="
                     record.cache_read_input_tokens ? 'text-foreground/70' : ''
                   "
-                  >{{
-                    record.cache_read_input_tokens
-                      ? formatTokens(record.cache_read_input_tokens)
-                      : "-"
-                  }}</span
-                >
+                >{{
+                  record.cache_read_input_tokens
+                    ? formatTokens(record.cache_read_input_tokens)
+                    : "-"
+                }}</span>
               </div>
             </div>
           </TableCell>
@@ -595,9 +650,9 @@
               <span
                 v-if="
                   showActualCost &&
-                  record.actual_cost !== undefined &&
-                  record.rate_multiplier &&
-                  record.rate_multiplier !== 1.0
+                    record.actual_cost !== undefined &&
+                    record.rate_multiplier &&
+                    record.rate_multiplier !== 1.0
                 "
                 class="text-muted-foreground"
               >
@@ -612,11 +667,10 @@
               class="flex flex-col items-end text-xs gap-0.5"
             >
               <span class="text-muted-foreground">-</span>
-              <span class="text-primary tabular-nums"
-                ><ElapsedTimeText
-                  :created-at="record.created_at"
-                  :status="record.status"
-                  :response-time-ms="record.response_time_ms ?? null"
+              <span class="text-primary tabular-nums"><ElapsedTimeText
+                :created-at="record.created_at"
+                :status="record.status"
+                :response-time-ms="record.response_time_ms ?? null"
               /></span>
             </div>
             <!-- streaming 状态：首字固定 + 总时间增长 -->
@@ -627,14 +681,15 @@
               <span
                 v-if="record.first_byte_time_ms != null"
                 class="tabular-nums"
-                >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span
-              >
-              <span v-else class="text-muted-foreground">-</span>
-              <span class="text-primary tabular-nums"
-                ><ElapsedTimeText
-                  :created-at="record.created_at"
-                  :status="record.status"
-                  :response-time-ms="record.response_time_ms ?? null"
+              >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span>
+              <span
+                v-else
+                class="text-muted-foreground"
+              >-</span>
+              <span class="text-primary tabular-nums"><ElapsedTimeText
+                :created-at="record.created_at"
+                :status="record.status"
+                :response-time-ms="record.response_time_ms ?? null"
               /></span>
             </div>
             <!-- 已完成状态：首字 + 总耗时 -->
@@ -645,14 +700,17 @@
               <span
                 v-if="record.first_byte_time_ms != null"
                 class="tabular-nums"
-                >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span
-              >
-              <span v-else class="text-muted-foreground">-</span>
-              <span class="text-muted-foreground tabular-nums"
-                >{{ (record.response_time_ms / 1000).toFixed(2) }}s</span
-              >
+              >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span>
+              <span
+                v-else
+                class="text-muted-foreground"
+              >-</span>
+              <span class="text-muted-foreground tabular-nums">{{ (record.response_time_ms / 1000).toFixed(2) }}s</span>
             </div>
-            <span v-else class="text-muted-foreground">-</span>
+            <span
+              v-else
+              class="text-muted-foreground"
+            >-</span>
           </TableCell>
         </TableRow>
       </TableBody>
