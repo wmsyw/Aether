@@ -187,10 +187,7 @@
                 </p>
               </div>
             </Card>
-            <Card
-              v-if="costStats"
-              class="relative p-3 sm:p-4 border-manilla/40"
-            >
+            <Card class="relative p-3 sm:p-4 border-manilla/40">
               <DollarSign class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
@@ -978,11 +975,19 @@ const systemHealth = ref<{
   total_requests: number
 } | null>(null)
 
-const costStats = ref<{
+interface CostStatsState {
   total_cost: number
   total_actual_cost: number
   cost_savings: number
-} | null>(null)
+}
+
+const createDefaultCostStats = (): CostStatsState => ({
+  total_cost: 0,
+  total_actual_cost: 0,
+  cost_savings: 0
+})
+
+const costStats = ref<CostStatsState>(createDefaultCostStats())
 
 const cacheStats = ref<{
   cache_creation_tokens: number
@@ -1349,11 +1354,13 @@ async function loadDashboardData() {
     if (statsData.today) todayStats.value = statsData.today
     if (isAdmin.value) {
       if (statsData.system_health) systemHealth.value = statsData.system_health
-      if (statsData.cost_stats) costStats.value = statsData.cost_stats
+      costStats.value = statsData.cost_stats ?? createDefaultCostStats()
       if (statsData.cache_stats) cacheStats.value = statsData.cache_stats
       if (statsData.token_breakdown) tokenBreakdown.value = statsData.token_breakdown
       if (statsData.users) activeUsers.value = statsData.users.active
     } else {
+      systemHealth.value = null
+      costStats.value = createDefaultCostStats()
       if (statsData.cache_stats) cacheStats.value = statsData.cache_stats
       if (statsData.token_breakdown) tokenBreakdown.value = statsData.token_breakdown
       if (statsData.monthly_cost !== undefined) userMonthlyCost.value = statsData.monthly_cost
