@@ -77,6 +77,12 @@ from src.core.api_format.conversion.stream_events import (
     ToolCallDeltaEvent,
 )
 from src.core.api_format.conversion.stream_state import StreamState
+from src.core.api_format.schema_utils import (
+    clone_openai_tool_with_fixed_parameters as _clone_openai_tool_with_fixed_parameters,
+)
+from src.core.api_format.schema_utils import (
+    clone_schema_with_openai_object_fixes as _clone_schema_with_openai_object_fixes,
+)
 from src.core.logger import logger
 
 
@@ -344,7 +350,7 @@ class OpenAINormalizer(FormatNormalizer):
                     continue
                 raw_chat_tool = t.extra.get("openai_chat_raw_tool")
                 if isinstance(raw_chat_tool, dict):
-                    openai_tools.append(raw_chat_tool)
+                    openai_tools.append(_clone_openai_tool_with_fixed_parameters(raw_chat_tool))
                     continue
                 raw_responses_tool = t.extra.get("openai_cli_raw_tool")
                 if isinstance(raw_responses_tool, dict):
@@ -353,7 +359,7 @@ class OpenAINormalizer(FormatNormalizer):
                     ):
                         result["web_search_options"] = web_search_options
                     if chat_tool := _responses_tool_to_chat_tool(raw_responses_tool):
-                        openai_tools.append(chat_tool)
+                        openai_tools.append(_clone_openai_tool_with_fixed_parameters(chat_tool))
                     continue
                 func: dict[str, Any] = {
                     **(t.extra.get("openai_function") or {}),
@@ -362,7 +368,7 @@ class OpenAINormalizer(FormatNormalizer):
                 if t.description is not None:
                     func["description"] = t.description
                 if t.parameters is not None:
-                    func["parameters"] = t.parameters
+                    func["parameters"] = _clone_schema_with_openai_object_fixes(t.parameters)
                 openai_tools.append(
                     {
                         "type": "function",

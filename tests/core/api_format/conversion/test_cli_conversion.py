@@ -776,6 +776,21 @@ def test_openai_cli_request_from_internal_keeps_natural_insertion_order() -> Non
     assert list(out.keys())[:4] == ["model", "input", "max_output_tokens", "tools"]
 
 
+def test_openai_cli_request_from_internal_fixes_empty_object_tool_parameters() -> None:
+    normalizer = OpenAICliNormalizer()
+    internal = normalizer.request_to_internal(
+        {
+            "model": "gpt-test",
+            "input": [],
+            "tools": [{"type": "function", "name": "read_file", "parameters": {"type": "object"}}],
+        }
+    )
+
+    out = normalizer.request_from_internal(internal)
+
+    assert out["tools"][0]["parameters"] == {"type": "object", "properties": {}}
+
+
 def test_claude_explicit_effort_preserved_in_openai_cli() -> None:
     reg = _make_registry_with_cli()
 

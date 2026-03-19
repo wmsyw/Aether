@@ -53,6 +53,65 @@ def _build_short_header_id(seed: str) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
+def _normalize_codex_debug_organizations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for raw in value:
+        if not isinstance(raw, Mapping):
+            continue
+
+        normalized: dict[str, Any] = {}
+        org_id = str(raw.get("id") or "").strip()
+        if org_id:
+            normalized["id"] = org_id
+
+        title = str(raw.get("title") or "").strip()
+        if title:
+            normalized["title"] = title
+
+        role = str(raw.get("role") or "").strip()
+        if role:
+            normalized["role"] = role
+
+        if "is_default" in raw:
+            normalized["is_default"] = bool(raw.get("is_default"))
+
+        if normalized:
+            items.append(normalized)
+
+    return items
+
+
+def _build_safe_codex_debug_snapshot(values: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(values, Mapping):
+        return {}
+
+    snapshot: dict[str, Any] = {}
+    for field in (
+        "email",
+        "account_id",
+        "account_user_id",
+        "plan_type",
+        "user_id",
+        "account_name",
+    ):
+        raw = values.get(field)
+        if isinstance(raw, str):
+            normalized = raw.strip()
+            if normalized:
+                snapshot[field] = normalized
+        elif raw is not None:
+            snapshot[field] = raw
+
+    organizations = _normalize_codex_debug_organizations(values.get("organizations"))
+    if organizations:
+        snapshot["organizations"] = organizations
+
+    return snapshot
+
+
 def _build_codex_headers(
     request_body: Any,
     original_headers: Mapping[str, Any] | None,
@@ -155,11 +214,14 @@ def build_codex_url(
 async def enrich_codex(
     auth_config: dict[str, Any],
     token_response: dict[str, Any],
-    access_token: str,  # noqa: ARG001
-    proxy_config: dict[str, Any] | None,  # noqa: ARG001
+    access_token: str,
+    proxy_config: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Codex auth_config enrichment: parse token claims -> account/team identity metadata."""
-    from src.core.provider_oauth_utils import parse_codex_id_token
+    from src.core.provider_oauth_utils import (
+        fetch_openai_account_name,
+        parse_codex_id_token,
+    )
 
     def _read_non_empty_str(*values: Any) -> str | None:
         for value in values:
@@ -210,27 +272,64 @@ async def enrich_codex(
     if direct_email and not auth_config.get("email"):
         auth_config["email"] = direct_email
 
+    direct_snapshot = _build_safe_codex_debug_snapshot(
+        {
+            "email": direct_email,
+            "account_id": direct_account_id,
+            "account_user_id": direct_account_user_id,
+            "plan_type": direct_plan_type,
+            "user_id": direct_user_id,
+        }
+    )
+
     logger.debug(
         "Codex enrich_auth_config: id_token_present={} access_token_present={} token_keys={}",
         bool(token_response.get("id_token") or token_response.get("idToken")),
         bool(token_response.get("access_token") or token_response.get("accessToken")),
         list(token_response.keys()),
     )
+    logger.debug("Codex direct token response values: {}", direct_snapshot)
 
     token_candidates = [
-        token_response.get("id_token"),
-        token_response.get("idToken"),
-        token_response.get("access_token"),
-        token_response.get("accessToken"),
+        ("id_token", token_response.get("id_token")),
+        ("idToken", token_response.get("idToken")),
+        ("access_token", token_response.get("access_token")),
+        ("accessToken", token_response.get("accessToken")),
     ]
-    for token_payload in token_candidates:
+    for source_name, token_payload in token_candidates:
         codex_info = parse_codex_id_token(token_payload)
         if not codex_info:
             continue
-        logger.debug("Codex parsed token fields: {}", list(codex_info.keys()))
+        logger.debug(
+            "Codex parsed token values: source={} fields={} values={}",
+            source_name,
+            list(codex_info.keys()),
+            _build_safe_codex_debug_snapshot(codex_info),
+        )
         for key, value in codex_info.items():
             if not auth_config.get(key):
                 auth_config[key] = value
+
+    account_id = _read_non_empty_str(auth_config.get("account_id"))
+    if account_id:
+        account_name = await fetch_openai_account_name(
+            access_token,
+            account_id,
+            proxy_config=proxy_config,
+            timeout_seconds=10.0,
+        )
+        logger.debug(
+            "Codex account_name lookup: account_id={} resolved_account_name={}",
+            account_id,
+            account_name,
+        )
+        if account_name:
+            auth_config["account_name"] = account_name
+
+    logger.debug(
+        "Codex enrich_auth_config final metadata: {}",
+        _build_safe_codex_debug_snapshot(auth_config),
+    )
 
     return auth_config
 

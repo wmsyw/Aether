@@ -94,8 +94,8 @@ def _calculate_token_cache_hit_rate(
 
     Args:
         total_input_context: 已归一化的总输入上下文 token 数。
-            Claude 格式: input_tokens + cache_read_input_tokens
-            OpenAI/Gemini 格式: input_tokens（已包含 cache_read）
+            由 query.py 的 input_context_expr() 统一计算，固定为
+            input_tokens + cache_read_input_tokens。
         cache_read_tokens: 缓存读取 token 数
     """
     context = int(total_input_context or 0)
@@ -2587,9 +2587,7 @@ def _apply_replay_model_to_body(
     """根据目标格式决定是否写入 body.model。"""
     from src.core.api_format.metadata import resolve_endpoint_definition
 
-    target_meta = (
-        resolve_endpoint_definition(target_api_format) if target_api_format else None
-    )
+    target_meta = resolve_endpoint_definition(target_api_format) if target_api_format else None
     if target_meta is not None and not target_meta.model_in_body:
         body.pop("model", None)
         return
@@ -2625,9 +2623,7 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
             original_api_format.split(":")[0] if ":" in original_api_format else ""
         )
         original_request_body = usage_record.get_request_body()
-        body_override_payload = (
-            self.body_override if isinstance(self.body_override, dict) else None
-        )
+        body_override_payload = self.body_override if isinstance(self.body_override, dict) else None
         override_model: str | None = None
         if isinstance(body_override_payload, dict):
             override_val = body_override_payload.get("model")
@@ -2913,7 +2909,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 # envelope 失败仍发送原始体
 
         # 获取提供商名称
-        provider_name = target_provider_obj.name if target_provider_obj else usage_record.provider_name
+        provider_name = (
+            target_provider_obj.name if target_provider_obj else usage_record.provider_name
+        )
 
         # 发送请求
         try:

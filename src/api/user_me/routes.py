@@ -68,7 +68,8 @@ def _calculate_token_cache_hit_rate(total_input_context: int, cache_read_tokens:
     """计算缓存命中率。
 
     Args:
-        total_input_context: 已归一化的总输入上下文 token 数（由 query.py 按 API 格式精确计算）。
+        total_input_context: 已归一化的总输入上下文 token 数
+            （由 query.py 的 input_context_expr() 统一计算，为 input + cache_read）。
         cache_read_tokens: 缓存读取 token 数。
     """
     context = max(0, int(total_input_context))

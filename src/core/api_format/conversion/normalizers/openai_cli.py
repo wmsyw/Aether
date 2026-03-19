@@ -74,6 +74,12 @@ from src.core.api_format.conversion.stream_events import (
     UnknownStreamEvent,
 )
 from src.core.api_format.conversion.stream_state import StreamState
+from src.core.api_format.schema_utils import (
+    clone_openai_tool_with_fixed_parameters as _clone_openai_tool_with_fixed_parameters,
+)
+from src.core.api_format.schema_utils import (
+    clone_schema_with_openai_object_fixes as _clone_schema_with_openai_object_fixes,
+)
 from src.core.logger import logger
 
 
@@ -294,11 +300,13 @@ class OpenAICliNormalizer(FormatNormalizer):
                 # 非 function 类型（如 custom/web_search）：直接还原原始 dict
                 raw_tool = t.extra.get("openai_cli_raw_tool")
                 if isinstance(raw_tool, dict):
-                    rebuilt_tools.append(raw_tool)
+                    rebuilt_tools.append(_clone_openai_tool_with_fixed_parameters(raw_tool))
                 elif isinstance(t.extra.get("openai_chat_raw_tool"), dict):
                     chat_tool = t.extra["openai_chat_raw_tool"]
                     if translated_tool := _chat_tool_to_responses_tool(chat_tool):
-                        rebuilt_tools.append(translated_tool)
+                        rebuilt_tools.append(
+                            _clone_openai_tool_with_fixed_parameters(translated_tool)
+                        )
                 else:
                     rebuilt_tool: dict[str, Any] = {
                         "type": "function",
@@ -310,7 +318,9 @@ class OpenAICliNormalizer(FormatNormalizer):
                     if t.description is not None:
                         rebuilt_tool["description"] = t.description
                     if t.parameters is not None:
-                        rebuilt_tool["parameters"] = t.parameters
+                        rebuilt_tool["parameters"] = _clone_schema_with_openai_object_fixes(
+                            t.parameters
+                        )
                     rebuilt_tools.append(rebuilt_tool)
             if rebuilt_tools:
                 result["tools"] = rebuilt_tools

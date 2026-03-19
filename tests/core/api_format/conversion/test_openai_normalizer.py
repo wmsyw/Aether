@@ -258,6 +258,26 @@ def test_openai_request_from_internal_keeps_natural_insertion_order() -> None:
     assert list(out.keys())[:4] == ["model", "messages", "max_tokens", "tools"]
 
 
+def test_openai_request_from_internal_fixes_empty_object_tool_parameters() -> None:
+    n = OpenAINormalizer()
+
+    req = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "ping"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "noop", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    internal = n.request_to_internal(req)
+    out = n.request_from_internal(internal)
+
+    assert out["tools"][0]["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
 def test_openai_request_content_image_and_unknown_drop() -> None:
     n = OpenAINormalizer()
 

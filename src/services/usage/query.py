@@ -2,28 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Case, case, func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from sqlalchemy.sql.elements import ColumnElement
 
 from src.core.logger import logger
 from src.models.database import ApiKey, Usage, User
 
 
-def input_context_expr() -> Case:
-    """构造 SQL CASE 表达式，根据 api_format 精确计算每条记录的总输入上下文 token 数。
+def input_context_expr() -> ColumnElement[int]:
+    """计算缓存命中率口径下的总输入上下文 token 数。
 
-    - OpenAI/Gemini: input_tokens 已包含 cache_read_input_tokens，直接使用
-    - Claude/未知: input_tokens 不含 cache_read，需要加上
+    为了与 usage 表中“输入 tokens + 缓存读取 tokens”的展示口径保持一致，
+    聚合统计统一使用 `input_tokens + cache_read_input_tokens` 作为分母。
     """
-    return case(
-        (
-            Usage.api_format.like("openai:%") | Usage.api_format.like("gemini:%"),
-            Usage.input_tokens,
-        ),
-        else_=Usage.input_tokens + Usage.cache_read_input_tokens,
-    )
+    return Usage.input_tokens + Usage.cache_read_input_tokens
 
 
 @dataclass(slots=True)

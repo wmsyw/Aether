@@ -68,6 +68,7 @@ async def test_standard_batch_import_commits_successes_in_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key_ids = count(1)
+    created_auth_configs: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         oauthmod,
@@ -120,6 +121,7 @@ async def test_standard_batch_import_commits_successes_in_chunks(
             else {}
         )
         auth_config["email"] = f"user-{next(key_ids)}@example.com"
+        auth_config["account_name"] = "Workspace Alpha"
         return auth_config
 
     created_ids = count(1)
@@ -128,10 +130,21 @@ async def test_standard_batch_import_commits_successes_in_chunks(
     monkeypatch.setattr(
         oauthmod, "_check_duplicate_oauth_account", lambda *_args, **_kwargs: None
     )
+
+    def _fake_create_oauth_key(*_args: object, **kwargs: object) -> SimpleNamespace:
+        raw_auth_config = kwargs.get("auth_config")
+        auth_config = (
+            {str(k): v for k, v in raw_auth_config.items()}
+            if isinstance(raw_auth_config, dict)
+            else {}
+        )
+        created_auth_configs.append(auth_config)
+        return SimpleNamespace(id=f"key-{next(created_ids)}")
+
     monkeypatch.setattr(
         oauthmod,
         "_create_oauth_key",
-        lambda *_args, **_kwargs: SimpleNamespace(id=f"key-{next(created_ids)}"),
+        _fake_create_oauth_key,
     )
 
     db = MagicMock()
@@ -149,6 +162,7 @@ async def test_standard_batch_import_commits_successes_in_chunks(
     assert result.success == 3
     assert result.failed == 0
     assert db.commit.call_count == 2
+    assert created_auth_configs[0]["account_name"] == "Workspace Alpha"
 
 
 @pytest.mark.asyncio
