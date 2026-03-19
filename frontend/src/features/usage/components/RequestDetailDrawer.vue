@@ -145,7 +145,7 @@
             <!-- Detail Content -->
             <div
               v-else-if="detail"
-              class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start lg:items-stretch"
+              class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start lg:items-stretch min-h-full"
             >
               <div class="space-y-4 min-w-0">
               <!-- 费用与性能概览 -->
@@ -445,17 +445,18 @@
 
               </div>
 
-              <div class="min-w-0 h-full">
+              <div class="min-w-0 h-full flex flex-col min-h-0">
 
               <!-- Tabs 区域 -->
-              <Card class="h-full flex flex-col">
+              <Card class="h-full flex flex-col min-h-0">
                 <div class="p-3 sm:p-4 h-full min-h-0 flex flex-col detail-tabs-wrapper">
                   <Tabs
                     v-model="activeTab"
                     :default-value="activeTab"
+                    class="h-full flex flex-col min-h-0"
                   >
                     <!-- Tab 行 -->
-                    <div class="flex items-center border-b pb-2 mb-3">
+                    <div class="flex items-center border-b pb-2 mb-3 shrink-0">
                       <button
                         v-for="tab in visibleTabs"
                         :key="tab.name"
@@ -594,7 +595,7 @@
                       </div>
                       <TabsContent
                         value="request-headers"
-                        class="flex-1 min-h-0"
+                        class="flex-1 min-h-0 mt-0 flex flex-col"
                       >
                         <RequestHeadersContent
                           :detail="detail"
@@ -610,7 +611,7 @@
 
                       <TabsContent
                         value="request-body"
-                        class="flex-1 min-h-0"
+                        class="flex-1 min-h-0 mt-0 flex flex-col"
                       >
                         <div
                           v-if="isRequestBodyLoading"
@@ -636,7 +637,7 @@
 
                       <TabsContent
                         value="response-headers"
-                        class="flex-1 min-h-0"
+                        class="flex-1 min-h-0 mt-0 flex flex-col"
                       >
                         <RequestHeadersContent
                           v-if="viewMode === 'compare'"
@@ -667,7 +668,7 @@
 
                       <TabsContent
                         value="response-body"
-                        class="flex-1 min-h-0"
+                        class="flex-1 min-h-0 mt-0 flex flex-col"
                       >
                         <div
                           v-if="isResponseBodyLoading"
@@ -693,7 +694,7 @@
 
                       <TabsContent
                         value="metadata"
-                        class="flex-1 min-h-0"
+                        class="flex-1 min-h-0 mt-0 flex flex-col"
                       >
                         <JsonContent
                           :data="detail.metadata"

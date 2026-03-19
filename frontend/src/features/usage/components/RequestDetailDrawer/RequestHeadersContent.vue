@@ -1,7 +1,7 @@
 <template>
-  <div>
+  <div class="h-full flex flex-col min-h-0">
     <!-- 对比模式 - 并排 Diff -->
-    <div v-show="viewMode === 'compare'">
+    <div v-show="viewMode === 'compare'" class="h-full flex flex-col min-h-0">
       <div
         v-if="!resolvedClientHeaders || !resolvedProviderHeaders"
         class="text-sm text-muted-foreground"
@@ -25,7 +25,7 @@
         </div>
 
         <!-- 并排 Diff 内容 -->
-        <div class="flex font-mono text-xs max-h-[500px]">
+        <div class="flex font-mono text-xs flex-1 min-h-0">
           <!-- 左侧：客户端 -->
           <div
             ref="leftPanelRef"
@@ -125,18 +125,19 @@
     </div>
 
     <!-- 格式化模式 - 直接使用 JsonContent -->
-    <div v-show="viewMode === 'formatted'">
+    <div v-show="viewMode === 'formatted'" class="h-full flex flex-col min-h-0">
       <JsonContent
         :data="currentHeaderData"
         :view-mode="viewMode"
         :expand-depth="currentExpandDepth"
         :is-dark="isDark"
         empty-message="无请求头信息"
+        fill-height
       />
     </div>
 
     <!-- 原始模式 -->
-    <div v-show="viewMode === 'raw'">
+    <div v-show="viewMode === 'raw'" class="h-full flex flex-col min-h-0">
       <div
         v-if="!currentHeaderData || Object.keys(currentHeaderData).length === 0"
         class="text-sm text-muted-foreground"
@@ -145,9 +146,9 @@
       </div>
       <Card
         v-else
-        class="bg-muted/30"
+        class="bg-muted/30 h-full flex flex-col min-h-0"
       >
-        <div class="p-4 overflow-x-auto">
+        <div class="p-4 overflow-x-auto overflow-y-auto flex-1 min-h-0">
           <pre class="text-xs font-mono whitespace-pre-wrap">{{ JSON.stringify(currentHeaderData, null, 2) }}</pre>
         </div>
       </Card>
