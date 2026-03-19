@@ -58,6 +58,9 @@ export interface UsageByProvider {
   provider: string
   request_count: number
   total_tokens: number
+  total_input_context?: number
+  output_tokens?: number
+  cache_creation_tokens?: number
   total_cost: number
   actual_cost: number
   avg_response_time_ms: number
@@ -71,6 +74,9 @@ export interface UsageByApiFormat {
   api_format: string
   request_count: number
   total_tokens: number
+  total_input_context?: number
+  output_tokens?: number
+  cache_creation_tokens?: number
   total_cost: number
   actual_cost: number
   avg_response_time_ms: number

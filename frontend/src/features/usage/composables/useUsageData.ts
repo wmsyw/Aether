@@ -82,7 +82,7 @@ export function useUsageData(options: UseUsageDataOptions) {
     try {
       if (isAdminPage.value) {
         // 管理员页面顺序加载统计数据，避免刷新使用记录时瞬时打满后端 worker。
-        const statsData = await usageApi.getUsageStats(dateRange)
+        const statsData = await usageApi.getUsageStats(dateRange, options)
 
         if (requestId !== loadStatsRequestId) {
           return
@@ -103,7 +103,7 @@ export function useUsageData(options: UseUsageDataOptions) {
           period_end: '',
         }
 
-        const modelData = await usageApi.getUsageByModel(dateRange)
+        const modelData = await usageApi.getUsageByModel(dateRange, options)
         if (requestId !== loadStatsRequestId) {
           return
         }
@@ -124,7 +124,7 @@ export function useUsageData(options: UseUsageDataOptions) {
           }
         })
 
-        const providerData = await usageApi.getUsageByProvider(dateRange)
+        const providerData = await usageApi.getUsageByProvider(dateRange, options)
         if (requestId !== loadStatsRequestId) {
           return
         }
@@ -146,7 +146,7 @@ export function useUsageData(options: UseUsageDataOptions) {
             : '-'
         }))
 
-        const apiFormatData = await usageApi.getUsageByApiFormat(dateRange)
+        const apiFormatData = await usageApi.getUsageByApiFormat(dateRange, options)
         if (requestId !== loadStatsRequestId) {
           return
         }
@@ -316,7 +316,7 @@ export function useUsageData(options: UseUsageDataOptions) {
         if (requestId !== loadRecordsRequestId) {
           return
         }
-        const nextRecords = (response.records || []) as UsageRecord[]
+        const nextRecords = (response.records || []) as unknown as UsageRecord[]
         currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = response.total || 0
       } else {
