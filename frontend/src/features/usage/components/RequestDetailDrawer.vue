@@ -145,7 +145,7 @@
             <!-- Detail Content -->
             <div
               v-else-if="detail"
-              class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start"
+              class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start lg:items-stretch"
             >
               <div class="space-y-4 min-w-0">
               <!-- 费用与性能概览 -->
@@ -445,10 +445,10 @@
 
               </div>
 
-              <div class="min-w-0">
+              <div class="min-w-0 h-full">
 
               <!-- Tabs 区域 -->
-              <Card>
+              <Card class="h-full">
                 <div class="p-3 sm:p-4">
                   <Tabs
                     v-model="activeTab"
