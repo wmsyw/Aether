@@ -51,6 +51,8 @@ export interface ConfigExportData {
   ldap_config?: LDAPConfigExport | null
   oauth_providers?: OAuthProviderExport[]
   system_configs?: SystemConfigExport[]
+  user_api_keys?: ConfigUserApiKeyExport[]
+  standalone_api_keys?: StandaloneKeyExport[]
 }
 
 export interface ProxyNodeExport {
@@ -115,6 +117,9 @@ export interface UserApiKeyExport {
 
 // 独立余额 Key 导出结构（与 UserApiKeyExport 相同，但不包含 is_standalone）
 export type StandaloneKeyExport = Omit<UserApiKeyExport, 'is_standalone'>
+export type ConfigUserApiKeyExport = Omit<UserApiKeyExport, 'is_standalone'> & {
+  owner_email: string
+}
 
 export interface GlobalModelExport {
   name: string
@@ -333,6 +338,8 @@ export interface ConfigImportResponse {
     models: { created: number; updated: number; skipped: number }
     ldap?: { created: number; updated: number; skipped: number }
     oauth?: { created: number; updated: number; skipped: number }
+    user_api_keys?: { created: number; updated: number; skipped: number }
+    standalone_api_keys?: { created: number; updated: number; skipped: number }
     errors: string[]
   }
 }

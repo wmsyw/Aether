@@ -23,6 +23,12 @@
           <li>
             API Keys: {{ importPreview.providers?.reduce((sum: number, p: { api_keys?: unknown[] }) => sum + (p.api_keys?.length || 0), 0) }} 个
           </li>
+          <li v-if="importPreview.user_api_keys?.length">
+            用户 API Keys: {{ importPreview.user_api_keys.length }} 个
+          </li>
+          <li v-if="importPreview.standalone_api_keys?.length">
+            独立余额 API Keys: {{ importPreview.standalone_api_keys.length }} 个
+          </li>
           <li v-if="importPreview.proxy_nodes?.length">
             代理节点: {{ importPreview.proxy_nodes.length }} 个
           </li>
@@ -135,11 +141,31 @@
         </div>
         <div>
           <p class="font-medium">
-            API Keys
+            Provider API Keys
           </p>
           <p class="text-muted-foreground">
             创建: {{ importResult.stats.keys.created }},
             跳过: {{ importResult.stats.keys.skipped }}
+          </p>
+        </div>
+        <div v-if="importResult.stats.user_api_keys">
+          <p class="font-medium">
+            用户 API Keys
+          </p>
+          <p class="text-muted-foreground">
+            创建: {{ importResult.stats.user_api_keys.created }},
+            更新: {{ importResult.stats.user_api_keys.updated }},
+            跳过: {{ importResult.stats.user_api_keys.skipped }}
+          </p>
+        </div>
+        <div v-if="importResult.stats.standalone_api_keys">
+          <p class="font-medium">
+            独立余额 API Keys
+          </p>
+          <p class="text-muted-foreground">
+            创建: {{ importResult.stats.standalone_api_keys.created }},
+            更新: {{ importResult.stats.standalone_api_keys.updated }},
+            跳过: {{ importResult.stats.standalone_api_keys.skipped }}
           </p>
         </div>
         <div class="col-span-2">

@@ -31,8 +31,8 @@ from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/admin/system", tags=["Admin - System"])
 
-CONFIG_EXPORT_VERSION = "2.2"
-CONFIG_SUPPORTED_VERSIONS = ("2.0", "2.1", "2.2")
+CONFIG_EXPORT_VERSION = "2.3"
+CONFIG_SUPPORTED_VERSIONS = ("2.0", "2.1", "2.2", "2.3")
 MAX_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
 
 
@@ -642,14 +642,17 @@ class AdminGetSystemSettingsAdapter(AdminApiAdapter):
         default_provider = _system_config_service().get_default_provider(db)
         default_model = _system_config_service().get_config(db, "default_model")
         enable_usage_tracking = (
-            _system_config_service().get_config(db, "enable_usage_tracking", "true") == "true"
+            _system_config_service().get_config(db, "enable_usage_tracking", "true")
+            == "true"
         )
 
         return SystemSettingsResponse(
             default_provider=default_provider,
             default_model=default_model,
             enable_usage_tracking=enable_usage_tracking,
-            password_policy_level=_system_config_service().get_password_policy_level(db),
+            password_policy_level=_system_config_service().get_password_policy_level(
+                db
+            ),
         )
 
 
@@ -682,7 +685,9 @@ class AdminUpdateSystemSettingsAdapter(AdminApiAdapter):
                 )
 
             if settings_request.default_provider:
-                _system_config_service().set_default_provider(db, settings_request.default_provider)
+                _system_config_service().set_default_provider(
+                    db, settings_request.default_provider
+                )
             else:
                 _system_config_service().delete_config(db, "default_provider")
 
@@ -1103,13 +1108,19 @@ class AdminExportConfigAdapter(AdminApiAdapter):
         # 导出 Providers 及其关联数据（分批加载，避免全量 ORM 对象常驻内存）
         batch_size = 50
         provider_ids = [provider_id for (provider_id,) in db.query(Provider.id).all()]
-        provider_order = {provider_id: idx for idx, provider_id in enumerate(provider_ids)}
+        provider_order = {
+            provider_id: idx for idx, provider_id in enumerate(provider_ids)
+        }
         providers_data = []
 
         def _normalize_created_at_for_sort(value: datetime | None) -> datetime:
             if value is None:
                 return datetime.min.replace(tzinfo=timezone.utc)
-            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            return (
+                value
+                if value.tzinfo is not None
+                else value.replace(tzinfo=timezone.utc)
+            )
 
         for offset in range(0, len(provider_ids), batch_size):
             batch_ids = provider_ids[offset : offset + batch_size]
@@ -1129,7 +1140,9 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                 # 导出 Endpoints
                 endpoints = list(provider.endpoints)
                 endpoints_data = [ep.to_export_dict() for ep in endpoints]
-                provider_endpoint_formats = self._collect_provider_endpoint_formats(endpoints)
+                provider_endpoint_formats = self._collect_provider_endpoint_formats(
+                    endpoints
+                )
 
                 # 导出 Provider Keys（按 provider_id 归属，包含 api_formats）
                 keys = sorted(
@@ -1168,7 +1181,9 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     # 导出值为解密后的 JSON 字符串（非 dict），导入时需按字符串重新加密
                     if key.auth_config:
                         try:
-                            key_data["auth_config"] = crypto_service.decrypt(key.auth_config)
+                            key_data["auth_config"] = crypto_service.decrypt(
+                                key.auth_config
+                            )
                         except Exception:
                             logger.warning(
                                 "auth_config 解密失败: provider={}, key_id={}",
@@ -1186,7 +1201,9 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                 for model in models:
                     model_data = model.to_export_dict()
                     # 追加关联的 GlobalModel 名称（导入时通过名称查找）
-                    model_data["global_model_name"] = gm_name_map.get(model.global_model_id)
+                    model_data["global_model_name"] = gm_name_map.get(
+                        model.global_model_id
+                    )
                     models_data.append(model_data)
 
                 # 解密 Provider config 中的 credentials
@@ -1312,6 +1329,30 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                 }
             )
 
+        from src.core.enums import UserRole
+
+        users_with_keys = (
+            db.query(User)
+            .options(selectinload(User.api_keys))
+            .filter(User.is_deleted.is_(False), User.role != UserRole.ADMIN)
+            .all()
+        )
+        user_api_keys_data: list[dict[str, Any]] = []
+        for user in users_with_keys:
+            for key in user.api_keys:
+                if key.is_standalone:
+                    continue
+                key_data = AdminExportUsersAdapter._serialize_api_key(key)
+                user_api_keys_data.append({"owner_email": user.email, **key_data})
+
+        standalone_api_keys = (
+            db.query(ApiKey).filter(ApiKey.is_standalone.is_(True)).all()
+        )
+        standalone_api_keys_data = [
+            AdminExportUsersAdapter._serialize_api_key(key, db=db)
+            for key in standalone_api_keys
+        ]
+
         return {
             "version": CONFIG_EXPORT_VERSION,
             "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -1321,14 +1362,30 @@ class AdminExportConfigAdapter(AdminApiAdapter):
             "ldap_config": ldap_data,
             "oauth_providers": oauth_data,
             "system_configs": system_configs_data,
+            "user_api_keys": user_api_keys_data,
+            "standalone_api_keys": standalone_api_keys_data,
         }
 
 
 class AdminImportConfigAdapter(AdminApiAdapter):
     """导入提供商和模型配置"""
 
-    # Provider Ops 中需要加密的敏感字段
     SENSITIVE_CREDENTIALS = SENSITIVE_CREDENTIAL_FIELDS
+    SPECIAL_PROVIDER_TYPES = {"cursor", "kiro"}
+    LEGACY_IMPORT_FORMATS = {
+        "claude": "claude:chat",
+        "openai": "openai:chat",
+        "gemini": "gemini:chat",
+        "claude_chat": "claude:chat",
+        "openai_chat": "openai:chat",
+        "gemini_chat": "gemini:chat",
+        "claude_cli": "claude:cli",
+        "openai_cli": "openai:cli",
+        "gemini_cli": "gemini:cli",
+        "openai_video": "openai:video",
+        "gemini_video": "gemini:video",
+    }
+    _import_format_alias_map: dict[str, str] | None = None
 
     @staticmethod
     def _remap_proxy_node_id(
@@ -1380,6 +1437,35 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         return []
 
     @staticmethod
+    def _resolve_api_key_material(
+        key_data: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        from src.core.crypto import crypto_service
+        from src.models.database import ApiKey
+
+        plaintext_key = key_data.get("key")
+        if isinstance(plaintext_key, str):
+            normalized = plaintext_key.strip()
+            if normalized:
+                return ApiKey.hash_key(normalized), crypto_service.encrypt(normalized)
+
+        key_hash = str(key_data.get("key_hash") or "").strip() or None
+        key_encrypted = key_data.get("key_encrypted")
+        return key_hash, key_encrypted
+
+    @staticmethod
+    def _normalize_imported_api_key_rate_limit(
+        key_data: dict[str, Any], *, is_standalone: bool
+    ) -> int | None:
+        if "rate_limit" not in key_data:
+            return None if is_standalone else 0
+
+        value = key_data.get("rate_limit")
+        if value is None:
+            return None if is_standalone else 0
+        return int(value)
+
+    @staticmethod
     def _normalize_import_endpoint_payload(
         provider_id: str,
         ep_data: dict[str, Any],
@@ -1390,12 +1476,22 @@ class AdminImportConfigAdapter(AdminApiAdapter):
 
         payload = {
             "provider_id": provider_id,
-            "api_format": ep_data.get("api_format", getattr(existing_ep, "api_format", None)),
+            "api_format": ep_data.get(
+                "api_format", getattr(existing_ep, "api_format", None)
+            ),
             "base_url": ep_data.get("base_url", getattr(existing_ep, "base_url", None)),
-            "custom_path": ep_data.get("custom_path", getattr(existing_ep, "custom_path", None)),
-            "header_rules": ep_data.get("header_rules", getattr(existing_ep, "header_rules", None)),
-            "body_rules": ep_data.get("body_rules", getattr(existing_ep, "body_rules", None)),
-            "max_retries": ep_data.get("max_retries", getattr(existing_ep, "max_retries", 2)),
+            "custom_path": ep_data.get(
+                "custom_path", getattr(existing_ep, "custom_path", None)
+            ),
+            "header_rules": ep_data.get(
+                "header_rules", getattr(existing_ep, "header_rules", None)
+            ),
+            "body_rules": ep_data.get(
+                "body_rules", getattr(existing_ep, "body_rules", None)
+            ),
+            "max_retries": ep_data.get(
+                "max_retries", getattr(existing_ep, "max_retries", 2)
+            ),
             "config": ep_data.get("config", getattr(existing_ep, "config", None)),
             "proxy": ep_data.get("proxy", getattr(existing_ep, "proxy", None)),
             "format_acceptance_config": ep_data.get(
@@ -1576,13 +1672,15 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         from datetime import datetime, timezone
 
         from src.core.crypto import crypto_service
-        from src.core.enums import ProviderBillingType
+        from src.core.enums import ProviderBillingType, UserRole
         from src.models.database import (
+            ApiKey,
             GlobalModel,
             Model,
             ProviderAPIKey,
             ProviderEndpoint,
             ProxyNode,
+            User,
         )
 
         # 检查请求体大小
@@ -1607,6 +1705,8 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         ldap_data = payload.get("ldap_config")  # 2.1 新增
         oauth_data = payload.get("oauth_providers", [])  # 2.1 新增
         system_configs_data = payload.get("system_configs", [])  # 2.2 新增
+        user_api_keys_data = payload.get("user_api_keys", [])
+        standalone_api_keys_data = payload.get("standalone_api_keys", [])
 
         stats = {
             "global_models": {"created": 0, "updated": 0, "skipped": 0},
@@ -1618,6 +1718,8 @@ class AdminImportConfigAdapter(AdminApiAdapter):
             "ldap": {"created": 0, "updated": 0, "skipped": 0},
             "oauth": {"created": 0, "updated": 0, "skipped": 0},
             "system_configs": {"created": 0, "updated": 0, "skipped": 0},  # 2.2 新增
+            "user_api_keys": {"created": 0, "updated": 0, "skipped": 0},
+            "standalone_api_keys": {"created": 0, "updated": 0, "skipped": 0},
             "errors": [],
         }
 
@@ -1923,7 +2025,9 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             existing_ep.base_url = normalized_ep["base_url"]
                             existing_ep.header_rules = normalized_ep.get("header_rules")
                             existing_ep.body_rules = normalized_ep.get("body_rules")
-                            existing_ep.max_retries = normalized_ep.get("max_retries", 2)
+                            existing_ep.max_retries = normalized_ep.get(
+                                "max_retries", 2
+                            )
                             existing_ep.is_active = ep_data.get("is_active", True)
                             existing_ep.custom_path = normalized_ep.get("custom_path")
                             existing_ep.config = normalized_ep.get("config")
@@ -1960,7 +2064,9 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             is_active=ep_data.get("is_active", True),
                             custom_path=normalized_ep.get("custom_path"),
                             config=normalized_ep.get("config"),
-                            format_acceptance_config=normalized_ep.get("format_acceptance_config"),
+                            format_acceptance_config=normalized_ep.get(
+                                "format_acceptance_config"
+                            ),
                             proxy=self._remap_proxy_node_id(
                                 normalized_ep.get("proxy"), proxy_node_id_map
                             ),
@@ -2492,6 +2598,180 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         db.add(new_cfg)
                         stats["system_configs"]["created"] += 1
 
+            def _apply_wallet_snapshot(
+                api_key: ApiKey, key_data: dict[str, Any]
+            ) -> None:
+                wallet = _wallet_service().get_or_create_wallet(db, api_key=api_key)
+                if wallet is None:
+                    return
+
+                wallet_payload = (
+                    key_data.get("wallet")
+                    if isinstance(key_data.get("wallet"), dict)
+                    else None
+                )
+                wallet.limit_mode = (
+                    str(wallet_payload.get("limit_mode"))
+                    if wallet_payload
+                    and wallet_payload.get("limit_mode") in {"finite", "unlimited"}
+                    else ("unlimited" if key_data.get("unlimited") else "finite")
+                )
+                if wallet_payload:
+                    wallet.balance = wallet_payload.get("recharge_balance", 0) or 0
+                    wallet.gift_balance = wallet_payload.get("gift_balance", 0) or 0
+                    wallet.total_recharged = (
+                        wallet_payload.get("total_recharged", 0) or 0
+                    )
+                    wallet.total_consumed = wallet_payload.get("total_consumed", 0) or 0
+                    wallet.total_refunded = wallet_payload.get("total_refunded", 0) or 0
+                    wallet.total_adjusted = wallet_payload.get("total_adjusted", 0) or 0
+                    wallet.status = wallet_payload.get("status", "active") or "active"
+                wallet.updated_at = datetime.now(timezone.utc)
+
+            def _upsert_config_api_key(
+                key_data: dict[str, Any],
+                *,
+                owner_id: str,
+                is_standalone: bool,
+                stats_key: str,
+            ) -> ApiKey | None:
+                key_hash, key_encrypted = self._resolve_api_key_material(key_data)
+                if not key_hash:
+                    stats["errors"].append("导入 API Key 缺少 key 或 key_hash")
+                    stats[stats_key]["skipped"] += 1
+                    return None
+
+                key_name = str(key_data.get("name") or "").strip() or key_hash[:8]
+                expires_at = None
+                raw_expires_at = key_data.get("expires_at")
+                if raw_expires_at:
+                    try:
+                        expires_at = datetime.fromisoformat(str(raw_expires_at))
+                    except ValueError:
+                        stats["errors"].append(
+                            f"API Key '{key_name}' 的 expires_at 格式无效，已忽略"
+                        )
+
+                existing_key = (
+                    db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
+                )
+                rate_limit = self._normalize_imported_api_key_rate_limit(
+                    key_data,
+                    is_standalone=is_standalone,
+                )
+
+                if existing_key:
+                    if merge_mode == "skip":
+                        stats[stats_key]["skipped"] += 1
+                        return None
+                    if merge_mode == "error":
+                        raise InvalidRequestException(f"API Key '{key_name}' 已存在")
+
+                    existing_key.user_id = owner_id
+                    if key_encrypted:
+                        existing_key.key_encrypted = key_encrypted
+                    existing_key.name = key_data.get("name")
+                    existing_key.is_standalone = is_standalone
+                    if is_standalone:
+                        existing_key.is_locked = False
+                    existing_key.allowed_providers = key_data.get("allowed_providers")
+                    existing_key.allowed_api_formats = key_data.get(
+                        "allowed_api_formats"
+                    )
+                    existing_key.allowed_models = key_data.get("allowed_models")
+                    existing_key.rate_limit = rate_limit
+                    existing_key.concurrent_limit = key_data.get("concurrent_limit", 5)
+                    existing_key.force_capabilities = key_data.get("force_capabilities")
+                    existing_key.is_active = key_data.get("is_active", True)
+                    existing_key.expires_at = expires_at
+                    existing_key.auto_delete_on_expiry = key_data.get(
+                        "auto_delete_on_expiry", False
+                    )
+                    existing_key.total_requests = key_data.get("total_requests", 0)
+                    existing_key.total_cost_usd = key_data.get("total_cost_usd", 0.0)
+                    existing_key.updated_at = datetime.now(timezone.utc)
+                    stats[stats_key]["updated"] += 1
+                    return existing_key
+
+                new_key = ApiKey(
+                    id=str(uuid.uuid4()),
+                    user_id=owner_id,
+                    key_hash=key_hash,
+                    key_encrypted=key_encrypted,
+                    name=key_data.get("name"),
+                    is_standalone=is_standalone,
+                    allowed_providers=key_data.get("allowed_providers"),
+                    allowed_api_formats=key_data.get("allowed_api_formats"),
+                    allowed_models=key_data.get("allowed_models"),
+                    rate_limit=rate_limit,
+                    concurrent_limit=key_data.get("concurrent_limit", 5),
+                    force_capabilities=key_data.get("force_capabilities"),
+                    is_active=key_data.get("is_active", True),
+                    expires_at=expires_at,
+                    auto_delete_on_expiry=key_data.get("auto_delete_on_expiry", False),
+                    total_requests=key_data.get("total_requests", 0),
+                    total_cost_usd=key_data.get("total_cost_usd", 0.0),
+                )
+                db.add(new_key)
+                db.flush()
+                stats[stats_key]["created"] += 1
+                return new_key
+
+            if isinstance(user_api_keys_data, list):
+                for key_item in user_api_keys_data:
+                    if not isinstance(key_item, dict):
+                        stats["user_api_keys"]["skipped"] += 1
+                        continue
+
+                    owner_email = str(key_item.get("owner_email") or "").strip().lower()
+                    if not owner_email:
+                        stats["errors"].append("用户 API Key 缺少 owner_email")
+                        stats["user_api_keys"]["skipped"] += 1
+                        continue
+
+                    owner = (
+                        db.query(User)
+                        .filter(User.email == owner_email, User.is_deleted.is_(False))
+                        .first()
+                    )
+                    if owner is None:
+                        stats["errors"].append(
+                            f"未找到用户 '{owner_email}'，跳过关联 API Key"
+                        )
+                        stats["user_api_keys"]["skipped"] += 1
+                        continue
+
+                    _upsert_config_api_key(
+                        key_item,
+                        owner_id=owner.id,
+                        is_standalone=False,
+                        stats_key="user_api_keys",
+                    )
+
+            if isinstance(standalone_api_keys_data, list) and standalone_api_keys_data:
+                admin_owner = db.query(User).filter(User.role == UserRole.ADMIN).first()
+                if admin_owner is None:
+                    stats["errors"].append(
+                        "无法导入独立余额 API Key：系统中没有管理员用户"
+                    )
+                    stats["standalone_api_keys"]["skipped"] += len(
+                        standalone_api_keys_data
+                    )
+                else:
+                    for key_item in standalone_api_keys_data:
+                        if not isinstance(key_item, dict):
+                            stats["standalone_api_keys"]["skipped"] += 1
+                            continue
+
+                        api_key = _upsert_config_api_key(
+                            key_item,
+                            owner_id=admin_owner.id,
+                            is_standalone=True,
+                            stats_key="standalone_api_keys",
+                        )
+                        if api_key is not None:
+                            _apply_wallet_snapshot(api_key, key_item)
+
             db.commit()
 
             # 失效缓存
@@ -2564,7 +2844,9 @@ class AdminExportUsersAdapter(AdminApiAdapter):
             "auto_delete_on_expiry": key.auto_delete_on_expiry,
             "total_requests": key.total_requests,
             "total_cost_usd": key.total_cost_usd,
-            "wallet": _wallet_service().serialize_wallet_summary(wallet) if wallet else None,
+            "wallet": _wallet_service().serialize_wallet_summary(wallet)
+            if wallet
+            else None,
         }
 
         if key.key_encrypted:
@@ -2600,7 +2882,9 @@ class AdminExportUsersAdapter(AdminApiAdapter):
             .filter(User.is_deleted.is_(False), User.role != UserRole.ADMIN)
             .all()
         )
-        wallet_map = wallet_service.get_wallets_by_user_ids(db, [user.id for user in users])
+        wallet_map = wallet_service.get_wallets_by_user_ids(
+            db, [user.id for user in users]
+        )
         users_data = []
         for user in users:
             wallet = wallet_map.get(user.id)
@@ -2624,7 +2908,11 @@ class AdminExportUsersAdapter(AdminApiAdapter):
                     "rate_limit": user.rate_limit,
                     "model_capability_settings": user.model_capability_settings,
                     "unlimited": wallet_service.is_unlimited_wallet(wallet),
-                    "wallet": (wallet_service.serialize_wallet_summary(wallet) if wallet else None),
+                    "wallet": (
+                        wallet_service.serialize_wallet_summary(wallet)
+                        if wallet
+                        else None
+                    ),
                     "is_active": user.is_active,
                     "api_keys": api_keys_data,
                 }
@@ -2657,7 +2945,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
             return True
 
     @staticmethod
-    def _resolve_api_key_material(key_data: dict[str, Any]) -> tuple[str | None, str | None]:
+    def _resolve_api_key_material(
+        key_data: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
         """解析用户 API Key 导入材料，优先使用明文 key。"""
         from src.core.crypto import crypto_service
         from src.models.database import ApiKey
@@ -2768,7 +3058,8 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     allowed_models=key_data.get("allowed_models"),
                     rate_limit=self._normalize_imported_api_key_rate_limit(
                         key_data,
-                        is_standalone=is_standalone or key_data.get("is_standalone", False),
+                        is_standalone=is_standalone
+                        or key_data.get("is_standalone", False),
                         legacy_export=legacy_export,
                     ),
                     concurrent_limit=key_data.get("concurrent_limit", 5),
@@ -2814,7 +3105,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     and wallet_payload.get("limit_mode") in {"finite", "unlimited"}
                     else ("unlimited" if user_data.get("unlimited") else "finite")
                 )
-                imported_user_rate_limit = self._normalize_imported_user_rate_limit(user_data)
+                imported_user_rate_limit = self._normalize_imported_user_rate_limit(
+                    user_data
+                )
 
                 if existing_user:
                     user_id = existing_user.id
@@ -2844,7 +3137,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         )
                         existing_user.is_active = user_data.get("is_active", True)
                         existing_user.updated_at = datetime.now(timezone.utc)
-                        wallet = _wallet_service().get_or_create_wallet(db, user=existing_user)
+                        wallet = _wallet_service().get_or_create_wallet(
+                            db, user=existing_user
+                        )
                         if wallet is not None:
                             wallet.limit_mode = wallet_limit_mode
                             if wallet_payload:
@@ -2889,7 +3184,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         allowed_api_formats=user_data.get("allowed_api_formats"),
                         allowed_models=user_data.get("allowed_models"),
                         rate_limit=imported_user_rate_limit,
-                        model_capability_settings=user_data.get("model_capability_settings"),
+                        model_capability_settings=user_data.get(
+                            "model_capability_settings"
+                        ),
                         is_active=user_data.get("is_active", True),
                     )
                     db.add(new_user)
@@ -2947,7 +3244,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         if new_key:
                             db.add(new_key)
                             db.flush()
-                            wallet = _wallet_service().get_or_create_wallet(db, api_key=new_key)
+                            wallet = _wallet_service().get_or_create_wallet(
+                                db, api_key=new_key
+                            )
                             wallet_payload = (
                                 key_data.get("wallet")
                                 if isinstance(key_data.get("wallet"), dict)
@@ -3021,7 +3320,9 @@ class AdminTestSmtpAdapter(AdminApiAdapter):
         # 获取密码：优先使用前端传入的明文密码，否则从数据库获取并解密
         smtp_password = payload.get("smtp_password")
         if not smtp_password:
-            encrypted_password = _system_config_service().get_config(db, "smtp_password")
+            encrypted_password = _system_config_service().get_config(
+                db, "smtp_password"
+            )
             if encrypted_password:
                 try:
                     smtp_password = crypto_service.decrypt(
@@ -3043,17 +3344,23 @@ class AdminTestSmtpAdapter(AdminApiAdapter):
             "smtp_use_tls": (
                 payload.get("smtp_use_tls")
                 if payload.get("smtp_use_tls") is not None
-                else _system_config_service().get_config(db, "smtp_use_tls", default=True)
+                else _system_config_service().get_config(
+                    db, "smtp_use_tls", default=True
+                )
             ),
             "smtp_use_ssl": (
                 payload.get("smtp_use_ssl")
                 if payload.get("smtp_use_ssl") is not None
-                else _system_config_service().get_config(db, "smtp_use_ssl", default=False)
+                else _system_config_service().get_config(
+                    db, "smtp_use_ssl", default=False
+                )
             ),
             "smtp_from_email": payload.get("smtp_from_email")
             or _system_config_service().get_config(db, "smtp_from_email"),
             "smtp_from_name": payload.get("smtp_from_name")
-            or _system_config_service().get_config(db, "smtp_from_name", default="Aether"),
+            or _system_config_service().get_config(
+                db, "smtp_from_name", default="Aether"
+            ),
         }
 
         # 验证必要配置
@@ -3092,10 +3399,15 @@ class AdminGetEmailTemplatesAdapter(AdminApiAdapter):
         db = context.db
         templates = []
 
-        for template_type, type_info in _email_template_service().TEMPLATE_TYPES.items():
+        for (
+            template_type,
+            type_info,
+        ) in _email_template_service().TEMPLATE_TYPES.items():
             # 获取自定义模板或默认模板
             template = _email_template_service().get_template(db, template_type)
-            default_template = _email_template_service().get_default_template(template_type)
+            default_template = _email_template_service().get_default_template(
+                template_type
+            )
 
             # 检查是否使用了自定义模板
             is_custom = (
@@ -3131,7 +3443,9 @@ class AdminGetEmailTemplateAdapter(AdminApiAdapter):
         db = context.db
         type_info = _email_template_service().TEMPLATE_TYPES[self.template_type]
         template = _email_template_service().get_template(db, self.template_type)
-        default_template = _email_template_service().get_default_template(self.template_type)
+        default_template = _email_template_service().get_default_template(
+            self.template_type
+        )
 
         is_custom = (
             template["subject"] != default_template["subject"]
@@ -3218,7 +3532,9 @@ class AdminPreviewEmailTemplateAdapter(AdminApiAdapter):
         preview_variables = {}
         default_values = {
             "app_name": _system_config_service().get_config(db, "email_app_name")
-            or _system_config_service().get_config(db, "smtp_from_name", default="Aether"),
+            or _system_config_service().get_config(
+                db, "smtp_from_name", default="Aether"
+            ),
             "code": "123456",
             "expire_minutes": "30",
             "email": "example@example.com",
@@ -3231,7 +3547,9 @@ class AdminPreviewEmailTemplateAdapter(AdminApiAdapter):
             )
 
         # 渲染模板
-        rendered_html = _email_template_service().render_template(html, preview_variables)
+        rendered_html = _email_template_service().render_template(
+            html, preview_variables
+        )
 
         return {
             "html": rendered_html,
@@ -3260,7 +3578,9 @@ class AdminResetEmailTemplateAdapter(AdminApiAdapter):
         _system_config_service().delete_config(db, html_key)
 
         # 返回默认模板
-        default_template = _email_template_service().get_default_template(self.template_type)
+        default_template = _email_template_service().get_default_template(
+            self.template_type
+        )
         type_info = _email_template_service().TEMPLATE_TYPES[self.template_type]
 
         return {
