@@ -526,15 +526,15 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
 
   if (isAdminPage.value) {
-    // 管理员页面优先加载记录，统计面板在后台顺序刷新，避免瞬时并发打满后端。
+    // 管理员页面优先加载记录，筛选项用户列表优先后台加载，统计面板随后后台刷新，避免瞬时并发打满后端。
     await loadRecords(
       { page: currentPage.value, pageSize: pageSize.value },
       getCurrentFilters(),
       timeRange.value
     )
     void (async () => {
-      await refreshAdminAnalytics({ force: true })
       await loadAdminUsers()
+      await refreshAdminAnalytics({ force: true })
     })()
   } else {
     // 用户页面：loadStats 已包含记录加载，不需要单独调用 loadRecords

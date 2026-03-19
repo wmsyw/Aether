@@ -34,7 +34,7 @@
 
           <!-- 用户筛选（仅管理员可见） -->
           <Select
-            v-if="isAdmin && availableUsers.length > 0"
+            v-if="isAdmin"
             :model-value="filterUser"
             @update:model-value="$emit('update:filterUser', $event)"
           >
