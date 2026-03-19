@@ -87,6 +87,19 @@ class ProviderEnvelope(Protocol):
         with client original headers. Return an empty frozenset to keep all.
         """
 
+    async def extract_error_text(
+        self,
+        source: Any,
+        *,
+        limit: int = 4000,
+    ) -> str:
+        """Extract error text from upstream HTTP error response.
+
+        ``source`` is either an ``httpx.Response`` or ``httpx.HTTPStatusError``.
+        Default behavior (when not overridden) is handled by the caller.
+        Implementations may parse provider-specific error formats.
+        """
+
 
 # ---------------------------------------------------------------------------
 # Envelope Registry

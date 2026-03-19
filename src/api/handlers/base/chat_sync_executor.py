@@ -675,7 +675,10 @@ class ChatSyncExecutor:
         except httpx.HTTPStatusError as e:
             error_body = ""
             try:
-                error_body = resp.text[:4000] if resp.text else ""
+                if envelope and hasattr(envelope, "extract_error_text"):
+                    error_body = await envelope.extract_error_text(resp)
+                else:
+                    error_body = resp.text[:4000] if resp.text else ""
             except Exception:
                 error_body = ""
             # 供 ErrorClassifier 优先读取
@@ -808,8 +811,15 @@ class ChatSyncExecutor:
             request_metadata=stream_fail_metadata,
         )
 
-    async def _extract_error_text(self, e: httpx.HTTPStatusError) -> str:
+    async def _extract_error_text(
+        self,
+        e: httpx.HTTPStatusError,
+        *,
+        envelope: Any = None,
+    ) -> str:
         """从 HTTP 错误中提取错误文本"""
+        if envelope and hasattr(envelope, "extract_error_text"):
+            return await envelope.extract_error_text(e)
         try:
             if hasattr(e.response, "is_stream_consumed") and not e.response.is_stream_consumed:
                 error_bytes = await e.response.aread()
