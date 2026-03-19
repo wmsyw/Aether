@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.user_me.routes import UpdateMyApiKeyAdapter
+from src.api.user_me.routes import CreateMyApiKeyAdapter, UpdateMyApiKeyAdapter
 from src.api.user_me.routes import router as me_router
 from src.database import get_db
 
@@ -49,7 +49,11 @@ async def _fake_update_my_api_key_sync(
     captured["key_id"] = key_id
     captured["name"] = getattr(request, "name", None)
     captured["rate_limit"] = getattr(request, "rate_limit", None)
-    return {"id": key_id, "name": captured["name"], "rate_limit": captured["rate_limit"]}
+    return {
+        "id": key_id,
+        "name": captured["name"],
+        "rate_limit": captured["rate_limit"],
+    }
 
 
 def test_update_my_api_key_route_path_smoke(monkeypatch: Any) -> None:
@@ -60,12 +64,18 @@ def test_update_my_api_key_route_path_smoke(monkeypatch: Any) -> None:
         captured["key_id"] = key_id
         captured["name"] = getattr(request, "name", None)
         captured["rate_limit"] = getattr(request, "rate_limit", None)
-        return {"id": key_id, "name": captured["name"], "rate_limit": captured["rate_limit"]}
+        return {
+            "id": key_id,
+            "name": captured["name"],
+            "rate_limit": captured["rate_limit"],
+        }
 
     monkeypatch.setattr("src.api.user_me.routes._update_my_api_key_sync", _sync)
     client = _build_me_app(MagicMock(), monkeypatch)
 
-    response = client.put("/api/users/me/api-keys/key-1", json={"name": "Edited", "rate_limit": 6})
+    response = client.put(
+        "/api/users/me/api-keys/key-1", json={"name": "Edited", "rate_limit": 6}
+    )
 
     assert response.status_code == 200
     assert response.json()["rate_limit"] == 6
@@ -78,7 +88,9 @@ def test_update_my_api_key_route_path_smoke(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_my_api_key_adapter_passes_rate_limit_and_name(monkeypatch: Any) -> None:
+async def test_update_my_api_key_adapter_passes_rate_limit_and_name(
+    monkeypatch: Any,
+) -> None:
     captured: dict[str, object] = {}
 
     def _sync(user_id: str, key_id: str, request: object) -> dict[str, object]:
@@ -86,7 +98,11 @@ async def test_update_my_api_key_adapter_passes_rate_limit_and_name(monkeypatch:
         captured["key_id"] = key_id
         captured["name"] = getattr(request, "name", None)
         captured["rate_limit"] = getattr(request, "rate_limit", None)
-        return {"id": key_id, "name": captured["name"], "rate_limit": captured["rate_limit"]}
+        return {
+            "id": key_id,
+            "name": captured["name"],
+            "rate_limit": captured["rate_limit"],
+        }
 
     monkeypatch.setattr("src.api.user_me.routes._update_my_api_key_sync", _sync)
 
@@ -107,4 +123,42 @@ async def test_update_my_api_key_adapter_passes_rate_limit_and_name(monkeypatch:
         "key_id": "key-2",
         "name": "Edited Again",
         "rate_limit": 15,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_my_api_key_adapter_passes_manual_key(monkeypatch: Any) -> None:
+    captured: dict[str, object] = {}
+
+    def _sync(user_id: str, request: object) -> dict[str, object]:
+        captured["user_id"] = user_id
+        captured["name"] = getattr(request, "name", None)
+        captured["rate_limit"] = getattr(request, "rate_limit", None)
+        captured["key"] = getattr(request, "key", None)
+        return {"id": "key-manual", "key": captured["key"]}
+
+    monkeypatch.setattr("src.api.user_me.routes._create_my_api_key_sync", _sync)
+
+    adapter = CreateMyApiKeyAdapter()
+    context = SimpleNamespace(
+        db=MagicMock(),
+        user=SimpleNamespace(id="user-1"),
+        request=SimpleNamespace(state=SimpleNamespace()),
+        ensure_json_body=lambda: {
+            "name": "Manual Key",
+            "rate_limit": 7,
+            "key": "sk-12345678901",
+        },
+        add_audit_metadata=lambda **_: None,
+    )
+
+    result = await adapter.handle(context)
+
+    assert result["id"] == "key-manual"
+    assert result["key"] == "sk-12345678901"
+    assert captured == {
+        "user_id": "user-1",
+        "name": "Manual Key",
+        "rate_limit": 7,
+        "key": "sk-12345678901",
     }

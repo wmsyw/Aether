@@ -686,6 +686,7 @@ import {
 import { StandaloneKeyFormDialog, type StandaloneKeyFormData } from '@/features/api-keys'
 import { parseApiError } from '@/utils/errorParser'
 import { formatTokens, formatRateLimitInheritable, isRateLimitInherited, isRateLimitUnlimited } from '@/utils/format'
+import { normalizeApiKeyValue, validateManualApiKeyValue } from '@/utils/apiKey'
 import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
@@ -1077,8 +1078,16 @@ async function handleKeyFormSubmit(data: StandaloneKeyFormData) {
         error('初始余额必须大于 0')
         return
       }
+      if (data.key) {
+        const manualKeyError = validateManualApiKeyValue(data.key)
+        if (manualKeyError) {
+          error(manualKeyError)
+          return
+        }
+      }
       const createData: CreateStandaloneApiKeyRequest = {
         name: data.name || undefined,
+        key: data.key ? normalizeApiKeyValue(data.key) : undefined,
         initial_balance_usd: isUnlimited ? null : (data.initial_balance_usd as number),
         rate_limit: data.rate_limit ?? null,  // undefined = 跟随系统默认，显式传 null
         expires_at: data.expires_at || null,  // undefined/空 = 永不过期

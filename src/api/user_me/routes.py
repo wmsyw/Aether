@@ -64,7 +64,9 @@ router = APIRouter(prefix="/api/users/me", tags=["User Profile"])
 pipeline = get_pipeline()
 
 
-def _calculate_token_cache_hit_rate(total_input_context: int, cache_read_tokens: int) -> float:
+def _calculate_token_cache_hit_rate(
+    total_input_context: int, cache_read_tokens: int
+) -> float:
     """计算缓存命中率。
 
     Args:
@@ -93,7 +95,9 @@ def _update_profile_sync(
 
         if request.email:
             existing = (
-                db.query(User).filter(User.email == request.email, User.id != user.id).first()
+                db.query(User)
+                .filter(User.email == request.email, User.id != user.id)
+                .first()
             )
             if existing:
                 raise InvalidRequestException("邮箱已被使用")
@@ -102,7 +106,9 @@ def _update_profile_sync(
 
         if request.username:
             existing = (
-                db.query(User).filter(User.username == request.username, User.id != user.id).first()
+                db.query(User)
+                .filter(User.username == request.username, User.id != user.id)
+                .first()
             )
             if existing:
                 raise InvalidRequestException("用户名已被使用")
@@ -137,7 +143,9 @@ def _change_password_sync(
                 raise InvalidRequestException("新密码不能与当前密码相同")
 
         policy_level = SystemConfigService.get_password_policy_level(db)
-        valid, error_msg = PasswordValidator.validate(request.new_password, policy=policy_level)
+        valid, error_msg = PasswordValidator.validate(
+            request.new_password, policy=policy_level
+        )
         if not valid:
             raise InvalidRequestException(error_msg or "密码格式无效")
 
@@ -153,11 +161,14 @@ def _change_password_sync(
         return {"message": f"密码{action}成功"}, user.email, action
 
 
-def _list_user_sessions_sync(user_id: str, current_session_id: str | None) -> list[dict[str, Any]]:
+def _list_user_sessions_sync(
+    user_id: str, current_session_id: str | None
+) -> list[dict[str, Any]]:
     with get_db_context() as db:
         sessions = SessionService.list_user_sessions(db, user_id=user_id)
         return [
-            UserSessionResponse.from_db(s, current_session_id=current_session_id) for s in sessions
+            UserSessionResponse.from_db(s, current_session_id=current_session_id)
+            for s in sessions
         ]
 
 
@@ -168,11 +179,15 @@ def _update_session_label_sync(
     current_session_id: str | None,
 ) -> dict[str, Any]:
     with get_db_context() as db:
-        session = SessionService.get_session_for_user(db, user_id=user_id, session_id=session_id)
+        session = SessionService.get_session_for_user(
+            db, user_id=user_id, session_id=session_id
+        )
         if not session:
             raise NotFoundException("会话不存在", "session")
         SessionService.update_session_label(session, request.device_label)
-        return UserSessionResponse.from_db(session, current_session_id=current_session_id)
+        return UserSessionResponse.from_db(
+            session, current_session_id=current_session_id
+        )
 
 
 def _revoke_session_sync(
@@ -180,7 +195,9 @@ def _revoke_session_sync(
     session_id: str,
 ) -> dict[str, Any]:
     with get_db_context() as db:
-        session = SessionService.get_session_for_user(db, user_id=user_id, session_id=session_id)
+        session = SessionService.get_session_for_user(
+            db, user_id=user_id, session_id=session_id
+        )
         if not session:
             raise NotFoundException("会话不存在", "session")
         SessionService.revoke_session(
@@ -206,13 +223,16 @@ def _revoke_other_sessions_sync(
         return {"message": "其他设备已退出登录", "revoked_count": revoked_count}
 
 
-def _create_my_api_key_sync(user_id: str, request: CreateMyApiKeyRequest) -> dict[str, Any]:
+def _create_my_api_key_sync(
+    user_id: str, request: CreateMyApiKeyRequest
+) -> dict[str, Any]:
     with get_db_context() as db:
         try:
             api_key, plain_key = ApiKeyService.create_api_key(
                 db=db,
                 user_id=user_id,
                 name=request.name,
+                key=request.key,
                 rate_limit=request.rate_limit,
             )
         except ValueError as exc:
@@ -229,7 +249,11 @@ def _create_my_api_key_sync(user_id: str, request: CreateMyApiKeyRequest) -> dic
 
 def _delete_my_api_key_sync(user_id: str, key_id: str) -> dict[str, str]:
     with get_db_context() as db:
-        api_key = db.query(ApiKey).filter(ApiKey.id == key_id, ApiKey.user_id == user_id).first()
+        api_key = (
+            db.query(ApiKey)
+            .filter(ApiKey.id == key_id, ApiKey.user_id == user_id)
+            .first()
+        )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
         if api_key.is_locked:
@@ -242,7 +266,11 @@ def _delete_my_api_key_sync(user_id: str, key_id: str) -> dict[str, str]:
 
 def _toggle_my_api_key_sync(user_id: str, key_id: str) -> dict[str, Any]:
     with get_db_context() as db:
-        api_key = db.query(ApiKey).filter(ApiKey.id == key_id, ApiKey.user_id == user_id).first()
+        api_key = (
+            db.query(ApiKey)
+            .filter(ApiKey.id == key_id, ApiKey.user_id == user_id)
+            .first()
+        )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
         if api_key.is_locked:
@@ -295,8 +323,12 @@ def _update_my_api_key_sync(
             "allowed_providers": updated.allowed_providers,
             "force_capabilities": updated.force_capabilities,
             "rate_limit": updated.rate_limit,
-            "last_used_at": updated.last_used_at.isoformat() if updated.last_used_at else None,
-            "expires_at": updated.expires_at.isoformat() if updated.expires_at else None,
+            "last_used_at": updated.last_used_at.isoformat()
+            if updated.last_used_at
+            else None,
+            "expires_at": updated.expires_at.isoformat()
+            if updated.expires_at
+            else None,
             "created_at": updated.created_at.isoformat(),
             "message": "API密钥已更新",
         }
@@ -309,7 +341,9 @@ def _update_api_key_providers_sync(
 ) -> dict[str, str]:
     with get_db_context() as db:
         api_key = (
-            db.query(ApiKey).filter(ApiKey.id == api_key_id, ApiKey.user_id == user_id).first()
+            db.query(ApiKey)
+            .filter(ApiKey.id == api_key_id, ApiKey.user_id == user_id)
+            .first()
         )
         if not api_key:
             raise NotFoundException("API密钥不存在")
@@ -348,7 +382,9 @@ def _update_api_key_capabilities_sync(
 
     with get_db_context() as db:
         api_key = (
-            db.query(ApiKey).filter(ApiKey.id == api_key_id, ApiKey.user_id == user_id).first()
+            db.query(ApiKey)
+            .filter(ApiKey.id == api_key_id, ApiKey.user_id == user_id)
+            .first()
         )
         if not api_key:
             raise NotFoundException("API密钥不存在")
@@ -390,7 +426,9 @@ def _update_api_key_capabilities_sync(
         }
 
 
-def _update_preferences_sync(user_id: str, request: UpdatePreferencesRequest) -> dict[str, str]:
+def _update_preferences_sync(
+    user_id: str, request: UpdatePreferencesRequest
+) -> dict[str, str]:
     with get_db_context() as db:
         PreferenceService.update_preferences(
             db=db,
@@ -425,13 +463,17 @@ def _update_model_capability_settings_sync(
         settings = payload.get("model_capability_settings")
         if settings is not None:
             if not isinstance(settings, dict):
-                raise InvalidRequestException("model_capability_settings 必须是对象类型")
+                raise InvalidRequestException(
+                    "model_capability_settings 必须是对象类型"
+                )
 
             for model_name, capabilities in settings.items():
                 if not isinstance(model_name, str):
                     raise InvalidRequestException("模型名称必须是字符串")
                 if not isinstance(capabilities, dict):
-                    raise InvalidRequestException(f"模型 {model_name} 的能力配置必须是对象类型")
+                    raise InvalidRequestException(
+                        f"模型 {model_name} 的能力配置必须是对象类型"
+                    )
 
                 for cap_name, cap_value in capabilities.items():
                     cap_def = CAPABILITY_DEFINITIONS.get(cap_name)
@@ -440,7 +482,9 @@ def _update_model_capability_settings_sync(
                     if cap_def.config_mode != CapabilityConfigMode.USER_CONFIGURABLE:
                         raise InvalidRequestException(f"能力 {cap_name} 不支持用户配置")
                     if not isinstance(cap_value, bool):
-                        raise InvalidRequestException(f"能力 {cap_name} 的值必须是布尔类型")
+                        raise InvalidRequestException(
+                            f"能力 {cap_name} 的值必须是布尔类型"
+                        )
 
         user.model_capability_settings = settings
         user.updated_at = datetime.now(timezone.utc)
@@ -492,7 +536,9 @@ async def get_my_profile(request: Request, db: Session = Depends(get_db)) -> Any
     **返回字段**: id, email, username, role, is_active, billing, preferences 等
     """
     adapter = MeProfileAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("")
@@ -507,7 +553,9 @@ async def update_my_profile(request: Request, db: Session = Depends(get_db)) -> 
     - `username`: 新用户名（可选）
     """
     adapter = UpdateProfileAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/password")
@@ -522,21 +570,27 @@ async def change_my_password(request: Request, db: Session = Depends(get_db)) ->
     - `new_password`: 新密码（至少 6 位）
     """
     adapter = ChangePasswordAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/sessions")
 async def list_my_sessions(request: Request, db: Session = Depends(get_db)) -> Any:
     """列出当前用户的登录会话。"""
     adapter = ListMySessionsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/sessions/others")
 async def revoke_other_sessions(request: Request, db: Session = Depends(get_db)) -> Any:
     """退出当前设备之外的所有登录会话。"""
     adapter = RevokeOtherSessionsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/sessions/{session_id}")
@@ -547,7 +601,9 @@ async def update_my_session_label(
 ) -> Any:
     """修改某个登录设备的显示名称。"""
     adapter = UpdateMySessionLabelAdapter(session_id=session_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/sessions/{session_id}")
@@ -558,7 +614,9 @@ async def revoke_my_session(
 ) -> Any:
     """退出指定登录会话。"""
     adapter = RevokeMySessionAdapter(session_id=session_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== API密钥管理 ==============
@@ -575,7 +633,9 @@ async def list_my_api_keys(request: Request, db: Session = Depends(get_db)) -> A
     **返回字段**: id, name, key_display, is_active, total_requests, total_cost_usd, last_used_at 等
     """
     adapter = ListMyApiKeysAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/api-keys")
@@ -591,7 +651,9 @@ async def create_my_api_key(request: Request, db: Session = Depends(get_db)) -> 
     **返回**: 包含完整密钥值的响应（仅此一次显示完整密钥）
     """
     adapter = CreateMyApiKeyAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/api-keys/{key_id}")
@@ -616,11 +678,15 @@ async def get_my_api_key(
         adapter = GetMyFullKeyAdapter(key_id=key_id)
     else:
         adapter = GetMyApiKeyDetailAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/api-keys/{key_id}")
-async def delete_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> None:
+async def delete_my_api_key(
+    key_id: str, request: Request, db: Session = Depends(get_db)
+) -> None:
     """
     删除 API 密钥
 
@@ -630,11 +696,15 @@ async def delete_my_api_key(key_id: str, request: Request, db: Session = Depends
     - `key_id`: 密钥 ID
     """
     adapter = DeleteMyApiKeyAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/api-keys/{key_id}")
-async def update_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
+async def update_my_api_key(
+    key_id: str, request: Request, db: Session = Depends(get_db)
+) -> Any:
     """
     更新 API 密钥
 
@@ -644,11 +714,15 @@ async def update_my_api_key(key_id: str, request: Request, db: Session = Depends
     - `key_id`: 密钥 ID
     """
     adapter = UpdateMyApiKeyAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/api-keys/{key_id}")
-async def toggle_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
+async def toggle_my_api_key(
+    key_id: str, request: Request, db: Session = Depends(get_db)
+) -> Any:
     """
     切换 API 密钥状态
 
@@ -658,7 +732,9 @@ async def toggle_my_api_key(key_id: str, request: Request, db: Session = Depends
     - `key_id`: 密钥 ID
     """
     adapter = ToggleMyApiKeyAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== 使用统计 ==============
@@ -694,8 +770,12 @@ async def get_my_usage(
     time_range = _build_time_range_params(
         start_date, end_date, preset, timezone_name, tz_offset_minutes
     )
-    adapter = GetUsageAdapter(time_range=time_range, search=search, limit=limit, offset=offset)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    adapter = GetUsageAdapter(
+        time_range=time_range, search=search, limit=limit, offset=offset
+    )
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/usage/active")
@@ -713,7 +793,9 @@ async def get_my_active_requests(
     - `ids`: 要查询的请求 ID 列表，逗号分隔
     """
     adapter = GetActiveRequestsAdapter(ids=ids)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/usage/interval-timeline")
@@ -731,7 +813,9 @@ async def get_my_interval_timeline(
     **返回**: 包含时间戳和间隔时间的数据点列表
     """
     adapter = GetMyIntervalTimelineAdapter(hours=hours, limit=limit)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/usage/heatmap")
@@ -748,11 +832,15 @@ async def get_my_activity_heatmap(
     **返回**: 包含日期和请求数量的数据列表
     """
     adapter = GetMyActivityHeatmapAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/providers")
-async def list_available_providers(request: Request, db: Session = Depends(get_db)) -> Any:
+async def list_available_providers(
+    request: Request, db: Session = Depends(get_db)
+) -> Any:
     """
     获取可用提供商列表
 
@@ -761,7 +849,9 @@ async def list_available_providers(request: Request, db: Session = Depends(get_d
     **返回字段**: id, name, display_name, endpoints, models 等
     """
     adapter = ListAvailableProvidersAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/available-models")
@@ -789,7 +879,9 @@ async def list_available_models(
     - total: 符合条件的模型总数
     """
     adapter = ListAvailableModelsAdapter(skip=skip, limit=limit, search=search)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/endpoint-status")
@@ -802,7 +894,9 @@ async def get_endpoint_status(request: Request, db: Session = Depends(get_db)) -
     **返回**: 按 API 格式分组的端点健康状态
     """
     adapter = GetEndpointStatusAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== API密钥与提供商关联 ==============
@@ -829,7 +923,9 @@ async def update_api_key_providers(
     - `allowed_providers`: 允许的提供商 ID 列表
     """
     adapter = UpdateApiKeyProvidersAdapter(api_key_id=api_key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/api-keys/{api_key_id}/capabilities")
@@ -850,7 +946,9 @@ async def update_api_key_capabilities(
     - `force_capabilities`: 能力配置字典，如 `{"code_execution": true}`
     """
     adapter = UpdateApiKeyCapabilitiesAdapter(api_key_id=api_key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== 偏好设置 ==============
@@ -866,11 +964,15 @@ async def get_my_preferences(request: Request, db: Session = Depends(get_db)) ->
     **返回字段**: avatar_url, bio, theme, language, timezone, notifications 等
     """
     adapter = GetPreferencesAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/preferences")
-async def update_my_preferences(request: Request, db: Session = Depends(get_db)) -> None:
+async def update_my_preferences(
+    request: Request, db: Session = Depends(get_db)
+) -> None:
     """
     更新偏好设置
 
@@ -885,11 +987,15 @@ async def update_my_preferences(request: Request, db: Session = Depends(get_db))
     - 等
     """
     adapter = UpdatePreferencesAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/model-capabilities")
-async def get_model_capability_settings(request: Request, db: Session = Depends(get_db)) -> Any:
+async def get_model_capability_settings(
+    request: Request, db: Session = Depends(get_db)
+) -> Any:
     """
     获取模型能力配置
 
@@ -898,11 +1004,15 @@ async def get_model_capability_settings(request: Request, db: Session = Depends(
     **返回**: model_capability_settings 字典
     """
     adapter = GetModelCapabilitySettingsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/model-capabilities")
-async def update_model_capability_settings(request: Request, db: Session = Depends(get_db)) -> None:
+async def update_model_capability_settings(
+    request: Request, db: Session = Depends(get_db)
+) -> None:
     """
     更新模型能力配置
 
@@ -912,7 +1022,9 @@ async def update_model_capability_settings(request: Request, db: Session = Depen
     - `model_capability_settings`: 模型能力配置字典，格式为 `{"model_name": {"capability": true}}`
     """
     adapter = UpdateModelCapabilitySettingsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== Pipeline 适配器 ==============
@@ -1119,7 +1231,9 @@ class CreateMyApiKeyAdapter(AuthenticatedApiAdapter):
                 raise InvalidRequestException(translate_pydantic_error(errors[0]))
             raise InvalidRequestException("请求数据验证失败")
 
-        return await run_in_threadpool(_create_my_api_key_sync, context.user.id, request)
+        return await run_in_threadpool(
+            _create_my_api_key_sync, context.user.id, request
+        )
 
 
 @dataclass
@@ -1134,7 +1248,9 @@ class GetMyFullKeyAdapter(AuthenticatedApiAdapter):
 
         # 查找API密钥，确保属于当前用户
         api_key = (
-            db.query(ApiKey).filter(ApiKey.id == self.key_id, ApiKey.user_id == user.id).first()
+            db.query(ApiKey)
+            .filter(ApiKey.id == self.key_id, ApiKey.user_id == user.id)
+            .first()
         )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
@@ -1167,7 +1283,9 @@ class GetMyApiKeyDetailAdapter(AuthenticatedApiAdapter):
         user = context.user
 
         api_key = (
-            db.query(ApiKey).filter(ApiKey.id == self.key_id, ApiKey.user_id == user.id).first()
+            db.query(ApiKey)
+            .filter(ApiKey.id == self.key_id, ApiKey.user_id == user.id)
+            .first()
         )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
@@ -1181,8 +1299,12 @@ class GetMyApiKeyDetailAdapter(AuthenticatedApiAdapter):
             "allowed_providers": api_key.allowed_providers,
             "force_capabilities": api_key.force_capabilities,
             "rate_limit": api_key.rate_limit,
-            "last_used_at": api_key.last_used_at.isoformat() if api_key.last_used_at else None,
-            "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+            "last_used_at": api_key.last_used_at.isoformat()
+            if api_key.last_used_at
+            else None,
+            "expires_at": api_key.expires_at.isoformat()
+            if api_key.expires_at
+            else None,
             "created_at": api_key.created_at.isoformat(),
         }
 
@@ -1215,7 +1337,9 @@ class DeleteMyApiKeyAdapter(AuthenticatedApiAdapter):
     key_id: str
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        return await run_in_threadpool(_delete_my_api_key_sync, context.user.id, self.key_id)
+        return await run_in_threadpool(
+            _delete_my_api_key_sync, context.user.id, self.key_id
+        )
 
 
 @dataclass
@@ -1225,7 +1349,9 @@ class ToggleMyApiKeyAdapter(AuthenticatedApiAdapter):
     key_id: str
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        return await run_in_threadpool(_toggle_my_api_key_sync, context.user.id, self.key_id)
+        return await run_in_threadpool(
+            _toggle_my_api_key_sync, context.user.id, self.key_id
+        )
 
 
 @dataclass
@@ -1257,7 +1383,10 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
         from sqlalchemy.orm import load_only
 
         from src.models.database import ProviderEndpoint
-        from src.utils.database_helpers import escape_like_pattern, safe_truncate_escaped
+        from src.utils.database_helpers import (
+            escape_like_pattern,
+            safe_truncate_escaped,
+        )
 
         db = context.db
         user = context.user
@@ -1319,7 +1448,9 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             stats["output_tokens"] += item["output_tokens"]
             stats["total_tokens"] += item["total_tokens"]
             stats["cache_read_tokens"] += int(item.get("cache_read_tokens", 0) or 0)
-            stats["cache_creation_tokens"] += int(item.get("cache_creation_tokens", 0) or 0)
+            stats["cache_creation_tokens"] += int(
+                item.get("cache_creation_tokens", 0) or 0
+            )
             stats["total_input_context"] += int(item.get("total_input_context", 0) or 0)
             stats["total_cost_usd"] += item["total_cost_usd"]
             # 管理员可以看到真实成本
@@ -1340,18 +1471,26 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                 "total_response_time_ms": 0.0,
                 "response_time_count": 0,
             }
-            provider_stats = provider_summary.setdefault(provider_name, provider_base_stats)
+            provider_stats = provider_summary.setdefault(
+                provider_name, provider_base_stats
+            )
             provider_stats["requests"] += item["requests"]
             provider_stats["total_tokens"] += item["total_tokens"]
             provider_stats["output_tokens"] += item.get("output_tokens", 0) or 0
-            provider_stats["cache_read_tokens"] += int(item.get("cache_read_tokens", 0) or 0)
+            provider_stats["cache_read_tokens"] += int(
+                item.get("cache_read_tokens", 0) or 0
+            )
             provider_stats["cache_creation_tokens"] += int(
                 item.get("cache_creation_tokens", 0) or 0
             )
-            provider_stats["total_input_context"] += int(item.get("total_input_context", 0) or 0)
+            provider_stats["total_input_context"] += int(
+                item.get("total_input_context", 0) or 0
+            )
             provider_stats["total_cost_usd"] += item["total_cost_usd"]
             provider_stats["success_count"] += int(item.get("success_count", 0) or 0)
-            success_response_time_count = int(item.get("success_response_time_count", 0) or 0)
+            success_response_time_count = int(
+                item.get("success_response_time_count", 0) or 0
+            )
             if success_response_time_count > 0:
                 provider_stats["total_response_time_ms"] += float(
                     item.get("success_response_time_sum_ms", 0.0) or 0.0
@@ -1364,11 +1503,14 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                 cache_read_tokens=int(model_stats.get("cache_read_tokens", 0) or 0),
             )
 
-        summary_by_model = sorted(model_summary.values(), key=lambda x: x["requests"], reverse=True)
+        summary_by_model = sorted(
+            model_summary.values(), key=lambda x: x["requests"], reverse=True
+        )
         summary_by_provider = []
         for provider_stats in provider_summary.values():
             avg_response_time_ms = (
-                provider_stats["total_response_time_ms"] / provider_stats["response_time_count"]
+                provider_stats["total_response_time_ms"]
+                / provider_stats["response_time_count"]
                 if provider_stats["response_time_count"] > 0
                 else 0
             )
@@ -1387,15 +1529,21 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                     "cache_read_tokens": provider_stats["cache_read_tokens"],
                     "cache_creation_tokens": provider_stats["cache_creation_tokens"],
                     "cache_hit_rate": _calculate_token_cache_hit_rate(
-                        total_input_context=int(provider_stats.get("total_input_context", 0) or 0),
-                        cache_read_tokens=int(provider_stats.get("cache_read_tokens", 0) or 0),
+                        total_input_context=int(
+                            provider_stats.get("total_input_context", 0) or 0
+                        ),
+                        cache_read_tokens=int(
+                            provider_stats.get("cache_read_tokens", 0) or 0
+                        ),
                     ),
                     "total_cost_usd": provider_stats["total_cost_usd"],
                     "success_rate": round(success_rate, 2),
                     "avg_response_time_ms": round(avg_response_time_ms, 2),
                 }
             )
-        summary_by_provider = sorted(summary_by_provider, key=lambda x: x["requests"], reverse=True)
+        summary_by_provider = sorted(
+            summary_by_provider, key=lambda x: x["requests"], reverse=True
+        )
 
         # 按 api_format 聚合统计（独立查询，因为 get_usage_summary 按 provider+model 分组无此维度）
         api_format_query = db.query(
@@ -1419,7 +1567,9 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                 Usage.created_at >= start_utc, Usage.created_at < end_utc
             )
         api_format_stats = (
-            api_format_query.group_by(Usage.api_format).order_by(func.count(Usage.id).desc()).all()
+            api_format_query.group_by(Usage.api_format)
+            .order_by(func.count(Usage.id).desc())
+            .all()
         )
         summary_by_api_format = [
             {
@@ -1453,11 +1603,15 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
         query = (
             db.query(Usage, ApiKey, ProviderEndpoint)
             .outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
-            .outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
+            .outerjoin(
+                ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id
+            )
             .filter(Usage.user_id == user.id)
         )
         if start_utc and end_utc:
-            query = query.filter(Usage.created_at >= start_utc, Usage.created_at < end_utc)
+            query = query.filter(
+                Usage.created_at >= start_utc, Usage.created_at < end_utc
+            )
 
         # 通用搜索：密钥名、模型名
         # 支持空格分隔的组合搜索，多个关键词之间是 AND 关系
@@ -1513,15 +1667,20 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             load_only(ProviderEndpoint.id, ProviderEndpoint.api_format),
         )
         usage_records = (
-            query.order_by(Usage.created_at.desc()).offset(self.offset).limit(self.limit).all()
+            query.order_by(Usage.created_at.desc())
+            .offset(self.offset)
+            .limit(self.limit)
+            .all()
         )
 
         # 复用 summary 聚合中的成功请求响应时间，避免额外 AVG SQL
         total_success_response_time_ms = sum(
-            float(item.get("success_response_time_sum_ms", 0.0) or 0.0) for item in summary_list
+            float(item.get("success_response_time_sum_ms", 0.0) or 0.0)
+            for item in summary_list
         )
         total_success_response_count = sum(
-            int(item.get("success_response_time_count", 0) or 0) for item in summary_list
+            int(item.get("success_response_time_count", 0) or 0)
+            for item in summary_list
         )
         avg_response_time = (
             total_success_response_time_ms / total_success_response_count / 1000.0
@@ -1561,7 +1720,9 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             for i, (r, _, _) in enumerate(usage_records):
                 # 确保字段有值，避免前端显示 -
                 actual_cost = (
-                    r.actual_total_cost_usd if r.actual_total_cost_usd is not None else 0.0
+                    r.actual_total_cost_usd
+                    if r.actual_total_cost_usd is not None
+                    else 0.0
                 )
                 rate_mult = r.rate_multiplier if r.rate_multiplier is not None else 1.0
                 response_data["records"][i]["actual_cost"] = actual_cost
@@ -1592,10 +1753,17 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                 # 新模式：仅对 signature 进行推断（历史旧值保持 False，避免解析失败）
                 client_raw = str(api_format or "").strip()
                 endpoint_raw = str(endpoint_api_format or "").strip()
-                if client_raw and endpoint_raw and ":" in client_raw and ":" in endpoint_raw:
+                if (
+                    client_raw
+                    and endpoint_raw
+                    and ":" in client_raw
+                    and ":" in endpoint_raw
+                ):
                     client_fmt = normalize_signature_key(client_raw)
                     endpoint_fmt = normalize_signature_key(endpoint_raw)
-                    has_format_conversion = not can_passthrough_endpoint(client_fmt, endpoint_fmt)
+                    has_format_conversion = not can_passthrough_endpoint(
+                        client_fmt, endpoint_fmt
+                    )
                 else:
                     has_format_conversion = False
 
@@ -1734,7 +1902,9 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
         global_conversion_enabled = SystemConfigService.is_format_conversion_enabled(db)
 
         # 获取所有可用的 Provider ID（考虑格式转换）
-        available_provider_ids = self._get_all_available_provider_ids(db, global_conversion_enabled)
+        available_provider_ids = self._get_all_available_provider_ids(
+            db, global_conversion_enabled
+        )
 
         if not available_provider_ids:
             return {"models": [], "total": 0}
@@ -1795,7 +1965,9 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
             .filter(UserModelUsageCount.user_id == user.id)
             .all()
         )
-        user_usage_map: dict[str, int] = {row.model: row.usage_count for row in user_usage_rows}
+        user_usage_map: dict[str, int] = {
+            row.model: row.usage_count for row in user_usage_rows
+        }
 
         # 转换为响应格式（复用 PublicGlobalModelResponse schema）
         model_responses = [
@@ -1890,7 +2062,9 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
                 continue
 
             endpoint_format = make_signature_key(str(api_family), str(endpoint_kind))
-            skip_endpoint_check = global_conversion_enabled or bool(provider_conversion_enabled)
+            skip_endpoint_check = global_conversion_enabled or bool(
+                provider_conversion_enabled
+            )
 
             # 检查该端点是否能被任意客户端格式访问
             for client_format in all_formats:
@@ -1903,7 +2077,9 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
                     skip_endpoint_check=skip_endpoint_check,
                 )
                 if is_compatible:
-                    provider_to_formats.setdefault(provider_id, set()).add(endpoint_format)
+                    provider_to_formats.setdefault(provider_id, set()).add(
+                        endpoint_format
+                    )
                     break  # 只要有一种客户端格式能访问就够了
 
         if not provider_to_formats:
@@ -1952,9 +2128,13 @@ class ListAvailableProvidersAdapter(AuthenticatedApiAdapter):
             for model in direct_models:
                 global_model = model.global_model
                 display_name = (
-                    global_model.display_name if global_model else model.provider_model_name
+                    global_model.display_name
+                    if global_model
+                    else model.provider_model_name
                 )
-                unified_name = global_model.name if global_model else model.provider_model_name
+                unified_name = (
+                    global_model.name if global_model else model.provider_model_name
+                )
                 models_data.append(
                     {
                         "id": model.id,
@@ -2018,7 +2198,10 @@ class UpdateApiKeyCapabilitiesAdapter(AuthenticatedApiAdapter):
     api_key_id: str
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        from src.core.key_capabilities import CAPABILITY_DEFINITIONS, CapabilityConfigMode
+        from src.core.key_capabilities import (
+            CAPABILITY_DEFINITIONS,
+            CapabilityConfigMode,
+        )
         from src.models.database import AuditEventType
         from src.services.system.audit import audit_service
 
@@ -2042,13 +2225,17 @@ class GetPreferencesAdapter(AuthenticatedApiAdapter):
     """获取用户偏好设置的适配器"""
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        preferences = PreferenceService.get_or_create_preferences(context.db, context.user.id)
+        preferences = PreferenceService.get_or_create_preferences(
+            context.db, context.user.id
+        )
         return {
             "avatar_url": preferences.avatar_url,
             "bio": preferences.bio,
             "default_provider_id": preferences.default_provider_id,
             "default_provider": (
-                preferences.default_provider.name if preferences.default_provider else None
+                preferences.default_provider.name
+                if preferences.default_provider
+                else None
             ),
             "theme": preferences.theme,
             "language": preferences.language,
@@ -2074,7 +2261,9 @@ class UpdatePreferencesAdapter(AuthenticatedApiAdapter):
                 raise InvalidRequestException(translate_pydantic_error(errors[0]))
             raise InvalidRequestException("请求数据验证失败")
 
-        return await run_in_threadpool(_update_preferences_sync, context.user.id, request)
+        return await run_in_threadpool(
+            _update_preferences_sync, context.user.id, request
+        )
 
 
 class GetModelCapabilitySettingsAdapter(AuthenticatedApiAdapter):
@@ -2091,7 +2280,10 @@ class UpdateModelCapabilitySettingsAdapter(AuthenticatedApiAdapter):
     """更新用户的模型能力配置"""
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        from src.core.key_capabilities import CAPABILITY_DEFINITIONS, CapabilityConfigMode
+        from src.core.key_capabilities import (
+            CAPABILITY_DEFINITIONS,
+            CapabilityConfigMode,
+        )
         from src.models.database import AuditEventType
         from src.services.system.audit import audit_service
 

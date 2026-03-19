@@ -293,7 +293,10 @@ class CreateUserRequest(BaseModel):
         """校验并规范化 allowed_api_formats（endpoint signature: family:kind）。"""
         if v is None:
             return None
-        from src.core.api_format import list_endpoint_definitions, resolve_endpoint_definition
+        from src.core.api_format import (
+            list_endpoint_definitions,
+            resolve_endpoint_definition,
+        )
         from src.core.api_format.signature import normalize_signature_key
 
         allowed = [d.signature_key for d in list_endpoint_definitions()]
@@ -304,7 +307,9 @@ class CreateUserRequest(BaseModel):
                 continue
             norm = normalize_signature_key(fmt)
             if resolve_endpoint_definition(norm) is None:
-                raise ValueError(f"allowed_api_formats 必须是以下之一: {allowed}，当前值: {fmt}")
+                raise ValueError(
+                    f"allowed_api_formats 必须是以下之一: {allowed}，当前值: {fmt}"
+                )
             if norm in seen:
                 continue
             seen.add(norm)
@@ -373,9 +378,16 @@ class CreateApiKeyRequest(BaseModel):
     unlimited_balance: bool | None = Field(
         None, description="是否无限余额（编辑独立Key时用于切换额度模式）"
     )
-    is_standalone: bool = Field(False, description="是否为独立余额Key（给非注册用户使用）")
+    is_standalone: bool = Field(
+        False, description="是否为独立余额Key（给非注册用户使用）"
+    )
     auto_delete_on_expiry: bool = Field(
         False, description="过期后是否自动删除（True=物理删除，False=仅禁用）"
+    )
+    key: str | None = Field(
+        None,
+        max_length=200,
+        description="可选，自定义完整 API Key；为空时随机生成",
     )
 
     @field_validator("allowed_api_formats")
@@ -435,7 +447,9 @@ class ProviderCreate(BaseModel):
     - API密钥应在 ProviderAPIKey 中设置
     """
 
-    name: str = Field(..., min_length=1, max_length=100, description="提供商名称（唯一）")
+    name: str = Field(
+        ..., min_length=1, max_length=100, description="提供商名称（唯一）"
+    )
     description: str | None = Field(None, description="提供商描述")
     website: str | None = Field(None, max_length=500, description="主站网站")
 
@@ -443,7 +457,9 @@ class ProviderCreate(BaseModel):
     rate_limit: int | None = Field(None, description="每分钟请求限制")
     concurrent_limit: int | None = Field(None, description="并发请求限制")
     config: dict | None = Field(None, description="额外配置")
-    is_active: bool = Field(False, description="是否启用（默认false，需要配置API密钥后才能启用）")
+    is_active: bool = Field(
+        False, description="是否启用（默认false，需要配置API密钥后才能启用）"
+    )
 
     # 超时配置（秒），为空时使用全局配置
     stream_first_byte_timeout: float | None = Field(
@@ -531,11 +547,15 @@ class ModelCreate(BaseModel):
         None, description="阶梯计费配置，为空使用 GlobalModel 默认值"
     )
     # 能力配置 - 可选，为空时使用 GlobalModel 默认值
-    supports_vision: bool | None = Field(None, description="是否支持图像输入，为空使用默认值")
+    supports_vision: bool | None = Field(
+        None, description="是否支持图像输入，为空使用默认值"
+    )
     supports_function_calling: bool | None = Field(
         None, description="是否支持函数调用，为空使用默认值"
     )
-    supports_streaming: bool | None = Field(None, description="是否支持流式输出，为空使用默认值")
+    supports_streaming: bool | None = Field(
+        None, description="是否支持流式输出，为空使用默认值"
+    )
     supports_extended_thinking: bool | None = Field(
         None, description="是否支持扩展思考，为空使用默认值"
     )
@@ -810,7 +830,9 @@ class UserSessionResponse(BaseModel):
     revoke_reason: str | None = None
 
     @classmethod
-    def from_db(cls, session: Any, *, current_session_id: str | None = None) -> dict[str, Any]:
+    def from_db(
+        cls, session: Any, *, current_session_id: str | None = None
+    ) -> dict[str, Any]:
         return cls(
             id=session.id,
             device_label=session.device_label or "未知设备",
@@ -821,7 +843,9 @@ class UserSessionResponse(BaseModel):
             os_version=session.os_version,
             device_model=session.device_model,
             ip_address=session.ip_address,
-            last_seen_at=session.last_seen_at.isoformat() if session.last_seen_at else None,
+            last_seen_at=session.last_seen_at.isoformat()
+            if session.last_seen_at
+            else None,
             created_at=session.created_at.isoformat(),
             is_current=bool(current_session_id and session.id == current_session_id),
             revoked_at=session.revoked_at.isoformat() if session.revoked_at else None,
@@ -847,7 +871,14 @@ class CreateMyApiKeyRequest(BaseModel):
     """创建我的API密钥请求"""
 
     name: str
-    rate_limit: int = Field(0, ge=0, description="该 Key 的每分钟请求限制，0 表示不限制")
+    rate_limit: int = Field(
+        0, ge=0, description="该 Key 的每分钟请求限制，0 表示不限制"
+    )
+    key: str | None = Field(
+        None,
+        max_length=200,
+        description="可选，自定义完整 API Key；为空时随机生成",
+    )
 
 
 class UpdateMyApiKeyRequest(BaseModel):

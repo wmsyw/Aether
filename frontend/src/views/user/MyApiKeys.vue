@@ -400,6 +400,50 @@
             留空不限
           </p>
         </div>
+
+        <div
+          v-if="!editingApiKey"
+          class="space-y-3"
+        >
+          <Label class="text-sm font-semibold">Key 生成方式</Label>
+          <div class="grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              :variant="newKeyMode === 'random' ? 'default' : 'outline'"
+              class="h-10"
+              @click="newKeyMode = 'random'"
+            >
+              随机生成
+            </Button>
+            <Button
+              type="button"
+              :variant="newKeyMode === 'manual' ? 'default' : 'outline'"
+              class="h-10"
+              @click="newKeyMode = 'manual'"
+            >
+              手动填入
+            </Button>
+          </div>
+          <div
+            v-if="newKeyMode === 'manual'"
+            class="space-y-2"
+          >
+            <Label
+              for="manual-api-key"
+              class="text-sm font-semibold"
+            >API Key</Label>
+            <Input
+              id="manual-api-key"
+              v-model="manualKeyInput"
+              placeholder="例如：sk-xxxxxxxxxxx"
+              class="h-11 border-border/60 font-mono"
+              autocomplete="off"
+            />
+            <p class="text-xs text-muted-foreground">
+              必须以 "sk-" 开头，且长度大于 10 位
+            </p>
+          </div>
+        </div>
       </div>
 
       <template #footer>
@@ -517,6 +561,7 @@ import { log } from '@/utils/logger'
 import { parseApiError } from '@/utils/errorParser'
 import { formatRateLimitSimple } from '@/utils/format'
 import { parseNumberInput } from '@/utils/form'
+import { normalizeApiKeyValue, validateManualApiKeyValue } from '@/utils/apiKey'
 import { getErrorStatus } from '@/types/api-error'
 import { computed } from 'vue'
 
@@ -543,6 +588,8 @@ const showDeleteDialog = ref(false)
 const newKeyName = ref('')
 const newKeyRateLimit = ref<number | undefined>(undefined)
 const newKeyValue = ref('')
+const newKeyMode = ref<'random' | 'manual'>('random')
+const manualKeyInput = ref('')
 const keyToDelete = ref<ApiKey | null>(null)
 const editingApiKey = ref<ApiKey | null>(null)
 
@@ -580,6 +627,8 @@ function openCreateApiKeyDialog() {
   editingApiKey.value = null
   newKeyName.value = ''
   newKeyRateLimit.value = undefined
+  newKeyMode.value = 'random'
+  manualKeyInput.value = ''
   showCreateDialog.value = true
 }
 
@@ -588,12 +637,22 @@ function closeApiKeyDialog() {
   editingApiKey.value = null
   newKeyName.value = ''
   newKeyRateLimit.value = undefined
+  newKeyMode.value = 'random'
+  manualKeyInput.value = ''
 }
 
 async function saveApiKey() {
   if (!newKeyName.value.trim()) {
     showError('请输入密钥名称')
     return
+  }
+
+  if (!editingApiKey.value && newKeyMode.value === 'manual') {
+    const validationError = validateManualApiKeyValue(manualKeyInput.value)
+    if (validationError) {
+      showError(validationError)
+      return
+    }
   }
 
   creating.value = true
@@ -605,10 +664,15 @@ async function saveApiKey() {
       })
       success('API 密钥更新成功')
     } else {
-      const newKey = await meApi.createApiKey({
+      const payload: { name: string; rate_limit: number; key?: string } = {
         name: newKeyName.value,
         rate_limit: newKeyRateLimit.value ?? 0,
-      })
+      }
+      if (newKeyMode.value === 'manual') {
+        payload.key = normalizeApiKeyValue(manualKeyInput.value)
+      }
+
+      const newKey = await meApi.createApiKey(payload)
       newKeyValue.value = newKey.key || ''
       showKeyDialog.value = true
       success('API 密钥创建成功')
@@ -617,7 +681,7 @@ async function saveApiKey() {
     await loadApiKeys()
   } catch (error) {
     log.error(editingApiKey.value ? '更新 API 密钥失败:' : '创建 API 密钥失败:', error)
-    showError(editingApiKey.value ? '更新 API 密钥失败' : '创建 API 密钥失败')
+    showError(parseApiError(error, editingApiKey.value ? '更新 API 密钥失败' : '创建 API 密钥失败'))
   } finally {
     creating.value = false
   }

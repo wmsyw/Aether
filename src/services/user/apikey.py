@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,7 @@ class ApiKeyService:
         db: Session,
         user_id: str,  # UUID
         name: str | None = None,
+        key: str | None = None,
         allowed_providers: list[str] | None = None,
         allowed_api_formats: list[str] | None = None,
         allowed_models: list[str] | None = None,
@@ -52,9 +54,17 @@ class ApiKeyService:
         """
 
         # 生成密钥
-        key = ApiKey.generate_key()
-        key_hash = ApiKey.hash_key(key)
-        key_encrypted = crypto_service.encrypt(key)  # 加密存储密钥
+        plain_key = (
+            ApiKeyService._normalize_custom_key(key)
+            if key is not None
+            else ApiKey.generate_key()
+        )
+        key_hash = ApiKey.hash_key(plain_key)
+        key_encrypted = crypto_service.encrypt(plain_key)  # 加密存储密钥
+
+        existing_key = db.query(ApiKey.id).filter(ApiKey.key_hash == key_hash).first()
+        if existing_key is not None:
+            raise ValueError("API Key 已存在，请使用其他值")
 
         # 计算过期时间：优先使用 expires_at，其次使用 expire_days
         final_expires_at = expires_at
@@ -69,7 +79,8 @@ class ApiKeyService:
             user_id=user_id,
             key_hash=key_hash,
             key_encrypted=key_encrypted,
-            name=name or f"API Key {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            name=name
+            or f"API Key {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
             allowed_providers=allowed_providers,
             allowed_api_formats=allowed_api_formats,
             allowed_models=allowed_models,
@@ -82,13 +93,29 @@ class ApiKeyService:
         )
 
         db.add(api_key)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ValueError("API Key 已存在，请使用其他值") from exc
         db.refresh(api_key)
 
         logger.info(
-            f"创建API密钥: 用户ID {user_id}, 密钥名 {api_key.name}, " f"独立Key={is_standalone}"
+            f"创建API密钥: 用户ID {user_id}, 密钥名 {api_key.name}, "
+            f"独立Key={is_standalone}"
         )
-        return api_key, key  # 返回密钥对象和明文密钥
+        return api_key, plain_key  # 返回密钥对象和明文密钥
+
+    @staticmethod
+    def _normalize_custom_key(raw_key: str) -> str:
+        normalized = raw_key.strip()
+        if not normalized:
+            raise ValueError("手动输入的 API Key 不能为空")
+        if not normalized.startswith("sk-"):
+            raise ValueError('手动输入的 API Key 必须以 "sk-" 开头')
+        if len(normalized) <= 10:
+            raise ValueError("手动输入的 API Key 长度必须大于 10 位")
+        return normalized
 
     @staticmethod
     def get_api_key(db: Session, key_id: str) -> ApiKey | None:  # UUID
@@ -103,11 +130,14 @@ class ApiKeyService:
 
     @staticmethod
     def list_user_api_keys(
-        db: Session, user_id: str, is_active: bool | None = None  # UUID
+        db: Session,
+        user_id: str,
+        is_active: bool | None = None,  # UUID
     ) -> list[ApiKey]:
         """列出用户的所有API密钥（不包括独立Key）"""
         query = db.query(ApiKey).filter(
-            ApiKey.user_id == user_id, ApiKey.is_standalone == False  # 排除独立Key
+            ApiKey.user_id == user_id,
+            ApiKey.is_standalone == False,  # 排除独立Key
         )
 
         if is_active is not None:
@@ -116,7 +146,9 @@ class ApiKeyService:
         return query.order_by(ApiKey.created_at.desc()).all()
 
     @staticmethod
-    def list_standalone_api_keys(db: Session, is_active: bool | None = None) -> list[ApiKey]:
+    def list_standalone_api_keys(
+        db: Session, is_active: bool | None = None
+    ) -> list[ApiKey]:
         """列出所有独立余额Key（仅管理员可用）"""
         query = db.query(ApiKey).filter(ApiKey.is_standalone == True)
 
@@ -126,7 +158,9 @@ class ApiKeyService:
         return query.order_by(ApiKey.created_at.desc()).all()
 
     @staticmethod
-    def update_api_key(db: Session, key_id: str, **kwargs: Any) -> ApiKey | None:  # UUID
+    def update_api_key(
+        db: Session, key_id: str, **kwargs: Any
+    ) -> ApiKey | None:  # UUID
         """更新API密钥"""
         api_key = db.query(ApiKey).filter(ApiKey.id == key_id).first()
         if not api_key:
@@ -146,7 +180,11 @@ class ApiKeyService:
         ]
 
         # 允许显式设置为空数组/None 的字段（NULL=不限制，[]=全部禁用）
-        nullable_list_fields = {"allowed_providers", "allowed_api_formats", "allowed_models"}
+        nullable_list_fields = {
+            "allowed_providers",
+            "allowed_api_formats",
+            "allowed_models",
+        }
 
         # 允许显式设置为 None 的字段（如 expires_at=None 表示永不过期；
         # standalone rate_limit=None 表示继承系统默认）
@@ -159,7 +197,11 @@ class ApiKeyService:
             if field in nullable_list_fields:
                 setattr(api_key, field, value)
             elif field in nullable_fields:
-                if field == "rate_limit" and not api_key.is_standalone and value is None:
+                if (
+                    field == "rate_limit"
+                    and not api_key.is_standalone
+                    and value is None
+                ):
                     setattr(api_key, field, 0)
                     continue
                 setattr(api_key, field, value)
@@ -202,7 +244,9 @@ class ApiKeyService:
         now = datetime.now(timezone.utc)
         expired_keys = (
             db.query(ApiKey)
-            .filter(ApiKey.expires_at <= now, ApiKey.is_active == True)  # 只处理仍然活跃的
+            .filter(
+                ApiKey.expires_at <= now, ApiKey.is_active == True
+            )  # 只处理仍然活跃的
             .all()
         )
 

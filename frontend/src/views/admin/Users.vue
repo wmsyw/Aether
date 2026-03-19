@@ -834,6 +834,50 @@
             留空表示不限制
           </p>
         </div>
+
+        <div
+          v-if="!editingUserApiKey"
+          class="space-y-3"
+        >
+          <Label class="text-sm font-medium">Key 生成方式</Label>
+          <div class="grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              :variant="userApiKeyForm.key_mode === 'random' ? 'default' : 'outline'"
+              class="h-10"
+              @click="userApiKeyForm.key_mode = 'random'"
+            >
+              随机生成
+            </Button>
+            <Button
+              type="button"
+              :variant="userApiKeyForm.key_mode === 'manual' ? 'default' : 'outline'"
+              class="h-10"
+              @click="userApiKeyForm.key_mode = 'manual'"
+            >
+              手动填入
+            </Button>
+          </div>
+          <div
+            v-if="userApiKeyForm.key_mode === 'manual'"
+            class="space-y-2"
+          >
+            <Label
+              for="admin-user-manual-key"
+              class="text-sm font-medium"
+            >API Key</Label>
+            <Input
+              id="admin-user-manual-key"
+              v-model="userApiKeyForm.key"
+              class="h-10 font-mono"
+              placeholder="例如：sk-xxxxxxxxxxx"
+              autocomplete="off"
+            />
+            <p class="text-xs text-muted-foreground">
+              必须以 "sk-" 开头，且长度大于 10 位
+            </p>
+          </div>
+        </div>
       </div>
 
       <template #footer>
@@ -1070,6 +1114,7 @@ import WalletOpsDrawer from '@/features/wallet/components/WalletOpsDrawer.vue'
 import { parseApiError } from '@/utils/errorParser'
 import { formatTokens, formatRateLimitInheritable, formatRateLimitSimple, isRateLimitInherited, isRateLimitUnlimited } from '@/utils/format'
 import { parseNumberInput } from '@/utils/form'
+import { normalizeApiKeyValue, validateManualApiKeyValue } from '@/utils/apiKey'
 import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
@@ -1099,6 +1144,8 @@ const editingUserApiKey = ref<ApiKey | null>(null)
 const userApiKeyForm = ref({
   name: '',
   rate_limit: undefined as number | undefined,
+  key_mode: 'random' as 'random' | 'manual',
+  key: '',
 })
 
 // 用户统计
@@ -1387,6 +1434,8 @@ function openCreateUserApiKeyDialog() {
   userApiKeyForm.value = {
     name: `Key-${new Date().toISOString().split('T')[0]}`,
     rate_limit: undefined,
+    key_mode: 'random',
+    key: '',
   }
   editingUserApiKey.value = null
   showUserApiKeyFormDialog.value = true
@@ -1397,6 +1446,8 @@ function openEditUserApiKeyDialog(apiKey: ApiKey) {
   userApiKeyForm.value = {
     name: apiKey.name || '',
     rate_limit: apiKey.rate_limit ?? undefined,
+    key_mode: 'random',
+    key: '',
   }
   showUserApiKeyFormDialog.value = true
 }
@@ -1407,6 +1458,8 @@ function closeUserApiKeyFormDialog() {
   userApiKeyForm.value = {
     name: '',
     rate_limit: undefined,
+    key_mode: 'random',
+    key: '',
   }
 }
 
@@ -1415,6 +1468,14 @@ async function submitUserApiKeyForm() {
   if (!userApiKeyForm.value.name.trim()) {
     error('请输入密钥名称', editingUserApiKey.value ? '更新 API Key 失败' : '创建 API Key 失败')
     return
+  }
+
+  if (!editingUserApiKey.value && userApiKeyForm.value.key_mode === 'manual') {
+    const validationError = validateManualApiKeyValue(userApiKeyForm.value.key)
+    if (validationError) {
+      error(validationError, '创建 API Key 失败')
+      return
+    }
   }
 
   creatingApiKey.value = true
@@ -1426,10 +1487,15 @@ async function submitUserApiKeyForm() {
       })
       success('API Key已更新')
     } else {
-      const response = await usersStore.createApiKey(selectedUser.value.id, {
+      const payload: { name: string; rate_limit: number; key?: string } = {
         name: userApiKeyForm.value.name,
         rate_limit: userApiKeyForm.value.rate_limit ?? 0,
-      })
+      }
+      if (userApiKeyForm.value.key_mode === 'manual') {
+        payload.key = normalizeApiKeyValue(userApiKeyForm.value.key)
+      }
+
+      const response = await usersStore.createApiKey(selectedUser.value.id, payload)
       newApiKey.value = response.key || ''
       showNewApiKeyDialog.value = true
       success('API Key创建成功')

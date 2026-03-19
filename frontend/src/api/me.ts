@@ -150,6 +150,12 @@ export interface ApiKey {
   force_capabilities?: Record<string, boolean> | null  // 强制能力配置
 }
 
+export interface CreateMyApiKeyRequest {
+  name: string
+  rate_limit?: number
+  key?: string
+}
+
 // 不再需要 ProviderBinding 接口
 
 export interface ChangePasswordRequest {
@@ -207,7 +213,7 @@ export const meApi = {
     return response.data
   },
 
-  async createApiKey(data: { name: string; rate_limit?: number }): Promise<ApiKey> {
+  async createApiKey(data: CreateMyApiKeyRequest): Promise<ApiKey> {
     const response = await apiClient.post<ApiKey>('/api/users/me/api-keys', data)
     return response.data
   },

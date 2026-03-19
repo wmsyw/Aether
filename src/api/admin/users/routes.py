@@ -14,7 +14,11 @@ from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import get_pipeline
 from src.config.constants import CacheTTL
-from src.core.exceptions import InvalidRequestException, NotFoundException, translate_pydantic_error
+from src.core.exceptions import (
+    InvalidRequestException,
+    NotFoundException,
+    translate_pydantic_error,
+)
 from src.core.logger import logger
 from src.database import get_db, get_db_context
 from src.models.admin_requests import UpdateUserRequest
@@ -157,7 +161,9 @@ def _update_user_sync(
                 "role_after": user.role.value,
                 "unlimited_before": unlimited_before,
                 "unlimited_after": (
-                    requested_unlimited if requested_unlimited is not None else unlimited_before
+                    requested_unlimited
+                    if requested_unlimited is not None
+                    else unlimited_before
                 ),
                 "is_active": user.is_active,
             },
@@ -166,15 +172,22 @@ def _update_user_sync(
         )
 
 
-def _delete_user_sync(user_id: str) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+def _delete_user_sync(
+    user_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
     with get_db_context() as db:
         user = UserService.get_user(db, user_id)
         if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在"
+            )
 
         if user.role == UserRole.ADMIN:
             admin_count = int(
-                db.query(func.count(User.id)).filter(User.role == UserRole.ADMIN).scalar() or 0
+                db.query(func.count(User.id))
+                .filter(User.role == UserRole.ADMIN)
+                .scalar()
+                or 0
             )
             if admin_count <= 1:
                 raise InvalidRequestException("不能删除最后一个管理员账户")
@@ -184,7 +197,9 @@ def _delete_user_sync(user_id: str) -> tuple[dict[str, Any], dict[str, Any], str
         except ValueError as exc:
             raise InvalidRequestException(str(exc)) from exc
         if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在"
+            )
 
         return (
             {"message": "用户删除成功"},
@@ -198,7 +213,9 @@ def _delete_user_sync(user_id: str) -> tuple[dict[str, Any], dict[str, Any], str
         )
 
 
-def _list_user_sessions_sync(user_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _list_user_sessions_sync(
+    user_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     with get_db_context() as db:
         user = UserService.get_user(db, user_id)
         if not user:
@@ -223,7 +240,9 @@ def _revoke_user_session_sync(
         user = UserService.get_user(db, user_id)
         if not user:
             raise NotFoundException("用户不存在", "user")
-        session = SessionService.get_session_for_user(db, user_id=user_id, session_id=session_id)
+        session = SessionService.get_session_for_user(
+            db, user_id=user_id, session_id=session_id
+        )
         if not session:
             raise NotFoundException("会话不存在", "session")
         SessionService.revoke_session(
@@ -274,16 +293,21 @@ def _create_user_key_sync(
         if not user:
             raise NotFoundException("用户不存在", "user")
 
-        api_key, plain_key = ApiKeyService.create_api_key(
-            db=db,
-            user_id=user_id,
-            name=key_data.name,
-            allowed_providers=key_data.allowed_providers,
-            allowed_models=key_data.allowed_models,
-            rate_limit=key_data.rate_limit,
-            expire_days=key_data.expire_days,
-            is_standalone=False,
-        )
+        try:
+            api_key, plain_key = ApiKeyService.create_api_key(
+                db=db,
+                user_id=user_id,
+                name=key_data.name,
+                key=key_data.key,
+                allowed_providers=key_data.allowed_providers,
+                allowed_api_formats=key_data.allowed_api_formats,
+                allowed_models=key_data.allowed_models,
+                rate_limit=key_data.rate_limit,
+                expire_days=key_data.expire_days,
+                is_standalone=False,
+            )
+        except ValueError as exc:
+            raise InvalidRequestException(str(exc)) from exc
 
         return (
             {
@@ -292,7 +316,9 @@ def _create_user_key_sync(
                 "name": api_key.name,
                 "key_display": api_key.get_display_key(),
                 "rate_limit": api_key.rate_limit,
-                "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+                "expires_at": api_key.expires_at.isoformat()
+                if api_key.expires_at
+                else None,
                 "created_at": api_key.created_at.isoformat(),
                 "message": "API Key创建成功，请妥善保存完整密钥",
             },
@@ -305,7 +331,9 @@ def _create_user_key_sync(
         )
 
 
-def _delete_user_key_sync(user_id: str, key_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _delete_user_key_sync(
+    user_id: str, key_id: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
     with get_db_context() as db:
         api_key = (
             db.query(ApiKey)
@@ -368,10 +396,14 @@ def _update_user_key_sync(
                 "total_cost_usd": float(updated_key.total_cost_usd or 0),
                 "rate_limit": updated_key.rate_limit,
                 "expires_at": (
-                    updated_key.expires_at.isoformat() if updated_key.expires_at else None
+                    updated_key.expires_at.isoformat()
+                    if updated_key.expires_at
+                    else None
                 ),
                 "last_used_at": (
-                    updated_key.last_used_at.isoformat() if updated_key.last_used_at else None
+                    updated_key.last_used_at.isoformat()
+                    if updated_key.last_used_at
+                    else None
                 ),
                 "created_at": updated_key.created_at.isoformat(),
                 "message": "API Key更新成功",
@@ -438,7 +470,9 @@ async def create_user_endpoint(request: Request, db: Session = Depends(get_db)) 
     - `unlimited`: 是否无限制
     """
     adapter = AdminCreateUserAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("")
@@ -457,12 +491,18 @@ async def list_users(
 
     **返回字段**: id, email, username, role, unlimited, is_active, created_at 等
     """
-    adapter = AdminListUsersAdapter(skip=skip, limit=limit, role=role, is_active=is_active)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    adapter = AdminListUsersAdapter(
+        skip=skip, limit=limit, role=role, is_active=is_active
+    )
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
+async def get_user(
+    user_id: str, request: Request, db: Session = Depends(get_db)
+) -> Any:
     """
     获取用户详情
 
@@ -472,14 +512,20 @@ async def get_user(user_id: str, request: Request, db: Session = Depends(get_db)
     - `user_id`: 用户 ID (UUID)
     """
     adapter = AdminGetUserAdapter(user_id=user_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{user_id}/sessions")
-async def list_user_sessions(user_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
+async def list_user_sessions(
+    user_id: str, request: Request, db: Session = Depends(get_db)
+) -> Any:
     """获取用户登录设备列表。"""
     adapter = AdminListUserSessionsAdapter(user_id=user_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/{user_id}/sessions/{session_id}")
@@ -491,7 +537,9 @@ async def revoke_user_session(
 ) -> Any:
     """强制下线用户的单个设备会话。"""
     adapter = AdminRevokeUserSessionAdapter(user_id=user_id, session_id=session_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/{user_id}/sessions")
@@ -502,7 +550,9 @@ async def revoke_all_user_sessions(
 ) -> Any:
     """强制下线用户的全部设备会话。"""
     adapter = AdminRevokeAllUserSessionsAdapter(user_id=user_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/{user_id}")
@@ -529,11 +579,15 @@ async def update_user(
     - `allowed_models`: 允许的模型列表
     """
     adapter = AdminUpdateUserAdapter(user_id=user_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str, request: Request, db: Session = Depends(get_db)) -> None:
+async def delete_user(
+    user_id: str, request: Request, db: Session = Depends(get_db)
+) -> None:
     """
     删除用户
 
@@ -543,7 +597,9 @@ async def delete_user(user_id: str, request: Request, db: Session = Depends(get_
     - `user_id`: 用户 ID (UUID)
     """
     adapter = AdminDeleteUserAdapter(user_id=user_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{user_id}/api-keys")
@@ -562,7 +618,9 @@ async def get_user_api_keys(
     - `user_id`: 用户 ID (UUID)
     """
     adapter = AdminGetUserKeysAdapter(user_id=user_id, is_active=is_active)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/{user_id}/api-keys")
@@ -589,7 +647,9 @@ async def create_user_api_key(
     **返回**: 包含完整密钥值的响应（仅此一次显示）
     """
     adapter = AdminCreateUserKeyAdapter(user_id=user_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/{user_id}/api-keys/{key_id}")
@@ -609,7 +669,9 @@ async def delete_user_api_key(
     - `key_id`: 密钥 ID
     """
     adapter = AdminDeleteUserKeyAdapter(user_id=user_id, key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/{user_id}/api-keys/{key_id}")
@@ -629,7 +691,9 @@ async def update_user_api_key(
     - `key_id`: 密钥 ID
     """
     adapter = AdminUpdateUserKeyAdapter(user_id=user_id, key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/{user_id}/api-keys/{key_id}/lock")
@@ -649,7 +713,9 @@ async def toggle_user_api_key_lock(
     - `key_id`: 密钥 ID
     """
     adapter = AdminToggleUserKeyLockAdapter(user_id=user_id, key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{user_id}/api-keys/{key_id}/full-key")
@@ -669,7 +735,9 @@ async def get_user_api_key_full_key(
     - `key_id`: 密钥 ID
     """
     adapter = AdminGetUserKeyFullKeyAdapter(user_id=user_id, key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== 管理员适配器实现 ==============
@@ -687,13 +755,17 @@ class AdminCreateUserAdapter(AdminApiAdapter):
             raise InvalidRequestException("请求数据验证失败")
         try:
             role = (
-                request.role if hasattr(request.role, "value") else UserRole[request.role.upper()]
+                request.role
+                if hasattr(request.role, "value")
+                else UserRole[request.role.upper()]
             )
         except (KeyError, AttributeError):
             raise InvalidRequestException("角色参数不合法")
 
         try:
-            response, audit_meta = await run_in_threadpool(_create_user_sync, request, role)
+            response, audit_meta = await run_in_threadpool(
+                _create_user_sync, request, role
+            )
         except ValueError as exc:
             raise InvalidRequestException(str(exc)) from exc
         context.add_audit_metadata(**audit_meta)
@@ -719,9 +791,15 @@ class AdminListUsersAdapter(AdminApiAdapter):
             role_enum = UserRole[self.role.upper()] if self.role else None
         except KeyError as exc:
             raise InvalidRequestException("角色参数不合法") from exc
-        users = UserService.list_users(db, self.skip, self.limit, role_enum, self.is_active)
-        wallets_by_user_id = WalletService.get_wallets_by_user_ids(db, [user.id for user in users])
-        return [_serialize_user(db, user, wallets_by_user_id.get(user.id)) for user in users]
+        users = UserService.list_users(
+            db, self.skip, self.limit, role_enum, self.is_active
+        )
+        wallets_by_user_id = WalletService.get_wallets_by_user_ids(
+            db, [user.id for user in users]
+        )
+        return [
+            _serialize_user(db, user, wallets_by_user_id.get(user.id)) for user in users
+        ]
 
 
 class AdminGetUserAdapter(AdminApiAdapter):
@@ -749,7 +827,9 @@ class AdminListUserSessionsAdapter(AdminApiAdapter):
         self.user_id = user_id
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        response, audit_meta = await run_in_threadpool(_list_user_sessions_sync, self.user_id)
+        response, audit_meta = await run_in_threadpool(
+            _list_user_sessions_sync, self.user_id
+        )
         context.add_audit_metadata(**audit_meta)
         return response
 
@@ -815,7 +895,9 @@ class AdminDeleteUserAdapter(AdminApiAdapter):
         self.user_id = user_id
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        response, audit_meta, user_email = await run_in_threadpool(_delete_user_sync, self.user_id)
+        response, audit_meta, user_email = await run_in_threadpool(
+            _delete_user_sync, self.user_id
+        )
         if user_email:
             await UserCacheService.invalidate_user_cache(self.user_id, user_email)
         context.add_audit_metadata(**audit_meta)
@@ -859,8 +941,12 @@ class AdminGetUserKeysAdapter(AdminApiAdapter):
                     "total_requests": key.total_requests,
                     "total_cost_usd": float(key.total_cost_usd or 0),
                     "rate_limit": key.rate_limit,
-                    "expires_at": key.expires_at.isoformat() if key.expires_at else None,
-                    "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+                    "expires_at": key.expires_at.isoformat()
+                    if key.expires_at
+                    else None,
+                    "last_used_at": key.last_used_at.isoformat()
+                    if key.last_used_at
+                    else None,
                     "created_at": key.created_at.isoformat(),
                 }
                 for key in api_keys
@@ -894,7 +980,9 @@ class AdminCreateUserKeyAdapter(AdminApiAdapter):
         )
         if user_email:
             logger.info(
-                "管理员为用户创建API Key: 用户 {}, Key ID {}", user_email, audit_meta["key_id"]
+                "管理员为用户创建API Key: 用户 {}, Key ID {}",
+                user_email,
+                audit_meta["key_id"],
             )
         context.add_audit_metadata(**audit_meta)
         return response

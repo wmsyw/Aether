@@ -60,6 +60,7 @@ export interface ApiKey {
 export interface UpsertUserApiKeyRequest {
   name?: string
   rate_limit?: number | null
+  key?: string
 }
 
 export type { UserSession } from '@/types/session'

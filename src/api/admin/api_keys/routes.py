@@ -87,7 +87,9 @@ def _serialize_standalone_key_item(
         "allowed_providers": api_key.allowed_providers,
         "allowed_api_formats": api_key.allowed_api_formats,
         "allowed_models": api_key.allowed_models,
-        "last_used_at": api_key.last_used_at.isoformat() if api_key.last_used_at else None,
+        "last_used_at": api_key.last_used_at.isoformat()
+        if api_key.last_used_at
+        else None,
         "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
         "created_at": api_key.created_at.isoformat(),
         "updated_at": api_key.updated_at.isoformat() if api_key.updated_at else None,
@@ -106,7 +108,9 @@ def _list_standalone_api_keys_sync(
             query = query.filter(ApiKey.is_active == is_active)
 
         total = int(query.with_entities(func.count(ApiKey.id)).scalar() or 0)
-        api_keys = query.order_by(ApiKey.created_at.desc()).offset(skip).limit(limit).all()
+        api_keys = (
+            query.order_by(ApiKey.created_at.desc()).offset(skip).limit(limit).all()
+        )
 
         wallet_initialized = False
         for api_key in api_keys:
@@ -130,7 +134,9 @@ def _list_standalone_api_keys_sync(
                 .group_by(Usage.api_key_id)
                 .all()
             )
-            token_map = {row.api_key_id: int(row.total_tokens or 0) for row in stats_rows}
+            token_map = {
+                row.api_key_id: int(row.total_tokens or 0) for row in stats_rows
+            }
 
         return {
             "api_keys": [
@@ -151,26 +157,33 @@ def _create_standalone_api_key_sync(
     key_data: CreateApiKeyRequest,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     with get_db_context() as db:
-        if key_data.initial_balance_usd is not None and key_data.initial_balance_usd <= 0:
+        if (
+            key_data.initial_balance_usd is not None
+            and key_data.initial_balance_usd <= 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="创建独立余额Key时，初始余额必须大于 0（或设置为 null 表示无限制）",
             )
 
         expires_at_dt = parse_expiry_date(key_data.expires_at)
-        api_key, plain_key = ApiKeyService.create_api_key(
-            db=db,
-            user_id=admin_user_id,
-            name=key_data.name,
-            allowed_providers=key_data.allowed_providers,
-            allowed_api_formats=key_data.allowed_api_formats,
-            allowed_models=key_data.allowed_models,
-            rate_limit=key_data.rate_limit,
-            expire_days=key_data.expire_days,
-            expires_at=expires_at_dt,
-            is_standalone=True,
-            auto_delete_on_expiry=key_data.auto_delete_on_expiry,
-        )
+        try:
+            api_key, plain_key = ApiKeyService.create_api_key(
+                db=db,
+                user_id=admin_user_id,
+                name=key_data.name,
+                key=key_data.key,
+                allowed_providers=key_data.allowed_providers,
+                allowed_api_formats=key_data.allowed_api_formats,
+                allowed_models=key_data.allowed_models,
+                rate_limit=key_data.rate_limit,
+                expire_days=key_data.expire_days,
+                expires_at=expires_at_dt,
+                is_standalone=True,
+                auto_delete_on_expiry=key_data.auto_delete_on_expiry,
+            )
+        except ValueError as exc:
+            raise InvalidRequestException(str(exc)) from exc
 
         wallet = WalletService.initialize_api_key_wallet(
             db,
@@ -194,7 +207,9 @@ def _create_standalone_api_key_sync(
                 "key_display": api_key.get_display_key(),
                 "is_standalone": True,
                 "rate_limit": api_key.rate_limit,
-                "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+                "expires_at": api_key.expires_at.isoformat()
+                if api_key.expires_at
+                else None,
                 "created_at": api_key.created_at.isoformat(),
                 "wallet": wallet_summary,
                 "message": "独立余额Key创建成功，请妥善保存完整密钥，后续将无法查看",
@@ -261,7 +276,9 @@ def _update_standalone_api_key_sync(
                 "unlimited" if key_data.unlimited_balance else "finite"
             )
             if wallet.limit_mode != desired_mode:
-                WalletService.set_wallet_limit_mode(db, wallet=wallet, limit_mode=desired_mode)
+                WalletService.set_wallet_limit_mode(
+                    db, wallet=wallet, limit_mode=desired_mode
+                )
             changed_fields.append("unlimited_balance")
 
         updated_key = ApiKeyService.update_api_key(db, key_id, **update_data)
@@ -278,10 +295,14 @@ def _update_standalone_api_key_sync(
                 "is_active": updated_key.is_active,
                 "rate_limit": updated_key.rate_limit,
                 "expires_at": (
-                    updated_key.expires_at.isoformat() if updated_key.expires_at else None
+                    updated_key.expires_at.isoformat()
+                    if updated_key.expires_at
+                    else None
                 ),
                 "updated_at": (
-                    updated_key.updated_at.isoformat() if updated_key.updated_at else None
+                    updated_key.updated_at.isoformat()
+                    if updated_key.updated_at
+                    else None
                 ),
                 "wallet": wallet_summary,
                 "message": "API密钥已更新",
@@ -290,7 +311,9 @@ def _update_standalone_api_key_sync(
         )
 
 
-def _toggle_standalone_api_key_sync(key_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _toggle_standalone_api_key_sync(
+    key_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     with get_db_context() as db:
         api_key = db.query(ApiKey).filter(ApiKey.id == key_id).first()
         if not api_key:
@@ -354,7 +377,9 @@ def _ensure_standalone_wallet(
         raise InvalidRequestException("独立密钥钱包初始化失败")
 
     if limit_mode is not None and wallet.limit_mode != limit_mode:
-        wallet = WalletService.set_wallet_limit_mode(db, wallet=wallet, limit_mode=limit_mode)
+        wallet = WalletService.set_wallet_limit_mode(
+            db, wallet=wallet, limit_mode=limit_mode
+        )
 
     return wallet
 
@@ -386,8 +411,12 @@ async def list_standalone_api_keys(
     - `limit`: 当前分页限制
     - `skip`: 当前分页偏移量
     """
-    adapter = AdminListStandaloneKeysAdapter(skip=skip, limit=limit, is_active=is_active)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    adapter = AdminListStandaloneKeysAdapter(
+        skip=skip, limit=limit, is_active=is_active
+    )
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("")
@@ -425,12 +454,17 @@ async def create_standalone_api_key(
     - `message`: 提示信息
     """
     adapter = AdminCreateStandaloneKeyAdapter(key_data=key_data)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/{key_id}")
 async def update_api_key(
-    key_id: str, request: Request, key_data: CreateApiKeyRequest, db: Session = Depends(get_db)
+    key_id: str,
+    request: Request,
+    key_data: CreateApiKeyRequest,
+    db: Session = Depends(get_db),
 ) -> Any:
     """
     更新独立余额 API Key
@@ -463,11 +497,15 @@ async def update_api_key(
     - `message`: 提示信息
     """
     adapter = AdminUpdateApiKeyAdapter(key_id=key_id, key_data=key_data)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/{key_id}")
-async def toggle_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
+async def toggle_api_key(
+    key_id: str, request: Request, db: Session = Depends(get_db)
+) -> Any:
     """
     切换 API Key 启用状态
 
@@ -482,11 +520,15 @@ async def toggle_api_key(key_id: str, request: Request, db: Session = Depends(ge
     - `message`: 提示信息
     """
     adapter = AdminToggleApiKeyAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/{key_id}")
-async def delete_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> None:
+async def delete_api_key(
+    key_id: str, request: Request, db: Session = Depends(get_db)
+) -> None:
     """
     删除 API Key
 
@@ -499,14 +541,18 @@ async def delete_api_key(key_id: str, request: Request, db: Session = Depends(ge
     - `message`: 提示信息
     """
     adapter = AdminDeleteApiKeyAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{key_id}")
 async def get_api_key_detail(
     key_id: str,
     request: Request,
-    include_key: bool = Query(False, description="Include full decrypted key in response"),
+    include_key: bool = Query(
+        False, description="Include full decrypted key in response"
+    ),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -532,7 +578,9 @@ async def get_api_key_detail(
     else:
         # Return basic key info without full key
         adapter = AdminGetKeyDetailAdapter(key_id=key_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 class AdminListStandaloneKeysAdapter(AdminApiAdapter):
@@ -597,7 +645,9 @@ class AdminUpdateApiKeyAdapter(AdminApiAdapter):
             self.key_id,
             self.key_data,
         )
-        logger.info(f"管理员更新独立余额Key: ID {self.key_id}, 更新字段 {changed_fields}")
+        logger.info(
+            f"管理员更新独立余额Key: ID {self.key_id}, 更新字段 {changed_fields}"
+        )
         context.add_audit_metadata(
             action="update_standalone_api_key",
             key_id=self.key_id,
@@ -611,7 +661,9 @@ class AdminToggleApiKeyAdapter(AdminApiAdapter):
         self.key_id = key_id
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        result, audit_meta = await run_in_threadpool(_toggle_standalone_api_key_sync, self.key_id)
+        result, audit_meta = await run_in_threadpool(
+            _toggle_standalone_api_key_sync, self.key_id
+        )
         logger.info(
             f"管理员切换API密钥状态: Key ID {self.key_id}, 新状态 {'启用' if result['is_active'] else '禁用'}"
         )
@@ -628,7 +680,9 @@ class AdminDeleteApiKeyAdapter(AdminApiAdapter):
             _delete_standalone_api_key_sync,
             self.key_id,
         )
-        logger.info(f"管理员删除API密钥: Key ID {self.key_id}, 用户 {user_email or '未知'}")
+        logger.info(
+            f"管理员删除API密钥: Key ID {self.key_id}, 用户 {user_email or '未知'}"
+        )
         context.add_audit_metadata(**audit_meta)
         return result
 
@@ -718,9 +772,15 @@ class AdminGetKeyDetailAdapter(AdminApiAdapter):
             "allowed_providers": api_key.allowed_providers,
             "allowed_api_formats": api_key.allowed_api_formats,
             "allowed_models": api_key.allowed_models,
-            "last_used_at": api_key.last_used_at.isoformat() if api_key.last_used_at else None,
-            "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+            "last_used_at": api_key.last_used_at.isoformat()
+            if api_key.last_used_at
+            else None,
+            "expires_at": api_key.expires_at.isoformat()
+            if api_key.expires_at
+            else None,
             "created_at": api_key.created_at.isoformat(),
-            "updated_at": api_key.updated_at.isoformat() if api_key.updated_at else None,
+            "updated_at": api_key.updated_at.isoformat()
+            if api_key.updated_at
+            else None,
             "wallet": wallet_summary,
         }

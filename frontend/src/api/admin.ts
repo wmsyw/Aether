@@ -363,6 +363,7 @@ export interface AdminApiKey {
 
 export interface CreateStandaloneApiKeyRequest {
   name?: string
+  key?: string
   allowed_providers?: string[] | null
   allowed_api_formats?: string[] | null
   allowed_models?: string[] | null

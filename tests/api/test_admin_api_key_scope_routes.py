@@ -18,6 +18,7 @@ from src.api.admin.api_keys.routes import (
 )
 from src.api.admin.api_keys.routes import router as admin_api_keys_router
 from src.api.admin.users.routes import (
+    AdminCreateUserKeyAdapter,
     AdminGetUserKeyFullKeyAdapter,
     AdminToggleUserKeyLockAdapter,
     AdminUpdateUserKeyAdapter,
@@ -49,7 +50,9 @@ def _mock_query_first(db: MagicMock, value: object | None) -> None:
     db.query.return_value.filter.return_value.first.return_value = value
 
 
-def _build_admin_users_app(db: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def _build_admin_users_app(
+    db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     app = FastAPI()
     app.include_router(admin_users_router)
     app.dependency_overrides[get_db] = lambda: db
@@ -75,7 +78,9 @@ def _build_admin_users_app(db: MagicMock, monkeypatch: pytest.MonkeyPatch) -> Te
     return TestClient(app)
 
 
-def _build_admin_api_keys_app(db: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def _build_admin_api_keys_app(
+    db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     app = FastAPI()
     app.include_router(admin_api_keys_router)
     app.dependency_overrides[get_db] = lambda: db
@@ -93,14 +98,20 @@ def _build_admin_api_keys_app(db: MagicMock, monkeypatch: pytest.MonkeyPatch) ->
         )
         return await adapter.handle(context)
 
-    monkeypatch.setattr("src.api.admin.api_keys.routes.pipeline.run", _fake_pipeline_run)
+    monkeypatch.setattr(
+        "src.api.admin.api_keys.routes.pipeline.run", _fake_pipeline_run
+    )
     return TestClient(app)
 
 
 @pytest.mark.asyncio
-async def test_toggle_user_key_lock_adapter_success(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_toggle_user_key_lock_adapter_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db = MagicMock()
-    api_key = SimpleNamespace(id="key-1", user_id="user-1", is_standalone=False, is_locked=False)
+    api_key = SimpleNamespace(
+        id="key-1", user_id="user-1", is_standalone=False, is_locked=False
+    )
     _mock_query_first(db, api_key)
     _patch_get_db_context(monkeypatch, db)
 
@@ -130,7 +141,9 @@ async def test_toggle_user_key_lock_adapter_not_found_for_standalone_or_wrong_ow
 
 
 @pytest.mark.asyncio
-async def test_get_user_key_full_key_adapter_success(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_user_key_full_key_adapter_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db = MagicMock()
     api_key = SimpleNamespace(
         id="key-2",
@@ -140,7 +153,9 @@ async def test_get_user_key_full_key_adapter_success(monkeypatch: pytest.MonkeyP
     )
     _mock_query_first(db, api_key)
 
-    monkeypatch.setattr("src.core.crypto.crypto_service.decrypt", lambda _v: "sk-user-full-key")
+    monkeypatch.setattr(
+        "src.core.crypto.crypto_service.decrypt", lambda _v: "sk-user-full-key"
+    )
 
     adapter = AdminGetUserKeyFullKeyAdapter(user_id="user-1", key_id="key-2")
     result = await adapter.handle(_build_context(db))
@@ -216,7 +231,9 @@ async def test_standalone_toggle_adapters_reject_normal_user_key(
 
 def test_user_key_lock_route_path_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     db = MagicMock()
-    api_key = SimpleNamespace(id="key-5", user_id="user-2", is_standalone=False, is_locked=False)
+    api_key = SimpleNamespace(
+        id="key-5", user_id="user-2", is_standalone=False, is_locked=False
+    )
     _mock_query_first(db, api_key)
     _patch_get_db_context(monkeypatch, db)
     client = _build_admin_users_app(db, monkeypatch)
@@ -236,7 +253,9 @@ def test_user_key_full_key_route_path_smoke(monkeypatch: pytest.MonkeyPatch) -> 
         key_encrypted="enc",
     )
     _mock_query_first(db, api_key)
-    monkeypatch.setattr("src.core.crypto.crypto_service.decrypt", lambda _v: "sk-user-route-key")
+    monkeypatch.setattr(
+        "src.core.crypto.crypto_service.decrypt", lambda _v: "sk-user-route-key"
+    )
     client = _build_admin_users_app(db, monkeypatch)
 
     response = client.get("/api/admin/users/user-2/api-keys/key-6/full-key")
@@ -257,9 +276,15 @@ async def test_update_user_key_adapter_passes_rate_limit_and_name(
         captured["key_id"] = key_id
         captured["name"] = getattr(request, "name", None)
         captured["rate_limit"] = getattr(request, "rate_limit", None)
-        return {"id": key_id, "name": captured["name"], "rate_limit": captured["rate_limit"]}, {}
+        return {
+            "id": key_id,
+            "name": captured["name"],
+            "rate_limit": captured["rate_limit"],
+        }, {}
 
-    monkeypatch.setattr("src.api.admin.users.routes._update_user_key_sync", _update_user_key_sync)
+    monkeypatch.setattr(
+        "src.api.admin.users.routes._update_user_key_sync", _update_user_key_sync
+    )
 
     adapter = AdminUpdateUserKeyAdapter(user_id="user-1", key_id="key-7")
     context = SimpleNamespace(
@@ -290,9 +315,15 @@ def test_update_user_key_route_path_smoke(monkeypatch: pytest.MonkeyPatch) -> No
         captured["key_id"] = key_id
         captured["name"] = getattr(request, "name", None)
         captured["rate_limit"] = getattr(request, "rate_limit", None)
-        return {"id": key_id, "name": captured["name"], "rate_limit": captured["rate_limit"]}, {}
+        return {
+            "id": key_id,
+            "name": captured["name"],
+            "rate_limit": captured["rate_limit"],
+        }, {}
 
-    monkeypatch.setattr("src.api.admin.users.routes._update_user_key_sync", _update_user_key_sync)
+    monkeypatch.setattr(
+        "src.api.admin.users.routes._update_user_key_sync", _update_user_key_sync
+    )
     client = _build_admin_users_app(MagicMock(), monkeypatch)
 
     response = client.put(
@@ -310,13 +341,65 @@ def test_update_user_key_route_path_smoke(monkeypatch: pytest.MonkeyPatch) -> No
     }
 
 
+@pytest.mark.asyncio
+async def test_create_user_key_adapter_passes_manual_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _create_user_key_sync(
+        user_id: str, key_data: object
+    ) -> tuple[dict[str, object], dict[str, object], str | None]:
+        captured["user_id"] = user_id
+        captured["name"] = getattr(key_data, "name", None)
+        captured["rate_limit"] = getattr(key_data, "rate_limit", None)
+        captured["key"] = getattr(key_data, "key", None)
+        captured["allowed_api_formats"] = getattr(key_data, "allowed_api_formats", None)
+        return (
+            {"id": "key-manual", "key": captured["key"]},
+            {"key_id": "key-manual"},
+            None,
+        )
+
+    monkeypatch.setattr(
+        "src.api.admin.users.routes._create_user_key_sync", _create_user_key_sync
+    )
+
+    adapter = AdminCreateUserKeyAdapter(user_id="user-1")
+    context = SimpleNamespace(
+        db=MagicMock(),
+        request=SimpleNamespace(state=SimpleNamespace()),
+        ensure_json_body=lambda: {
+            "name": "Manual Key",
+            "rate_limit": 3,
+            "key": "sk-12345678901",
+            "allowed_api_formats": [],
+        },
+        add_audit_metadata=lambda **_: None,
+    )
+
+    result = await adapter.handle(context)
+
+    assert result["id"] == "key-manual"
+    assert result["key"] == "sk-12345678901"
+    assert captured == {
+        "user_id": "user-1",
+        "name": "Manual Key",
+        "rate_limit": 3,
+        "key": "sk-12345678901",
+        "allowed_api_formats": [],
+    }
+
+
 def test_standalone_lock_route_removed(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _build_admin_api_keys_app(MagicMock(), monkeypatch)
     response = client.patch("/api/admin/api-keys/key-1/lock")
     assert response.status_code == 404
 
 
-def test_standalone_list_route_does_not_expose_is_locked(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_standalone_list_route_does_not_expose_is_locked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db = MagicMock()
     _patch_get_db_context(monkeypatch, db)
     api_key = SimpleNamespace(
@@ -340,12 +423,14 @@ def test_standalone_list_route_does_not_expose_is_locked(monkeypatch: pytest.Mon
     )
     query = db.query.return_value.filter.return_value
     query.count.return_value = 1
-    query.order_by.return_value.offset.return_value.limit.return_value.all.return_value = [api_key]
+    query.order_by.return_value.offset.return_value.limit.return_value.all.return_value = [
+        api_key
+    ]
 
     monkeypatch.setattr(
         "src.api.admin.api_keys.routes.WalletService.get_wallet",
-        lambda _db, user_id=None, api_key_id=None, user=None, api_key=None: SimpleNamespace(
-            id="w-1"
+        lambda _db, user_id=None, api_key_id=None, user=None, api_key=None: (
+            SimpleNamespace(id="w-1")
         ),
     )
     client = _build_admin_api_keys_app(db, monkeypatch)
@@ -357,7 +442,9 @@ def test_standalone_list_route_does_not_expose_is_locked(monkeypatch: pytest.Mon
     assert "is_locked" not in payload["api_keys"][0]
 
 
-def test_standalone_detail_route_does_not_expose_is_locked(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_standalone_detail_route_does_not_expose_is_locked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db = MagicMock()
     api_key = SimpleNamespace(
         id="sa-key-2",
@@ -472,7 +559,9 @@ async def test_update_standalone_key_adapter_preserves_empty_restriction_lists(
     )
     captured: dict[str, object] = {}
 
-    def _update_api_key(_db: MagicMock, _key_id: str, **kwargs: object) -> SimpleNamespace:
+    def _update_api_key(
+        _db: MagicMock, _key_id: str, **kwargs: object
+    ) -> SimpleNamespace:
         captured.update(kwargs)
         return updated_key
 

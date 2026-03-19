@@ -53,6 +53,54 @@
             />
           </div>
 
+          <div
+            v-if="!isEditMode"
+            class="space-y-2"
+          >
+            <Label class="text-sm font-medium">Key 生成方式</Label>
+            <div class="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                :variant="form.key_mode === 'random' ? 'default' : 'outline'"
+                class="h-9"
+                @click="form.key_mode = 'random'"
+              >
+                随机生成
+              </Button>
+              <Button
+                type="button"
+                :variant="form.key_mode === 'manual' ? 'default' : 'outline'"
+                class="h-9"
+                @click="form.key_mode = 'manual'"
+              >
+                手动填入
+              </Button>
+            </div>
+
+            <div
+              v-if="form.key_mode === 'manual'"
+              class="space-y-2"
+            >
+              <Input
+                id="form-manual-key"
+                v-model="form.key"
+                type="text"
+                placeholder="例如：sk-xxxxxxxxxxx"
+                class="h-10 font-mono"
+                autocomplete="off"
+              />
+              <p class="text-xs text-muted-foreground">
+                必须以 "sk-" 开头，且长度大于 10 位
+              </p>
+              <p
+                v-if="manualKeyError"
+                class="text-xs text-destructive"
+              >
+                {{ manualKeyError }}
+              </p>
+            </div>
+          </div>
+
           <div class="space-y-2">
             <Label
               for="form-expires-at"
@@ -245,7 +293,7 @@
         取消
       </Button>
       <Button
-        :disabled="saving"
+        :disabled="saving || Boolean(manualKeyError)"
         class="h-10 px-5"
         @click="handleSubmit"
       >
@@ -270,6 +318,7 @@ import { MultiSelect } from '@/components/common'
 import { getProvidersSummary } from '@/api/endpoints/providers'
 import { getGlobalModels } from '@/api/global-models'
 import { adminApi } from '@/api/admin'
+import { normalizeApiKeyValue, validateManualApiKeyValue } from '@/utils/apiKey'
 import { log } from '@/utils/logger'
 import { parseNumberInput } from '@/utils/form'
 import type { ProviderWithEndpointsSummary, GlobalModelResponse } from '@/api/endpoints/types'
@@ -277,6 +326,7 @@ import type { ProviderWithEndpointsSummary, GlobalModelResponse } from '@/api/en
 export interface StandaloneKeyFormData {
   id?: string
   name: string
+  key?: string
   initial_balance_usd?: number
   unlimited_balance?: boolean
   expires_at?: string  // ISO 日期字符串，如 "2025-12-31"，undefined = 永不过期
@@ -290,6 +340,8 @@ export interface StandaloneKeyFormData {
 interface StandaloneKeyFormState {
   id?: string
   name: string
+  key_mode: 'random' | 'manual'
+  key: string
   initial_balance_usd?: number
   unlimited_balance?: boolean
   expires_at?: string
@@ -344,6 +396,8 @@ const modelOptions = computed(() =>
 // 表单数据
 const form = ref<StandaloneKeyFormState>({
   name: '',
+  key_mode: 'random',
+  key: '',
   initial_balance_usd: 10,
   unlimited_balance: false,
   expires_at: undefined,
@@ -368,6 +422,8 @@ const minExpiryDate = computed(() => {
 function resetForm() {
   form.value = {
     name: '',
+    key_mode: 'random',
+    key: '',
     initial_balance_usd: 10,
     unlimited_balance: false,
     expires_at: undefined,
@@ -388,6 +444,8 @@ function loadKeyData() {
   form.value = {
     id: props.apiKey.id,
     name: props.apiKey.name || '',
+    key_mode: 'random',
+    key: '',
     initial_balance_usd: props.apiKey.initial_balance_usd,
     unlimited_balance: props.apiKey.initial_balance_usd == null,
     expires_at: props.apiKey.expires_at,
@@ -410,6 +468,13 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   onClose: () => emit('close'),
   loadData: loadKeyData,
   resetForm,
+})
+
+const manualKeyError = computed(() => {
+  if (isEditMode.value || form.value.key_mode !== 'manual') {
+    return null
+  }
+  return validateManualApiKeyValue(form.value.key)
 })
 
 // 加载选项数据
@@ -436,9 +501,16 @@ function clearExpiryDate() {
 
 // 提交表单
 function handleSubmit() {
+  if (manualKeyError.value) {
+    return
+  }
+
   emit('submit', {
     id: form.value.id,
     name: form.value.name,
+    key: !isEditMode.value && form.value.key_mode === 'manual'
+      ? normalizeApiKeyValue(form.value.key)
+      : undefined,
     initial_balance_usd: form.value.initial_balance_usd,
     unlimited_balance: form.value.unlimited_balance,
     expires_at: form.value.expires_at,
