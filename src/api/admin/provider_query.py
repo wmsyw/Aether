@@ -9,6 +9,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -46,6 +47,11 @@ from src.services.model.upstream_fetcher import (
 from src.services.provider.oauth_token import resolve_oauth_access_token
 from src.services.proxy_node.resolver import resolve_effective_proxy
 from src.services.request.candidate import RequestCandidateService
+from src.services.request.model_test_debug import (
+    get_model_test_debug_from_extra_data,
+    merge_model_test_debug,
+    set_candidate_model_test_debug,
+)
 from src.utils.auth_utils import get_current_user
 
 if TYPE_CHECKING:
@@ -239,6 +245,8 @@ class TestModelFailoverRequest(BaseModel):
     api_format: str | None = None  # 指定 API 格式（endpoint signature）
     endpoint_id: str | None = None  # 指定仅使用该端点测试
     message: str | None = None
+    request_headers: dict[str, Any] | None = None
+    request_body: dict[str, Any] | None = None
     request_id: str | None = None
     concurrency: int = Field(default=1, ge=1, le=20)
 
@@ -259,6 +267,11 @@ class TestAttemptDetail(BaseModel):
     error_message: str | None = None
     status_code: int | None = None
     latency_ms: int | None = None
+    request_url: str | None = None
+    request_headers: dict[str, Any] | None = None
+    request_body: Any = None
+    response_headers: dict[str, Any] | None = None
+    response_body: Any = None
 
 
 class TestModelFailoverResponse(BaseModel):
@@ -283,6 +296,63 @@ DEFAULT_MODEL_TEST_MESSAGE = "Hello! This is a test message."
 def _resolve_test_message(message: str | None) -> str:
     normalized = str(message or "").strip()
     return normalized or DEFAULT_MODEL_TEST_MESSAGE
+
+
+def _build_test_request_payload(request: TestModelFailoverRequest) -> dict[str, Any]:
+    if isinstance(request.request_body, dict):
+        payload = deepcopy(request.request_body)
+        payload["model"] = request.model_name
+        return payload
+
+    return {
+        "model": request.model_name,
+        "messages": [{"role": "user", "content": _resolve_test_message(request.message)}],
+        "max_tokens": 30,
+        "temperature": 0.7,
+        "stream": True,
+    }
+
+
+def _build_test_request_headers(request: TestModelFailoverRequest) -> dict[str, str]:
+    if not isinstance(request.request_headers, dict):
+        return {}
+
+    headers: dict[str, str] = {}
+    for raw_key, raw_value in request.request_headers.items():
+        key = str(raw_key or "").strip()
+        if not key or raw_value is None:
+            continue
+
+        if isinstance(raw_value, str):
+            value = raw_value
+        elif isinstance(raw_value, (bool, int, float)):
+            value = str(raw_value)
+        else:
+            try:
+                value = json.dumps(raw_value, ensure_ascii=False)
+            except (TypeError, ValueError):
+                value = str(raw_value)
+
+        headers[key] = value
+
+    return headers
+
+
+def _extract_test_debug_payload(response: dict[str, Any]) -> dict[str, Any] | None:
+    debug = response.get("debug")
+    if not isinstance(debug, dict):
+        return None
+
+    payload: dict[str, Any] = {}
+    request_url = debug.get("request_url")
+    if isinstance(request_url, str) and request_url.strip():
+        payload["request_url"] = request_url.strip()
+
+    for key in ("request_headers", "request_body", "response_headers", "response_body"):
+        if key in debug and debug.get(key) is not None:
+            payload[key] = deepcopy(debug.get(key))
+
+    return payload or None
 
 
 def _test_check_response_has_error(resp: dict[str, Any]) -> bool:
@@ -1616,6 +1686,7 @@ async def _execute_test_check(
     key: Any,
     effective_model: str,
     request_payload: dict[str, Any],
+    request_headers: dict[str, str] | None,
     request_timeout: float,
     provider_type: str,
     user: User | None,
@@ -1635,6 +1706,8 @@ async def _execute_test_check(
 
     auth_type = str(getattr(key, "auth_type", "api_key") or "api_key").lower()
     extra_headers = get_extra_headers_from_endpoint(endpoint) or {}
+    if request_headers:
+        extra_headers.update(request_headers)
     if auth_type == "oauth":
         account_id = (auth_config or {}).get("account_id")
         if account_id:
@@ -1694,6 +1767,7 @@ async def _run_concurrent_test(
     is_cancelled: Callable[[], Awaitable[bool]],
     request_id: str,
     request_payload: dict[str, Any],
+    request_headers: dict[str, str] | None,
     effective_model_by_candidate_index: dict[int, str],
     request_timeout: float,
     provider_type: str,
@@ -1800,6 +1874,7 @@ async def _run_concurrent_test(
         local_provider: Provider | None = None
         local_endpoint: ProviderEndpoint | None = None
         local_key: ProviderAPIKey | None = None
+        debug_payload: dict[str, Any] | None = None
 
         try:
             if success_event.is_set() or await is_cancelled():
@@ -1828,11 +1903,13 @@ async def _run_concurrent_test(
                     str(request_payload.get("model", "") or ""),
                 ),
                 request_payload=request_payload,
+                request_headers=request_headers,
                 request_timeout=request_timeout,
                 provider_type=provider_type,
                 user=user,
                 db=None,
             )
+            debug_payload = _extract_test_debug_payload(response)
             elapsed_ms = max(0, int((time.perf_counter() - started_at) * 1000))
 
             with create_session() as parse_db:
@@ -1856,6 +1933,7 @@ async def _run_concurrent_test(
                     candidate_id=record_id,
                     status_code=200,
                     latency_ms=elapsed_ms,
+                    extra_data=merge_model_test_debug(None, debug_payload),
                 )
 
             if not success_event.is_set():
@@ -1898,6 +1976,7 @@ async def _run_concurrent_test(
                     ),
                     status_code=status_code,
                     latency_ms=elapsed_ms,
+                    extra_data=merge_model_test_debug(None, debug_payload),
                 )
             return {"status": "failed", "error": exc}
 
@@ -2137,6 +2216,9 @@ def _build_test_attempts_from_candidate_keys(
         meta = candidate_meta_by_pair.get((candidate_index, key_id)) or candidate_meta_by_index.get(
             candidate_index, {}
         )
+        debug_payload = get_model_test_debug_from_extra_data(
+            getattr(candidate_key, "extra_data", None)
+        )
 
         attempts.append(
             TestAttemptDetail(
@@ -2155,6 +2237,23 @@ def _build_test_attempts_from_candidate_keys(
                 error_message=getattr(candidate_key, "error_message", None),
                 status_code=getattr(candidate_key, "status_code", None),
                 latency_ms=getattr(candidate_key, "latency_ms", None),
+                request_url=(
+                    str(debug_payload.get("request_url"))
+                    if debug_payload and debug_payload.get("request_url")
+                    else None
+                ),
+                request_headers=(
+                    dict(debug_payload.get("request_headers"))
+                    if debug_payload and isinstance(debug_payload.get("request_headers"), dict)
+                    else None
+                ),
+                request_body=debug_payload.get("request_body") if debug_payload else None,
+                response_headers=(
+                    dict(debug_payload.get("response_headers"))
+                    if debug_payload and isinstance(debug_payload.get("response_headers"), dict)
+                    else None
+                ),
+                response_body=debug_payload.get("response_body") if debug_payload else None,
             )
         )
 
@@ -2285,13 +2384,8 @@ async def test_model_failover(
             error="No available candidates found for this model",
         ).model_dump()
 
-    request_payload = {
-        "model": request.model_name,
-        "messages": [{"role": "user", "content": _resolve_test_message(request.message)}],
-        "max_tokens": 30,
-        "temperature": 0.7,
-        "stream": True,
-    }
+    request_payload = _build_test_request_payload(request)
+    request_headers = _build_test_request_headers(request)
     request_id = str(request.request_id or f"provider-test-{uuid4().hex[:12]}")
     request_timeout = float(getattr(provider, "request_timeout", 0) or TimeoutDefaults.HTTP_REQUEST)
     provider_type = str(getattr(provider, "provider_type", "") or "").lower()
@@ -2310,11 +2404,13 @@ async def test_model_failover(
             key=key,
             effective_model=effective_model,
             request_payload=request_payload,
+            request_headers=request_headers or None,
             request_timeout=request_timeout,
             provider_type=provider_type,
             user=current_user,
             db=db,
         )
+        set_candidate_model_test_debug(candidate, _extract_test_debug_payload(response))
         return _extract_test_response_or_raise(
             response=response,
             endpoint=endpoint,
@@ -2353,6 +2449,7 @@ async def test_model_failover(
                 is_cancelled=http_request.is_disconnected,
                 request_id=request_id,
                 request_payload=dict(request_payload),
+                request_headers=request_headers or None,
                 effective_model_by_candidate_index=effective_model_by_candidate_index,
                 request_timeout=request_timeout,
                 provider_type=provider_type,
@@ -2371,7 +2468,7 @@ async def test_model_failover(
                 is_stream=False,
                 capability_requirements=None,
                 request_body_state=MutableRequestBodyState(dict(request_payload)),
-                request_headers=None,
+                request_headers=request_headers or None,
                 request_body=dict(request_payload),
                 affinity_key=f"provider-test:{provider.id}",
                 create_pending_usage=False,
