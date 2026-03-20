@@ -216,14 +216,11 @@ def _clear_oauth_invalid_marker(db: Session, key_id: str) -> dict[str, str]:
     old_reason = key.oauth_invalid_reason
     key.oauth_invalid_at = None
     key.oauth_invalid_reason = None
-    key.is_active = True
     db.commit()
     _run_async_with_fallback(_invalidate_cache_after_clear_oauth_invalid(key_id))
 
-    logger.info(
-        "[OK] 手动清除 Key {}... 的 OAuth 失效标记并自动启用 (原因: {})", key_id[:8], old_reason
-    )
-    return {"message": "已清除 OAuth 失效标记，Key 已自动启用"}
+    logger.info("[OK] 手动清除 Key {}... 的 OAuth 失效标记 (原因: {})", key_id[:8], old_reason)
+    return {"message": "已清除 OAuth 失效标记"}
 
 
 def clear_oauth_invalid_response(db: Session, key_id: str) -> dict[str, str]:

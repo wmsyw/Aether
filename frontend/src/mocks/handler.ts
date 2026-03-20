@@ -1374,6 +1374,13 @@ function generateMockKeysForProvider(providerId: string, count: number = 2) {
       oauth_expires_at: markInvalid ? null : nowSec + 6 * 3600,
       oauth_invalid_at: markInvalid ? nowSec - 3600 : null,
       oauth_invalid_reason: markInvalid ? '[ACCOUNT_BLOCK] Demo verification required' : null,
+      status_snapshot: {
+        oauth: { code: 'valid', label: '有效', reason: null, expires_at: nowSec + 6 * 3600, invalid_at: null, requires_reauth: false, expiring_soon: false },
+        account: markInvalid
+          ? { code: 'account_verification', label: '需要验证', reason: 'Demo verification required', blocked: true, source: 'oauth_invalid', recoverable: false }
+          : { code: 'ok', label: null, reason: null, blocked: false, source: null, recoverable: false },
+        quota: { code: 'unknown', label: null, reason: null, exhausted: false, usage_ratio: null, updated_at: null, reset_seconds: null, plan_type: null }
+      },
       oauth_plan_type: 'pro',
       oauth_account_id: `acct-${providerId}`
     } : { auth_type: 'api_key' }

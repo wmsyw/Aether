@@ -212,6 +212,12 @@ def list_provider_keys_responses(
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
         raise NotFoundException(f"Provider {provider_id} 不存在")
+    provider_type = (
+        str(
+            getattr(provider, "provider_type", None) or getattr(provider, "type", None) or ""
+        ).strip()
+        or None
+    )
 
     keys = (
         db.query(ProviderAPIKey)
@@ -223,7 +229,7 @@ def list_provider_keys_responses(
         .limit(limit)
         .all()
     )
-    return [build_key_response(key) for key in keys]
+    return [build_key_response(key, provider_type=provider_type) for key in keys]
 
 
 def reveal_endpoint_key_payload(

@@ -334,7 +334,7 @@
                             <!-- OAuth 状态（失效/过期/倒计时）和刷新按钮 -->
                             <template v-if="getKeyOAuthExpires(key)">
                               <!-- 账号级别异常：醒目提示 + 清除按钮 -->
-                              <template v-if="getKeyOAuthExpires(key)?.isInvalid && isAccountLevelBlock(key)">
+                              <template v-if="isAccountLevelBlock(key)">
                                 <Badge
                                   variant="destructive"
                                   class="text-[10px] px-1.5 py-0 shrink-0 gap-0.5"
@@ -375,7 +375,7 @@
                                   size="icon"
                                   class="h-4 w-4 shrink-0"
                                   :disabled="refreshingOAuthKeyId === key.id"
-                                  :title="getKeyOAuthExpires(key)?.isInvalid ? '重新授权' : '刷新 Token'"
+                                  :title="getOAuthRefreshButtonTitle(key)"
                                   @click.stop="handleRefreshOAuth(key)"
                                 >
                                   <RefreshCw
@@ -1089,7 +1089,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useClipboard } from '@/composables/useClipboard'
-import { useCountdownTimer, formatCountdown, getOAuthExpiresCountdown, getCodexResetCountdown } from '@/composables/useCountdownTimer'
+import { useCountdownTimer, formatCountdown, getCodexResetCountdown } from '@/composables/useCountdownTimer'
 import {
   getProvider,
   getProviderEndpoints,
@@ -1136,8 +1136,15 @@ import {
 import type { UpstreamMetadata, AntigravityModelQuota } from '@/api/endpoints/types'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { isOAuthAccountProviderType, isKeyManagedProviderType } from '../utils/providerTypeUtils'
-import { isAccountLevelBlockReason, cleanAccountBlockReason } from '@/utils/accountBlock'
 import { getOAuthOrgBadge } from '@/utils/oauthIdentity'
+import { getOAuthRefreshFeedback } from '@/utils/oauthRefreshFeedback'
+import {
+  getAccountStatusDisplay,
+  getAccountStatusTitle,
+  getOAuthRefreshButtonTitle as resolveOAuthRefreshButtonTitle,
+  getOAuthStatusDisplay,
+  getOAuthStatusTitle as resolveOAuthStatusTitle,
+} from '@/utils/providerKeyStatus'
 
 // 扩展端点类型,包含密钥列表
 interface ProviderEndpointWithKeys extends ProviderEndpoint {
@@ -1158,7 +1165,7 @@ const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
 
-const { error: showError, success: showSuccess } = useToast()
+const { error: showError, success: showSuccess, warning: showWarning } = useToast()
 const { confirm } = useConfirm()
 const { copyToClipboard } = useClipboard()
 const { tick: countdownTick, start: startCountdownTimer, stop: stopCountdownTimer } = useCountdownTimer()
@@ -1643,7 +1650,7 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
   refreshingOAuthKeyId.value = key.id
   try {
     const result = await refreshProviderOAuth(key.id)
-    showSuccess('Token 刷新成功')
+    let refreshedKey: EndpointAPIKey | null = null
     // 更新本地数据
     const keyInList = providerKeys.value.find(k => k.id === key.id)
     if (keyInList) {
@@ -1655,7 +1662,18 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
       if (freshKeys) {
         providerKeys.value = freshKeys
         syncCurrentSelections(endpoints.value, freshKeys)
+        refreshedKey = freshKeys.find(item => item.id === key.id) ?? null
       }
+    }
+    const feedback = getOAuthRefreshFeedback({
+      accountStateRecheckAttempted: result.account_state_recheck_attempted,
+      accountStateRecheckError: result.account_state_recheck_error,
+      snapshot: refreshedKey,
+    })
+    if (feedback.tone === 'warning') {
+      showWarning(feedback.message)
+    } else {
+      showSuccess(feedback.message)
     }
     // Antigravity：token 刷新后可能完成了账号激活，触发配额获取
     // （不 emit('refresh')，避免触发全局 provider 余额刷新）
@@ -1669,7 +1687,9 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
 
 // 判断是否为账号级别的封禁（刷新 token 无法修复）
 function isAccountLevelBlock(key: EndpointAPIKey): boolean {
-  return isAccountLevelBlockReason(key.oauth_invalid_reason)
+  const account = getAccountStatusDisplay(key)
+  const oauth = getOAuthStatusDisplay(key, countdownTick.value)
+  return account.blocked && !oauth?.isInvalid
 }
 
 // 清除 OAuth 失效标记
@@ -1678,7 +1698,7 @@ async function handleClearOAuthInvalid(key: EndpointAPIKey) {
 
   const confirmed = await confirm({
     title: '清除账号异常标记',
-    message: `确认账号 "${key.name || key.id.slice(0, 8)}" 已手动完成验证？清除后该 Key 将恢复正常调度。`,
+    message: `确认账号 "${key.name || key.id.slice(0, 8)}" 已手动完成验证？清除后系统会按当前手动开关和调度状态重新评估该 Key。`,
     confirmText: '确认清除',
     variant: 'default',
   })
@@ -1687,13 +1707,33 @@ async function handleClearOAuthInvalid(key: EndpointAPIKey) {
   clearingOAuthInvalidKeyId.value = key.id
   try {
     await clearOAuthInvalid(key.id)
-    showSuccess('已清除 OAuth 异常标记，Key 已自动启用')
+    showSuccess('已清除 OAuth 异常标记')
     // 更新本地数据
     const keyInList = providerKeys.value.find(k => k.id === key.id)
     if (keyInList) {
       keyInList.oauth_invalid_at = null
       keyInList.oauth_invalid_reason = null
-      keyInList.is_active = true
+      if (keyInList.status_snapshot) {
+        keyInList.status_snapshot = {
+          ...keyInList.status_snapshot,
+          oauth: {
+            ...keyInList.status_snapshot.oauth,
+            code: 'none',
+            label: null,
+            reason: null,
+            invalid_at: null,
+            requires_reauth: false,
+          },
+          account: {
+            ...keyInList.status_snapshot.account,
+            code: 'ok',
+            label: null,
+            reason: null,
+            blocked: false,
+            recoverable: false,
+          },
+        }
+      }
     }
     await loadEndpoints()
   } catch (err: unknown) {
@@ -1825,8 +1865,11 @@ function shouldAutoRefreshCodexQuota(): boolean {
 
 // 检查 OAuth Token 是否即将过期（Codex / Antigravity / Kiro）
 function isTokenExpiringSoon(key: EndpointAPIKey, now: number): boolean {
-  return key.oauth_invalid_at == null
-    && typeof key.oauth_expires_at === 'number'
+  const oauthCode = String(key.status_snapshot?.oauth?.code || '').trim().toLowerCase()
+  if (oauthCode && oauthCode !== 'valid' && oauthCode !== 'expiring') {
+    return false
+  }
+  return typeof key.oauth_expires_at === 'number'
     && (key.oauth_expires_at - now) <= AUTO_TOKEN_REFRESH_SKEW_SECONDS
 }
 
@@ -2634,31 +2677,20 @@ function getOAuthPlanTypeClass(planType: string): string {
 
 // OAuth 状态信息（包括失效和过期）
 function getKeyOAuthExpires(key: EndpointAPIKey) {
-  if (key.auth_type !== 'oauth') return null
-  // 即使没有 expires_at，也要检查 invalid_at
-  if (!key.oauth_expires_at && !key.oauth_invalid_at) return null
-  return getOAuthExpiresCountdown(
-    key.oauth_expires_at,
-    countdownTick.value,
-    key.oauth_invalid_at,
-    key.oauth_invalid_reason
-  )
+  return getOAuthStatusDisplay(key, countdownTick.value)
+}
+
+function getOAuthRefreshButtonTitle(key: EndpointAPIKey): string {
+  return resolveOAuthRefreshButtonTitle(key, countdownTick.value)
 }
 
 // OAuth 状态的 title 提示
 function getOAuthStatusTitle(key: EndpointAPIKey): string {
-  const status = getKeyOAuthExpires(key)
-  if (!status) return ''
-  if (status.isInvalid) {
-    const cleaned = status.invalidReason && isAccountLevelBlockReason(status.invalidReason)
-      ? cleanAccountBlockReason(status.invalidReason)
-      : status.invalidReason
-    return cleaned ? `Token 已失效: ${cleaned}` : 'Token 已失效'
+  const accountTitle = getAccountStatusTitle(key)
+  if (accountTitle && isAccountLevelBlock(key)) {
+    return accountTitle
   }
-  if (status.isExpired) {
-    return 'Token 已过期，请重新授权'
-  }
-  return `Token 剩余有效期: ${status.text}`
+  return resolveOAuthStatusTitle(key, countdownTick.value)
 }
 
 // 健康度颜色

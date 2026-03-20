@@ -30,6 +30,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -2066,6 +2068,7 @@ class ProviderAPIKey(ExportMixin, Base):
     # OAuth 失效状态（账号被封、授权撤销、刷新失败等）
     oauth_invalid_at = Column(DateTime(timezone=True), nullable=True)  # 失效时间
     oauth_invalid_reason = Column(String(255), nullable=True)  # 失效原因
+    status_snapshot = Column(JSON, nullable=True, default=None)  # 结构化状态快照（兼容旧字段）
 
     # Key 级别的代理配置（覆盖 Provider 级别的代理设置）
     # 结构: {"node_id": "xxx", "enabled": true} 或 {"url": "socks5://...", "enabled": true}
@@ -2090,6 +2093,49 @@ class ProviderAPIKey(ExportMixin, Base):
 
     # 关系
     provider = relationship("Provider", back_populates="api_keys")
+
+
+_PROVIDER_API_KEY_STATUS_SNAPSHOT_FIELDS: tuple[str, ...] = (
+    "auth_type",
+    "auth_config",
+    "expires_at",
+    "oauth_invalid_at",
+    "oauth_invalid_reason",
+    "upstream_metadata",
+    "provider_id",
+)
+
+
+def _sync_provider_api_key_status_snapshot(
+    target: ProviderAPIKey,
+    *,
+    connection: Any | None,
+    force: bool,
+) -> None:
+    state = inspect(target)
+    if state is None:
+        return
+    if not force:
+        relevant_changed = any(
+            state.attrs[field].history.has_changes()
+            for field in _PROVIDER_API_KEY_STATUS_SNAPSHOT_FIELDS
+        )
+        if not relevant_changed and getattr(target, "status_snapshot", None) is not None:
+            return
+
+    from src.services.provider_keys.status_snapshot_store import sync_provider_key_status_snapshot
+
+    sync_provider_key_status_snapshot(target, connection=connection)
+
+
+@event.listens_for(ProviderAPIKey, "before_insert")
+def _provider_api_key_before_insert(mapper: Any, connection: Any, target: ProviderAPIKey) -> None:
+    _sync_provider_api_key_status_snapshot(target, connection=connection, force=True)
+
+
+@event.listens_for(ProviderAPIKey, "before_update")
+def _provider_api_key_before_update(mapper: Any, connection: Any, target: ProviderAPIKey) -> None:
+    _sync_provider_api_key_status_snapshot(target, connection=connection, force=False)
 
 
 def _generate_short_id(length: int = 12) -> str:

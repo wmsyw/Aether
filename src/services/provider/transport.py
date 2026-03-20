@@ -21,6 +21,7 @@ from src.core.api_format import (
 from src.core.logger import logger
 from src.core.provider_types import ProviderType, normalize_provider_type
 from src.services.provider.format import normalize_endpoint_signature
+from src.services.provider.provider_context import resolve_provider_type
 from src.services.provider.request_context import (
     get_selected_base_url,
     set_selected_base_url,
@@ -137,34 +138,18 @@ def _get_provider_type(
     """尽力获取 Provider.provider_type（用于 Antigravity 等 Provider 特判）。
 
     优先级:
-    1. endpoint.provider.provider_type
+    1. endpoint.provider_type（如果调用方已做扁平化注入）
     2. key.provider.provider_type
     3. decrypted_auth_config["provider_type"]（OAuth 导入的凭证）
+    4. provider_id 对应的 Provider 记录
     """
-    try:
-        provider = getattr(endpoint, "provider", None)
-        if provider is not None:
-            pt = getattr(provider, "provider_type", None)
-            if pt:
-                return str(pt).lower()
-    except Exception:
-        pass
-
-    try:
-        if key is not None:
-            provider = getattr(key, "provider", None)
-            if provider is not None:
-                pt = getattr(provider, "provider_type", None)
-                if pt:
-                    return str(pt).lower()
-    except Exception:
-        pass
-
-    # Fallback: OAuth 导入的凭证可能包含 provider_type（如 Kiro）
-    if decrypted_auth_config:
-        pt = decrypted_auth_config.get("provider_type")
-        if isinstance(pt, str) and pt.strip():
-            return pt.strip().lower()
+    resolved = resolve_provider_type(
+        endpoint=endpoint,
+        key=key,
+        decrypted_auth_config=decrypted_auth_config,
+    )
+    if resolved:
+        return resolved
 
     # Fallback: 历史 Vertex 数据可能缺少 provider_type，但 base_url 已固定到 aiplatform。
     try:

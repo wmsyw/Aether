@@ -44,7 +44,10 @@ from src.services.model.upstream_fetcher import (
     build_format_to_config,
     fetch_models_for_key,
 )
-from src.services.provider.oauth_token import resolve_oauth_access_token
+from src.services.provider.oauth_token import (
+    resolve_oauth_access_token,
+    verify_oauth_before_account_block,
+)
 from src.services.proxy_node.resolver import resolve_effective_proxy
 from src.services.request.candidate import RequestCandidateService
 from src.services.request.model_test_debug import (
@@ -1224,37 +1227,45 @@ async def test_model(
                         or "permission" in str(error_obj.get("status", "")).lower()
                     )
                 ):
-                    from datetime import datetime, timezone
-
-                    from src.services.provider.oauth_token import (
-                        OAUTH_ACCOUNT_BLOCK_PREFIX,
+                    should_mark = await verify_oauth_before_account_block(
+                        endpoint=endpoint,
+                        key=api_key,
+                        candidate_reason="Google 要求验证账号",
+                        request_id="test-model",
+                        key_display=f"test-model:{api_key.id}",
                     )
-
-                    api_key.oauth_invalid_at = datetime.now(timezone.utc)
-                    api_key.oauth_invalid_reason = (
-                        f"{OAUTH_ACCOUNT_BLOCK_PREFIX}Google 要求验证账号"
-                    )
-                    api_key.is_active = False
-                    db.commit()
-                    oauth_email = None
-                    if getattr(api_key, "auth_config", None):
-                        try:
-                            decrypted = crypto_service.decrypt(api_key.auth_config)
-                            parsed = json.loads(decrypted)
-                            if isinstance(parsed, dict):
-                                email_val = parsed.get("email")
-                                if isinstance(email_val, str) and email_val.strip():
-                                    oauth_email = email_val.strip()
-                        except Exception:
-                            oauth_email = None
-                    if oauth_email:
-                        logger.warning(
-                            "[test-model] Key {} (email={}) 因 403 verify 已标记为异常",
-                            api_key.id,
-                            oauth_email,
+                    if should_mark:
+                        from src.services.provider.oauth_token import (
+                            OAUTH_ACCOUNT_BLOCK_PREFIX,
                         )
-                    else:
-                        logger.warning("[test-model] Key {} 因 403 verify 已标记为异常", api_key.id)
+
+                        api_key.oauth_invalid_at = datetime.now(timezone.utc)
+                        api_key.oauth_invalid_reason = (
+                            f"{OAUTH_ACCOUNT_BLOCK_PREFIX}Google 要求验证账号"
+                        )
+                        db.commit()
+                        oauth_email = None
+                        if getattr(api_key, "auth_config", None):
+                            try:
+                                decrypted = crypto_service.decrypt(api_key.auth_config)
+                                parsed = json.loads(decrypted)
+                                if isinstance(parsed, dict):
+                                    email_val = parsed.get("email")
+                                    if isinstance(email_val, str) and email_val.strip():
+                                        oauth_email = email_val.strip()
+                            except Exception:
+                                oauth_email = None
+                        if oauth_email:
+                            logger.warning(
+                                "[test-model] Key {} (email={}) 因 403 verify 已标记为异常",
+                                api_key.id,
+                                oauth_email,
+                            )
+                        else:
+                            logger.warning(
+                                "[test-model] Key {} 因 403 verify 已标记为异常",
+                                api_key.id,
+                            )
 
                 upstream_status = int(
                     response.get("status_code", 0) or error_obj.get("code", 0) or 500
@@ -1918,7 +1929,7 @@ async def _run_concurrent_test(
                     .filter(ProviderAPIKey.id == str(getattr(local_key, "id", "") or ""))
                     .first()
                 )
-                parsed = _extract_test_response_or_raise(
+                parsed = await _extract_test_response_or_raise(
                     response=response,
                     endpoint=local_endpoint,
                     provider_name=str(local_provider.name),
@@ -2078,14 +2089,15 @@ async def _run_concurrent_test(
     }
 
 
-def _maybe_mark_test_oauth_key_invalid(
+async def _maybe_mark_test_oauth_key_invalid(
     *,
     db: Session,
+    endpoint: Any,
     key: Any,
     auth_type: str,
     error_payload: Any,
 ) -> None:
-    if auth_type != "oauth" or not isinstance(error_payload, dict):
+    if auth_type != "oauth" or key is None or not isinstance(error_payload, dict):
         return
 
     error_obj = error_payload.get("error")
@@ -2101,17 +2113,24 @@ def _maybe_mark_test_oauth_key_invalid(
     ):
         return
 
-    from datetime import datetime, timezone
+    should_mark = await verify_oauth_before_account_block(
+        endpoint=endpoint,
+        key=key,
+        candidate_reason="Google 要求验证账号",
+        request_id="provider-query-test",
+        key_display=f"provider-query-test:{getattr(key, 'id', '?')}",
+    )
+    if not should_mark:
+        return
 
     from src.services.provider.oauth_token import OAUTH_ACCOUNT_BLOCK_PREFIX
 
     key.oauth_invalid_at = datetime.now(timezone.utc)
     key.oauth_invalid_reason = f"{OAUTH_ACCOUNT_BLOCK_PREFIX}Google 要求验证账号"
-    key.is_active = False
     db.commit()
 
 
-def _extract_test_response_or_raise(
+async def _extract_test_response_or_raise(
     *,
     response: dict[str, Any],
     endpoint: Any,
@@ -2127,8 +2146,9 @@ def _extract_test_response_or_raise(
         parsed_payload = _parse_jsonish(parsed_payload.get("response_body"))
 
     if isinstance(parsed_payload, dict) and parsed_payload.get("error"):
-        _maybe_mark_test_oauth_key_invalid(
+        await _maybe_mark_test_oauth_key_invalid(
             db=db,
+            endpoint=endpoint,
             key=api_key,
             auth_type=auth_type,
             error_payload=parsed_payload,
@@ -2411,7 +2431,7 @@ async def test_model_failover(
             db=db,
         )
         set_candidate_model_test_debug(candidate, _extract_test_debug_payload(response))
-        return _extract_test_response_or_raise(
+        return await _extract_test_response_or_raise(
             response=response,
             endpoint=endpoint,
             provider_name=str(provider_obj.name),
