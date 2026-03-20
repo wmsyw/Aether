@@ -70,8 +70,23 @@ def _mark_refresh_failed_sync(key_id: str, reason: str) -> None:
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
         if not key:
             raise NotFoundException("Key 不存在", "key")
+        current_reason = str(getattr(key, "oauth_invalid_reason", None) or "").strip()
+        if _should_preserve_refresh_failure_reason(current_reason):
+            return
         key.oauth_invalid_at = datetime.now(timezone.utc)
         key.oauth_invalid_reason = reason
+
+
+def _should_preserve_refresh_failure_reason(reason: str | None) -> bool:
+    from src.services.provider.oauth_token import is_account_level_block
+    from src.services.provider.pool.account_state import OAUTH_EXPIRED_PREFIX
+
+    text = str(reason or "").strip()
+    if not text:
+        return False
+    if is_account_level_block(text):
+        return True
+    return text.startswith(OAUTH_EXPIRED_PREFIX)
 
 
 def _store_refreshed_oauth_sync(
@@ -86,12 +101,15 @@ def _store_refreshed_oauth_sync(
 
         key.api_key = crypto_service.encrypt(access_token)
         key.auth_config = crypto_service.encrypt(json.dumps(parsed_auth_config))
-        # 刷新成功 => 清除所有 oauth_invalid 标记（包括 [ACCOUNT_BLOCK]）。
-        # Token 能成功刷新说明账号可用，之前的 block 标记应视为过时。
-        if getattr(key, "oauth_invalid_at", None) is not None:
+        from src.services.provider.oauth_token import is_account_level_block
+
+        current_reason = str(getattr(key, "oauth_invalid_reason", None) or "").strip()
+        # 手动 refresh 只清除可恢复的 token 类异常，不自动清账号级 block。
+        if getattr(key, "oauth_invalid_at", None) is not None and not is_account_level_block(
+            current_reason
+        ):
             key.oauth_invalid_at = None
             key.oauth_invalid_reason = None
-        key.is_active = True
 
 
 # ==============================================================================
@@ -278,6 +296,8 @@ class CompleteOAuthResponse(BaseModel):
     expires_at: int | None = None
     has_refresh_token: bool = False
     email: str | None = None
+    account_state_recheck_attempted: bool = False
+    account_state_recheck_error: str | None = None
 
 
 class ProviderCompleteOAuthRequest(BaseModel):
@@ -985,12 +1005,19 @@ async def complete_oauth(
         access_token,
         auth_config,
     )
+    recheck_attempted, recheck_error = await _refresh_account_state_after_oauth_update(
+        provider_id=str(provider.id),
+        provider_type=provider_type,
+        key_ids=[key_id],
+    )
 
     return CompleteOAuthResponse(
         provider_type=provider_type,
         expires_at=expires_at,
         has_refresh_token=bool(refresh_token),
         email=auth_config.get("email"),
+        account_state_recheck_attempted=recheck_attempted,
+        account_state_recheck_error=recheck_error,
     )
 
 
@@ -1044,10 +1071,17 @@ async def refresh_oauth(
             try:
                 access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
             except Exception as e:
+                refresh_error = str(e) or type(e).__name__
                 await run_in_threadpool(
                     _mark_refresh_failed_sync,
                     key_id,
-                    f"[REFRESH_FAILED] Token 续期失败: {e}",
+                    f"[REFRESH_FAILED] Token 续期失败: {refresh_error}",
+                )
+                await _recheck_account_state_after_failed_refresh(
+                    provider_id=str(provider.id),
+                    provider_type=provider_type,
+                    key_id=key_id,
+                    refresh_error=refresh_error,
                 )
                 logger.warning("Kiro Key {} token 刷新失败，已标记为刷新失效: {}", key_id, e)
                 raise InvalidRequestException("Kiro token refresh 失败，请检查凭据是否有效")
@@ -1058,12 +1092,19 @@ async def refresh_oauth(
                 access_token,
                 new_cfg.to_dict(),
             )
+            recheck_attempted, recheck_error = await _refresh_account_state_after_oauth_update(
+                provider_id=str(provider.id),
+                provider_type=provider_type,
+                key_ids=[key_id],
+            )
 
             return CompleteOAuthResponse(
                 provider_type=provider_type,
                 expires_at=new_cfg.expires_at or None,
                 has_refresh_token=bool(new_cfg.refresh_token),
                 email=None,
+                account_state_recheck_attempted=recheck_attempted,
+                account_state_recheck_error=recheck_error,
             )
 
         template = _require_oauth_template(provider_type)
@@ -1146,6 +1187,12 @@ async def refresh_oauth(
                 logger.warning(
                     "Key {} OAuth token 刷新失败，已标记为刷新失效: {}", key_id, error_reason
                 )
+            await _recheck_account_state_after_failed_refresh(
+                provider_id=str(provider.id),
+                provider_type=provider_type,
+                key_id=key_id,
+                refresh_error=error_reason,
+            )
 
             raise InvalidRequestException(f"token refresh 失败: {error_reason}")
 
@@ -1186,12 +1233,19 @@ async def refresh_oauth(
             )
 
         await run_in_threadpool(_store_refreshed_oauth_sync, key_id, access_token, parsed)
+        recheck_attempted, recheck_error = await _refresh_account_state_after_oauth_update(
+            provider_id=str(provider.id),
+            provider_type=provider_type,
+            key_ids=[key_id],
+        )
 
         return CompleteOAuthResponse(
             provider_type=provider_type,
             expires_at=expires_at,
             has_refresh_token=bool(parsed.get("refresh_token")),
             email=parsed.get("email"),
+            account_state_recheck_attempted=recheck_attempted,
+            account_state_recheck_error=recheck_error,
         )
     finally:
         if got_lock:
@@ -2055,6 +2109,22 @@ async def _refresh_quota_after_import(
     key_ids: list[str],
 ) -> None:
     """导入完成后触发一次配额刷新（使用独立 db session）。"""
+    attempted, error = await _refresh_account_state_after_oauth_update(
+        provider_id=provider_id,
+        provider_type=provider_type,
+        key_ids=key_ids,
+    )
+    if attempted and error:
+        logger.warning("[BATCH_IMPORT] 导入后配额刷新失败 (provider={}): {}", provider_id, error)
+
+
+async def _refresh_account_state_after_oauth_update(
+    *,
+    provider_id: str,
+    provider_type: str,
+    key_ids: list[str],
+) -> tuple[bool, str | None]:
+    """OAuth 更新成功后，立即复检账号额度/状态。"""
     from src.services.provider_keys.key_quota_service import (
         CODEX_WHAM_USAGE_URL,
         QUOTA_REFRESH_PROVIDER_TYPES,
@@ -2062,7 +2132,7 @@ async def _refresh_quota_after_import(
     )
 
     if not key_ids or provider_type not in QUOTA_REFRESH_PROVIDER_TYPES:
-        return
+        return False, None
     try:
         db = create_session()
         try:
@@ -2074,8 +2144,38 @@ async def _refresh_quota_after_import(
             )
         finally:
             db.close()
+        return True, None
     except Exception as exc:
-        logger.warning("[BATCH_IMPORT] 导入后配额刷新失败 (provider={}): {}", provider_id, exc)
+        brief = str(exc)[:120] if str(exc) else type(exc).__name__
+        return True, f"{type(exc).__name__}: {brief}"
+
+
+async def _recheck_account_state_after_failed_refresh(
+    *,
+    provider_id: str,
+    provider_type: str,
+    key_id: str,
+    refresh_error: str,
+) -> None:
+    attempted, error = await _refresh_account_state_after_oauth_update(
+        provider_id=provider_id,
+        provider_type=provider_type,
+        key_ids=[key_id],
+    )
+    if not attempted:
+        return
+    if error:
+        logger.warning(
+            "[OAUTH_REFRESH] Key {} 刷新失败后复检账号状态失败: {} (refresh_error={})",
+            key_id,
+            error,
+            refresh_error,
+        )
+        return
+    logger.info(
+        "[OAUTH_REFRESH] Key {} 刷新失败后已使用现有 access token 复检账号状态",
+        key_id,
+    )
 
 
 # ==============================================================================

@@ -244,10 +244,10 @@ def test_clear_oauth_invalid_response_invalidates_caches(
 
     result = command_module.clear_oauth_invalid_response(cast(Any, db), key_id="key-1")
 
-    assert result["message"] == "已清除 OAuth 失效标记，Key 已自动启用"
+    assert result["message"] == "已清除 OAuth 失效标记"
     assert key.oauth_invalid_at is None
     assert key.oauth_invalid_reason is None
-    assert key.is_active is True
+    assert key.is_active is False
     assert db.commit_count == 1
     assert cache_calls == [("key", "key-1"), ("models", None)]
 

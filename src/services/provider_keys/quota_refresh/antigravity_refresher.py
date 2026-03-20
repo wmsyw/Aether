@@ -75,9 +75,8 @@ async def refresh_antigravity_key_quota(
             fetch_ctx, timeout_seconds=10.0
         )
     except AntigravityAccountForbiddenException as e:
-        # 对齐 AM：所有 403 一律标记 is_forbidden 并停用
+        # 对齐 AM：所有 403 一律标记 is_forbidden；手动启用状态保持不变。
         state_updates[key.id] = {
-            "is_active": False,
             "oauth_invalid_at": datetime.now(timezone.utc),
             "oauth_invalid_reason": f"账户访问被禁止: {e.reason or e.message}",
         }
@@ -91,7 +90,7 @@ async def refresh_antigravity_key_quota(
             }
         }
         logger.warning(
-            "[ANTIGRAVITY_QUOTA] Key {} 账户访问被禁止，已自动停用: {}",
+            "[ANTIGRAVITY_QUOTA] Key {} 账户访问被禁止，已更新账号状态: {}",
             key.id,
             e.reason or e.message,
         )
@@ -101,7 +100,7 @@ async def refresh_antigravity_key_quota(
             "status": "forbidden",
             "message": f"账户访问被禁止: {e.reason or e.message}",
             "is_forbidden": True,
-            "auto_disabled": True,
+            "auto_disabled": False,
         }
 
     if ok and upstream_meta:
@@ -114,7 +113,6 @@ async def refresh_antigravity_key_quota(
         state_updates[key.id] = {
             "oauth_invalid_at": None,
             "oauth_invalid_reason": None,
-            "is_active": True,
         }
         return {
             "key_id": key.id,

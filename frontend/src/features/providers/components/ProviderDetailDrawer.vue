@@ -1158,7 +1158,7 @@ const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
 
-const { error: showError, success: showSuccess } = useToast()
+const { error: showError, success: showSuccess, warning: showWarning } = useToast()
 const { confirm } = useConfirm()
 const { copyToClipboard } = useClipboard()
 const { tick: countdownTick, start: startCountdownTimer, stop: stopCountdownTimer } = useCountdownTimer()
@@ -1643,7 +1643,15 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
   refreshingOAuthKeyId.value = key.id
   try {
     const result = await refreshProviderOAuth(key.id)
-    showSuccess('Token 刷新成功')
+    if (result.account_state_recheck_attempted) {
+      if (result.account_state_recheck_error) {
+        showWarning('Token 刷新成功，但账号状态复检失败')
+      } else {
+        showSuccess('Token 刷新成功，已复检账号状态')
+      }
+    } else {
+      showSuccess('Token 刷新成功')
+    }
     // 更新本地数据
     const keyInList = providerKeys.value.find(k => k.id === key.id)
     if (keyInList) {
@@ -1678,7 +1686,7 @@ async function handleClearOAuthInvalid(key: EndpointAPIKey) {
 
   const confirmed = await confirm({
     title: '清除账号异常标记',
-    message: `确认账号 "${key.name || key.id.slice(0, 8)}" 已手动完成验证？清除后该 Key 将恢复正常调度。`,
+    message: `确认账号 "${key.name || key.id.slice(0, 8)}" 已手动完成验证？清除后系统会按当前手动开关和调度状态重新评估该 Key。`,
     confirmText: '确认清除',
     variant: 'default',
   })
@@ -1687,13 +1695,12 @@ async function handleClearOAuthInvalid(key: EndpointAPIKey) {
   clearingOAuthInvalidKeyId.value = key.id
   try {
     await clearOAuthInvalid(key.id)
-    showSuccess('已清除 OAuth 异常标记，Key 已自动启用')
+    showSuccess('已清除 OAuth 异常标记')
     // 更新本地数据
     const keyInList = providerKeys.value.find(k => k.id === key.id)
     if (keyInList) {
       keyInList.oauth_invalid_at = null
       keyInList.oauth_invalid_reason = null
-      keyInList.is_active = true
     }
     await loadEndpoints()
   } catch (err: unknown) {

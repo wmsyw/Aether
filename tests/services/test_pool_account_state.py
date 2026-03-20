@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from src.services.provider.pool.account_state import resolve_pool_account_state
+from src.services.provider.pool.account_state import (
+    resolve_pool_account_state,
+    should_auto_remove_account_state,
+)
 
 
 def test_resolve_from_kiro_banned_metadata() -> None:
@@ -39,6 +42,18 @@ def test_resolve_from_structured_oauth_reason_verification() -> None:
     assert state.code == "account_blocked"
     assert state.label == "账号异常"
     assert state.reason == "Google requires verification"
+
+
+def test_resolve_from_structured_oauth_reason_verification_chinese() -> None:
+    state = resolve_pool_account_state(
+        provider_type="codex",
+        upstream_metadata=None,
+        oauth_invalid_reason="[ACCOUNT_BLOCK] Google 要求验证账号",
+    )
+    assert state.blocked is True
+    assert state.code == "account_verification"
+    assert state.label == "需要验证"
+    assert state.reason == "Google 要求验证账号"
 
 
 def test_resolve_from_structured_oauth_reason_suspended() -> None:
@@ -155,3 +170,25 @@ def test_request_failed_prefix_does_not_block() -> None:
         oauth_invalid_reason="[REQUEST_FAILED] Codex 账户访问受限 (403)",
     )
     assert state.blocked is False
+
+
+def test_auto_remove_state_excludes_token_expired_and_verification() -> None:
+    expired = resolve_pool_account_state(
+        provider_type="codex",
+        upstream_metadata=None,
+        oauth_invalid_reason="[OAUTH_EXPIRED] token invalidated",
+    )
+    verification = resolve_pool_account_state(
+        provider_type="codex",
+        upstream_metadata=None,
+        oauth_invalid_reason="[ACCOUNT_BLOCK] Google 要求验证账号",
+    )
+    disabled = resolve_pool_account_state(
+        provider_type="codex",
+        upstream_metadata=None,
+        oauth_invalid_reason="[ACCOUNT_BLOCK] account has been deactivated",
+    )
+
+    assert should_auto_remove_account_state(expired) is False
+    assert should_auto_remove_account_state(verification) is False
+    assert should_auto_remove_account_state(disabled) is True

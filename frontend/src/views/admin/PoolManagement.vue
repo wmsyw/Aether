@@ -127,7 +127,7 @@
                   全部
                 </SelectItem>
                 <SelectItem value="active">
-                  活跃
+                  可调度
                 </SelectItem>
                 <SelectItem value="cooldown">
                   冷却中
@@ -213,7 +213,7 @@
                   全部状态
                 </SelectItem>
                 <SelectItem value="active">
-                  活跃
+                  可调度
                 </SelectItem>
                 <SelectItem value="cooldown">
                   冷却中
@@ -2006,10 +2006,16 @@ async function handleRefreshOAuth(key: PoolKeyDetail) {
     const target = keyPage.value.keys.find(k => k.key_id === key.key_id)
     if (target) {
       target.oauth_expires_at = result.expires_at ?? null
-      target.oauth_invalid_at = null
-      target.oauth_invalid_reason = null
     }
-    success('Token 刷新成功')
+    if (result.account_state_recheck_attempted) {
+      if (result.account_state_recheck_error) {
+        showWarning('Token 刷新成功，但账号状态复检失败')
+      } else {
+        success('Token 刷新成功，已复检账号状态')
+      }
+    } else {
+      success('Token 刷新成功')
+    }
     await loadKeys()
   } catch (err) {
     showError(parseApiError(err, 'Token 刷新失败'))
@@ -2359,6 +2365,11 @@ function getOAuthStatusTitle(key: PoolKeyDetail): string {
   const status = getKeyOAuthExpires(key)
   if (!status) return ''
   if (status.isInvalid) {
+    const accountLabel = String(key.account_status_label || '').trim()
+    const accountReason = String(key.account_status_reason || '').trim()
+    if (accountLabel) {
+      return accountReason ? `${accountLabel}: ${accountReason}` : accountLabel
+    }
     const cleaned = status.invalidReason && isAccountLevelBlockReason(status.invalidReason)
       ? cleanAccountBlockReason(status.invalidReason)
       : status.invalidReason
@@ -2377,11 +2388,15 @@ function getAccountAlertLabel(key: PoolKeyDetail): string | null {
   if (cached !== undefined) return cached
 
   let result: string | null = null
+  const explicitLabel = String(key.account_status_label || '').trim()
+  if (key.account_status_blocked && explicitLabel) {
+    result = explicitLabel
+  }
   const quotaText = String(key.account_quota || '').trim()
   // 后端 _build_account_quota 返回的确切文本: "账号已封禁" / "访问受限"
-  if (quotaText === '账号已封禁' || quotaText === '封禁') result = '账号封禁'
-  else if (quotaText === '访问受限') result = '访问受限'
-  else if (isAccountLevelBlockReason(key.oauth_invalid_reason)) {
+  if (!result && (quotaText === '账号已封禁' || quotaText === '封禁')) result = '账号封禁'
+  else if (!result && quotaText === '访问受限') result = '访问受限'
+  else if (!result && isAccountLevelBlockReason(key.oauth_invalid_reason)) {
     const reason = String(key.oauth_invalid_reason || '').trim()
     const cleaned = cleanAccountBlockReason(reason)
     result = classifyAccountBlockLabel(cleaned || reason)
@@ -2394,6 +2409,9 @@ function getAccountAlertLabel(key: PoolKeyDetail): string | null {
 function getAccountAlertTitle(key: PoolKeyDetail): string {
   const label = getAccountAlertLabel(key)
   if (!label) return ''
+
+  const explicitReason = String(key.account_status_reason || '').trim()
+  if (explicitReason) return `${label}: ${explicitReason}`
 
   const reason = String(key.oauth_invalid_reason || '').trim()
   if (reason) {

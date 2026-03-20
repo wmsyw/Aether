@@ -88,6 +88,12 @@ class PoolKeyDetail(BaseModel):
     oauth_account_name: str | None = None
     oauth_account_user_id: str | None = None
     oauth_organizations: list[OAuthOrganizationSummary] = Field(default_factory=list)
+    account_status_code: str | None = None
+    account_status_label: str | None = None
+    account_status_reason: str | None = None
+    account_status_blocked: bool = False
+    account_status_recoverable: bool = False
+    account_status_source: str | None = None
     quota_updated_at: int | None = None
     # 健康度聚合字段（与 Provider Key 列表口径一致）
     health_score: float = 1.0

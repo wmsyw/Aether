@@ -37,6 +37,9 @@ const KEYWORDS_TOKEN_INVALID = [
 const KEYWORDS_VERIFICATION = [
   'validation_required',
   'verify your account',
+  '需要验证',
+  '验证账号',
+  '验证身份',
 ]
 
 // 合并的完整列表

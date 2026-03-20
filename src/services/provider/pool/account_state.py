@@ -54,6 +54,9 @@ _TOKEN_INVALID_KEYWORDS: tuple[str, ...] = (
 _KEYWORDS_VERIFICATION: tuple[str, ...] = (
     "validation_required",
     "verify your account",
+    "需要验证",
+    "验证账号",
+    "验证身份",
 )
 
 # 合并的完整列表（用于 is_account_level_block_reason 快速判断）
@@ -62,6 +65,16 @@ ACCOUNT_BLOCK_REASON_KEYWORDS: tuple[str, ...] = (
     *_KEYWORDS_DISABLED,
     *_TOKEN_INVALID_KEYWORDS,
     *_KEYWORDS_VERIFICATION,
+)
+
+AUTO_REMOVABLE_ACCOUNT_STATE_CODES: frozenset[str] = frozenset(
+    {
+        "account_banned",
+        "account_suspended",
+        "account_disabled",
+        "workspace_deactivated",
+        "account_forbidden",
+    }
 )
 
 
@@ -89,6 +102,8 @@ class PoolAccountState:
     code: str | None = None  # account_banned / account_forbidden / account_blocked
     label: str | None = None
     reason: str | None = None
+    source: str | None = None  # metadata / oauth_invalid / oauth_refresh / oauth_request
+    recoverable: bool = False
 
 
 def _is_truthy_flag(value: Any) -> bool:
@@ -119,6 +134,11 @@ def _extract_reason(source: dict[str, Any] | None, *fields: str) -> str | None:
     return None
 
 
+def _is_workspace_deactivated_reason(reason: str | None) -> bool:
+    text = _clean_text(reason)
+    return bool(text and "deactivated_workspace" in text.lower())
+
+
 def _resolve_from_metadata(
     provider_type: str | None,
     upstream_metadata: Any,
@@ -140,6 +160,7 @@ def _resolve_from_metadata(
             code=quota_block.code,
             label=quota_block.label,
             reason=quota_block.reason,
+            source="metadata",
         )
 
     for source in (provider_bucket, upstream_metadata):
@@ -152,16 +173,26 @@ def _resolve_from_metadata(
                 code="account_banned",
                 label="账号封禁",
                 reason=reason or "账号已封禁",
+                source="metadata",
             )
         if _is_truthy_flag(source.get("is_forbidden")) or _is_truthy_flag(
             source.get("account_disabled")
         ):
             reason = _extract_reason(source, "forbidden_reason", "ban_reason", "reason", "message")
+            if _is_workspace_deactivated_reason(reason):
+                return PoolAccountState(
+                    blocked=True,
+                    code="workspace_deactivated",
+                    label="工作区停用",
+                    reason=reason or "工作区已停用",
+                    source="metadata",
+                )
             return PoolAccountState(
                 blocked=True,
                 code="account_forbidden",
                 label="访问受限",
                 reason=reason or "账号访问受限",
+                source="metadata",
             )
 
     return None
@@ -182,6 +213,7 @@ def _resolve_from_oauth_invalid_reason(reason: str | None) -> PoolAccountState |
             code=code,
             label=label,
             reason=cleaned or "账号异常",
+            source="oauth_invalid",
         )
 
     if text.startswith(OAUTH_EXPIRED_PREFIX):
@@ -191,10 +223,31 @@ def _resolve_from_oauth_invalid_reason(reason: str | None) -> PoolAccountState |
             code="oauth_expired",
             label="Token 失效",
             reason=cleaned or "OAuth Token 已过期且无法续期",
+            source="oauth_invalid",
+            recoverable=True,
         )
 
-    if text.startswith(OAUTH_REFRESH_FAILED_PREFIX) or text.startswith(OAUTH_REQUEST_FAILED_PREFIX):
-        return None
+    if text.startswith(OAUTH_REFRESH_FAILED_PREFIX):
+        cleaned = text[len(OAUTH_REFRESH_FAILED_PREFIX) :].strip()
+        return PoolAccountState(
+            blocked=False,
+            code="oauth_refresh_failed",
+            label="续期失败",
+            reason=cleaned or "OAuth Token 续期失败",
+            source="oauth_refresh",
+            recoverable=True,
+        )
+
+    if text.startswith(OAUTH_REQUEST_FAILED_PREFIX):
+        cleaned = text[len(OAUTH_REQUEST_FAILED_PREFIX) :].strip()
+        return PoolAccountState(
+            blocked=False,
+            code="oauth_request_failed",
+            label="请求失败",
+            reason=cleaned or "账号状态检查失败",
+            source="oauth_request",
+            recoverable=True,
+        )
 
     if text.startswith("["):
         return None
@@ -207,6 +260,7 @@ def _resolve_from_oauth_invalid_reason(reason: str | None) -> PoolAccountState |
             code=code,
             label=label,
             reason=text,
+            source="oauth_invalid",
         )
 
     return None
@@ -231,12 +285,29 @@ def resolve_pool_account_state(
     return PoolAccountState(blocked=False)
 
 
+def should_auto_remove_account_state(state: PoolAccountState) -> bool:
+    """Whether a resolved account state is safe to auto-remove.
+
+    Auto-removal is limited to hard, non-recoverable account abnormalities.
+    Pure token failures (`oauth_expired`, `oauth_refresh_failed`) and
+    softer/manual-recoverable states like `account_verification` are excluded.
+    """
+
+    return bool(
+        state.blocked
+        and not state.recoverable
+        and str(state.code or "").strip().lower() in AUTO_REMOVABLE_ACCOUNT_STATE_CODES
+    )
+
+
 __all__ = [
     "ACCOUNT_BLOCK_REASON_KEYWORDS",
+    "AUTO_REMOVABLE_ACCOUNT_STATE_CODES",
     "OAUTH_ACCOUNT_BLOCK_PREFIX",
     "OAUTH_EXPIRED_PREFIX",
     "OAUTH_REFRESH_FAILED_PREFIX",
     "OAUTH_REQUEST_FAILED_PREFIX",
     "PoolAccountState",
     "resolve_pool_account_state",
+    "should_auto_remove_account_state",
 ]

@@ -771,10 +771,10 @@ async def test_antigravity_refresher_forbidden_collects_updates_without_commit(
     )
 
     assert result["status"] == "forbidden"
-    assert result["auto_disabled"] is True
+    assert result["auto_disabled"] is False
     assert key.is_active is True
     assert key.oauth_invalid_reason is None
-    assert state_updates["k1"]["is_active"] is False
+    assert "is_active" not in state_updates["k1"]
     assert state_updates["k1"]["oauth_invalid_reason"].startswith("账户访问被禁止")
     assert metadata_updates["k1"]["antigravity"]["is_forbidden"] is True
     assert db.commit_count == 0
@@ -911,7 +911,7 @@ async def test_kiro_refresher_runtime_401_marks_key_invalid(
     assert "401" in result["message"]
     assert key.is_active is True
     assert key.oauth_invalid_reason is None
-    assert state_updates["k1"]["is_active"] is False
+    assert "is_active" not in state_updates["k1"]
     assert state_updates["k1"]["oauth_invalid_reason"] == "Kiro Token 无效或已过期"
     assert db.commit_count == 0
 

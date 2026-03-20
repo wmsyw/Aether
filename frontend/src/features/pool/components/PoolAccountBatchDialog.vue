@@ -107,15 +107,15 @@
             <div class="flex items-center gap-1.5">
               <span class="text-xs font-medium truncate">{{ key.key_name || '未命名' }}</span>
               <Badge
-                v-if="isOAuthInvalid(key)"
-                variant="destructive"
-                class="text-[10px] px-1 py-0 h-4 shrink-0"
-              >OAuth失效</Badge>
-              <Badge
-                v-else
                 variant="outline"
                 class="text-[10px] px-1 py-0 h-4 shrink-0"
               >{{ normalizeAuthTypeLabel(key.auth_type) }}</Badge>
+              <Badge
+                v-if="getStatusBadgeLabel(key)"
+                variant="destructive"
+                class="text-[10px] px-1 py-0 h-4 shrink-0"
+                :title="getStatusBadgeTitle(key)"
+              >{{ getStatusBadgeLabel(key) }}</Badge>
               <Badge
                 v-if="key.oauth_plan_type"
                 variant="outline"
@@ -127,11 +127,6 @@
                 class="text-[10px] px-1 py-0 h-4 shrink-0"
                 :title="getOAuthOrgBadge(key)?.title"
               >{{ getOAuthOrgBadge(key)?.label }}</Badge>
-              <Badge
-                v-if="isBannedKey(key)"
-                variant="destructive"
-                class="text-[10px] px-1 py-0 h-4 shrink-0"
-              >封号</Badge>
             </div>
             <div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-muted-foreground flex-wrap">
               <span :class="key.is_active ? '' : 'text-destructive'">{{ key.is_active ? '启用' : '禁用' }}</span>
@@ -283,6 +278,7 @@ import {
 import { exportKey, refreshProviderQuota } from '@/api/endpoints/keys'
 import { refreshProviderOAuth } from '@/api/endpoints/provider_oauth'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
+import { classifyAccountBlockLabel, cleanAccountBlockReason, isAccountLevelBlockReason, isRefreshFailedReason } from '@/utils/accountBlock'
 import { getOAuthOrgBadge } from '@/utils/oauthIdentity'
 
 type QuickSelectorValue =
@@ -321,12 +317,12 @@ const emit = defineEmits<{
 }>()
 
 const QUICK_SELECT_OPTIONS: Array<{ value: QuickSelectorValue; label: string }> = [
-  { value: 'banned', label: '已封号' },
+  { value: 'banned', label: '账号异常' },
   { value: 'no_5h_limit', label: '无5H限额' },
   { value: 'no_weekly_limit', label: '无周限额' },
   { value: 'plan_free', label: '全部 Free' },
   { value: 'plan_team', label: '全部 Team' },
-  { value: 'oauth_invalid', label: 'OAuth 失效' },
+  { value: 'oauth_invalid', label: 'Token 异常' },
   { value: 'proxy_unset', label: '未配置代理' },
   { value: 'proxy_set', label: '已配置独立代理' },
   { value: 'disabled', label: '已禁用' },
@@ -426,25 +422,43 @@ function normalizeAuthTypeLabel(authType: string): string {
   return 'API Key'
 }
 
-function isBannedKey(key: PoolKeyDetail): boolean {
-  const reason = normalizeText(key.oauth_invalid_reason)
-  if (reason && /(banned|forbidden|blocked|suspend|封|禁|受限)/.test(reason)) return true
-  if (Array.isArray(key.scheduling_reasons)) {
-    return key.scheduling_reasons.some((item) => {
-      const code = normalizeText(item.code)
-      return code === 'account_banned' || code === 'account_forbidden' || code === 'account_blocked'
-    })
+function getStatusBadgeLabel(key: PoolKeyDetail): string | null {
+  const explicitLabel = String(key.account_status_label || '').trim()
+  if (explicitLabel) return explicitLabel
+
+  const reason = String(key.oauth_invalid_reason || '').trim()
+  if (isAccountLevelBlockReason(reason)) {
+    const cleaned = cleanAccountBlockReason(reason)
+    return classifyAccountBlockLabel(cleaned || reason)
   }
-  return false
+
+  if (normalizeText(key.auth_type) !== 'oauth') return null
+  if (isRefreshFailedReason(reason)) return '续期失败'
+  if (key.oauth_invalid_at != null || normalizeText(reason)) return 'Token 失效'
+  if (typeof key.oauth_expires_at === 'number' && key.oauth_expires_at > 0) {
+    return key.oauth_expires_at * 1000 <= Date.now() ? 'Token 过期' : null
+  }
+  return null
 }
 
-function isOAuthInvalid(key: PoolKeyDetail): boolean {
-  if (normalizeText(key.auth_type) !== 'oauth') return false
-  if (key.oauth_invalid_at != null || normalizeText(key.oauth_invalid_reason)) return true
-  if (typeof key.oauth_expires_at === 'number' && key.oauth_expires_at > 0) {
-    return key.oauth_expires_at * 1000 <= Date.now()
+function getStatusBadgeTitle(key: PoolKeyDetail): string {
+  const label = getStatusBadgeLabel(key)
+  if (!label) return ''
+
+  const explicitReason = String(key.account_status_reason || '').trim()
+  if (explicitReason) return `${label}: ${explicitReason}`
+
+  const reason = String(key.oauth_invalid_reason || '').trim()
+  if (!reason) return label
+  if (isAccountLevelBlockReason(reason)) {
+    const cleaned = cleanAccountBlockReason(reason)
+    return cleaned ? `${label}: ${cleaned}` : label
   }
-  return false
+  if (isRefreshFailedReason(reason)) {
+    const cleaned = reason.replace(/^\[REFRESH_FAILED\]\s*/i, '').trim()
+    return cleaned ? `${label}: ${cleaned}` : label
+  }
+  return `${label}: ${reason}`
 }
 
 function formatRelativeTime(value: string): string {

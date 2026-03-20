@@ -106,6 +106,12 @@ export interface PoolKeyDetail {
   oauth_account_user_id?: string | null
   oauth_account_name?: string | null
   oauth_organizations?: OAuthOrganizationInfo[] | null
+  account_status_code?: string | null
+  account_status_label?: string | null
+  account_status_reason?: string | null
+  account_status_blocked?: boolean
+  account_status_recoverable?: boolean
+  account_status_source?: string | null
   quota_updated_at?: number | null
   health_score?: number
   circuit_breaker_open?: boolean
