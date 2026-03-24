@@ -1997,7 +1997,33 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
         ) = usage_row
 
         user = db.query(User).filter(User.id == usage_record.user_id).first()
-        api_key = db.query(ApiKey).filter(ApiKey.id == usage_record.api_key_id).first()
+        api_key = (
+            db.query(ApiKey).filter(ApiKey.id == usage_record.api_key_id).first()
+            if usage_record.api_key_id
+            else None
+        )
+        provider = (
+            db.query(Provider).filter(Provider.id == usage_record.provider_id).first()
+            if getattr(usage_record, "provider_id", None)
+            else None
+        )
+        provider_api_key = (
+            db.query(ProviderAPIKey)
+            .filter(ProviderAPIKey.id == usage_record.provider_api_key_id)
+            .first()
+            if getattr(usage_record, "provider_api_key_id", None)
+            else None
+        )
+
+        provider_name = usage_record.provider_name
+        if provider and (not provider_name or provider_name in {"unknown", "pending"}):
+            provider_name = provider.name
+
+        provider_api_key_name = None
+        if provider_api_key:
+            provider_api_key_name = provider_api_key.name
+        elif getattr(usage_record, "provider_api_key_id", None):
+            provider_api_key_name = "已删除Key"
 
         # 获取阶梯计费信息
         tiered_pricing_info = await self._get_tiered_pricing_info(db, usage_record)
@@ -2026,15 +2052,27 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "request_id": usage_record.request_id,
             "user": {
                 "id": user.id if user else None,
-                "username": user.username if user else "Unknown",
+                "username": user.username if user else "已删除用户",
                 "email": user.email if user else None,
             },
             "api_key": {
                 "id": api_key.id if api_key else None,
-                "name": api_key.name if api_key else None,
-                "display": api_key.get_display_key() if api_key else None,
+                "name": api_key.name if api_key else "已删除Key",
+                "display": (
+                    api_key.get_display_key()
+                    if api_key and hasattr(api_key, "get_display_key")
+                    else None
+                ),
             },
-            "provider": usage_record.provider_name,
+            "provider": provider_name,
+            "provider_api_key": {
+                "id": (
+                    provider_api_key.id
+                    if provider_api_key
+                    else getattr(usage_record, "provider_api_key_id", None)
+                ),
+                "name": provider_api_key_name,
+            },
             "api_format": usage_record.api_format,
             "model": usage_record.model,
             "target_model": usage_record.target_model,
@@ -2553,7 +2591,9 @@ async def _resolve_replay_model_name(
     """按当前 replay 目标重新解析模型名，并返回 mapping_source。"""
     from src.services.model.mapper import ModelMapperMiddleware
 
-    target_api_format = (getattr(target_endpoint, "api_format", "") or "").strip().lower()
+    target_api_format = (
+        (getattr(target_endpoint, "api_format", "") or "").strip().lower()
+    )
 
     mapper = ModelMapperMiddleware(db)
     mapping = await mapper.get_mapping(source_model, str(target_provider.id))
@@ -2587,7 +2627,9 @@ def _apply_replay_model_to_body(
     """根据目标格式决定是否写入 body.model。"""
     from src.core.api_format.metadata import resolve_endpoint_definition
 
-    target_meta = resolve_endpoint_definition(target_api_format) if target_api_format else None
+    target_meta = (
+        resolve_endpoint_definition(target_api_format) if target_api_format else None
+    )
     if target_meta is not None and not target_meta.model_in_body:
         body.pop("model", None)
         return
@@ -2623,7 +2665,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
             original_api_format.split(":")[0] if ":" in original_api_format else ""
         )
         original_request_body = usage_record.get_request_body()
-        body_override_payload = self.body_override if isinstance(self.body_override, dict) else None
+        body_override_payload = (
+            self.body_override if isinstance(self.body_override, dict) else None
+        )
         override_model: str | None = None
         if isinstance(body_override_payload, dict):
             override_val = body_override_payload.get("model")
@@ -2774,7 +2818,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
                 original_provider_id = str(original_endpoint.provider_id)
 
         same_provider = bool(
-            original_provider_id and target_pid and str(original_provider_id) == str(target_pid)
+            original_provider_id
+            and target_pid
+            and str(original_provider_id) == str(target_pid)
         )
         same_endpoint = bool(
             usage_record.provider_endpoint_id
@@ -2910,7 +2956,9 @@ class AdminUsageReplayAdapter(AdminApiAdapter):
 
         # 获取提供商名称
         provider_name = (
-            target_provider_obj.name if target_provider_obj else usage_record.provider_name
+            target_provider_obj.name
+            if target_provider_obj
+            else usage_record.provider_name
         )
 
         # 发送请求
