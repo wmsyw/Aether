@@ -12,10 +12,20 @@ import secrets
 import uuid
 from collections.abc import Awaitable
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import cast
 
 from redis.asyncio import Redis
 from sqlalchemy.orm import Session
+from webauthn.helpers import base64url_to_bytes, parse_registration_credential_json
+from webauthn.helpers.structs import (
+    AttestationConveyancePreference,
+    AuthenticatorSelectionCriteria,
+    AuthenticatorTransport,
+    PublicKeyCredentialDescriptor,
+    PublicKeyCredentialType,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
 
 from src.clients.redis_client import get_redis_client
 from src.config import config
@@ -31,22 +41,30 @@ def _as_bool(value: object) -> bool:
     return cast(bool, value)
 
 
+def _as_int(value: object) -> int:
+    return cast(int, value)
+
+
+def _as_str_list(value: object) -> list[str]:
+    return cast(list[str], value)
+
+
 class PasskeyServiceError(Exception):
     """Passkey 服务错误"""
 
     def __init__(self, message: str, code: str = "passkey_error"):
-        self.message = message
-        self.code = code
+        self.message: str = message
+        self.code: str = code
         super().__init__(self.message)
 
 
 class PasskeyService:
     """Passkey/WebAuthn 认证服务"""
 
-    _challenge_ttl_seconds = 300
-    _challenge_key_prefix = "passkey:challenge:"
-    _max_active_credentials_per_user = 10
-    _consume_challenge_script = """
+    _challenge_ttl_seconds: int = 300
+    _challenge_key_prefix: str = "passkey:challenge:"
+    _max_active_credentials_per_user: int = 10
+    _consume_challenge_script: str = """
     local value = redis.call("GET", KEYS[1])
     if value then
         redis.call("DEL", KEYS[1])
@@ -81,7 +99,7 @@ class PasskeyService:
         return redis_client
 
     @classmethod
-    async def _store_challenge(cls, challenge_id: str, data: dict[str, Any]) -> None:
+    async def _store_challenge(cls, challenge_id: str, data: dict[str, object]) -> None:
         """存储挑战数据。"""
         redis_client = await cls._get_redis()
         await redis_client.setex(
@@ -91,7 +109,7 @@ class PasskeyService:
         )
 
     @classmethod
-    async def _consume_challenge(cls, challenge_id: str) -> dict[str, Any] | None:
+    async def _consume_challenge(cls, challenge_id: str) -> dict[str, object] | None:
         """原子消费挑战数据。"""
         if not challenge_id:
             return None
@@ -109,12 +127,17 @@ class PasskeyService:
             return None
 
         try:
-            parsed = json.loads(raw)
+            parsed = cast(object, json.loads(raw))
         except json.JSONDecodeError:
             logger.warning(f"Passkey 挑战数据解析失败: challenge_id={challenge_id}")
             return None
 
-        return parsed
+        if not isinstance(parsed, dict):
+            logger.warning(f"Passkey 挑战数据格式错误: challenge_id={challenge_id}")
+            return None
+
+        parsed_dict = cast(dict[object, object], parsed)
+        return {str(key): value for key, value in parsed_dict.items()}
 
     @classmethod
     def _count_active_credentials(cls, db: Session, user_id: str) -> int:
@@ -162,7 +185,7 @@ class PasskeyService:
         db: Session,
         user: User,
         device_name: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         开始 Passkey 注册流程
 
@@ -175,8 +198,8 @@ class PasskeyService:
             包含 challenge_id 和 publicKeyCredentialCreationOptions 的字典
         """
         try:
-            from webauthn import generate_registration_options  # pyright: ignore[reportMissingImports]
-            from webauthn.helpers import bytes_to_base64url  # pyright: ignore[reportMissingImports]
+            from webauthn import generate_registration_options
+            from webauthn.helpers import bytes_to_base64url
         except ImportError:
             raise PasskeyServiceError("pywebauthn 库未安装", "library_not_installed")
 
@@ -189,6 +212,8 @@ class PasskeyService:
             )
 
         rp = cls._get_rp_config()
+        user_name = _as_str(user.email or user.username)
+        user_display_name = _as_str(user.username)
 
         # 生成用户 ID（使用用户 UUID 的字节表示）
         user_id_bytes = user_id.encode("utf-8")
@@ -196,21 +221,25 @@ class PasskeyService:
         # 生成挑战
         challenge_bytes = secrets.token_bytes(32)
 
-        # 生成注册选项
+        authenticator_selection = AuthenticatorSelectionCriteria(
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
+        )
+
         options = generate_registration_options(
             rp_id=rp["id"],
             rp_name=rp["name"],
             user_id=user_id_bytes,
-            user_name=user.email or user.username,
-            user_display_name=user.username,
+            user_name=user_name,
+            user_display_name=user_display_name,
             challenge=challenge_bytes,
             timeout=120000,  # 2分钟超时
-            attestation="none",  # 不需要 attestation
-            authenticator_selection={
-                "authenticator_attachment": None,  # 允许所有类型
-                "resident_key": "preferred",  # 优先使用 discoverable credentials
-                "user_verification": "required",  # 强制用户验证
-            },
+            attestation=AttestationConveyancePreference.NONE,
+            authenticator_selection=authenticator_selection,
+        )
+
+        options_authenticator_selection = (
+            options.authenticator_selection or authenticator_selection
         )
 
         # 存储挑战
@@ -240,9 +269,9 @@ class PasskeyService:
             "timeout": options.timeout,
             "attestation": options.attestation,
             "authenticatorSelection": {
-                "authenticatorAttachment": options.authenticator_selection.authenticator_attachment,
-                "residentKey": options.authenticator_selection.resident_key,
-                "userVerification": options.authenticator_selection.user_verification,
+                "authenticatorAttachment": options_authenticator_selection.authenticator_attachment,
+                "residentKey": options_authenticator_selection.resident_key,
+                "userVerification": options_authenticator_selection.user_verification,
             },
             "excludeCredentials": [
                 {
@@ -266,7 +295,7 @@ class PasskeyService:
         cls,
         db: Session,
         challenge_id: str,
-        credential: dict[str, Any],
+        credential: dict[str, object],
         device_name: str | None = None,
     ) -> UserPasskeyCredential:
         """
@@ -282,8 +311,8 @@ class PasskeyService:
             创建的 UserPasskeyCredential 对象
         """
         try:
-            from webauthn import verify_registration_response  # pyright: ignore[reportMissingImports]
-            from webauthn.helpers import base64url_to_bytes, bytes_to_base64url  # pyright: ignore[reportMissingImports]
+            from webauthn import verify_registration_response
+            from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
         except ImportError:
             raise PasskeyServiceError("pywebauthn 库未安装", "library_not_installed")
 
@@ -292,9 +321,9 @@ class PasskeyService:
         if not challenge_data:
             raise PasskeyServiceError("挑战已过期或无效", "invalid_challenge")
 
-        user_id = challenge_data["user_id"]
-        expected_challenge = challenge_data["challenge"]
-        stored_device_name = challenge_data.get("device_name")
+        user_id = _as_str(challenge_data["user_id"])
+        expected_challenge = _as_str(challenge_data["challenge"])
+        stored_device_name = cast(str | None, challenge_data.get("device_name"))
 
         active_credentials = cls._count_active_credentials(db, user_id)
         if active_credentials >= cls._max_active_credentials_per_user:
@@ -306,9 +335,11 @@ class PasskeyService:
         rp = cls._get_rp_config()
 
         try:
+            parsed_credential = parse_registration_credential_json(credential)
+
             # 验证注册响应
             verification = verify_registration_response(
-                credential=credential,
+                credential=parsed_credential,
                 expected_challenge=base64url_to_bytes(expected_challenge),
                 expected_origin=config.passkey_origin or f"https://{rp['id']}",
                 expected_rp_id=rp["id"],
@@ -332,8 +363,8 @@ class PasskeyService:
 
         # 获取传输方式
         transports = (
-            list(verification.credential.transports)
-            if verification.credential.transports
+            list(parsed_credential.response.transports)
+            if parsed_credential.response.transports
             else []
         )
 
@@ -345,9 +376,9 @@ class PasskeyService:
             sign_count=verification.sign_count,
             device_name=final_device_name,
             device_type="security_key"
-            if verification.credential.authenticator_attachment == "cross-platform"
+            if parsed_credential.authenticator_attachment == "cross-platform"
             else "platform",
-            backed_up=verification.credential.backup_eligible or False,
+            backed_up=verification.credential_backed_up,
             transports=transports,
             aaguid=str(verification.aaguid) if verification.aaguid else None,
             is_active=True,
@@ -367,7 +398,7 @@ class PasskeyService:
         cls,
         db: Session,
         email: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         开始 Passkey 认证流程
 
@@ -379,8 +410,8 @@ class PasskeyService:
             包含 challenge_id 和 publicKeyCredentialRequestOptions 的字典
         """
         try:
-            from webauthn import generate_authentication_options  # pyright: ignore[reportMissingImports]
-            from webauthn.helpers import bytes_to_base64url  # pyright: ignore[reportMissingImports]
+            from webauthn import generate_authentication_options
+            from webauthn.helpers import bytes_to_base64url
         except ImportError:
             raise PasskeyServiceError("pywebauthn 库未安装", "library_not_installed")
 
@@ -390,7 +421,7 @@ class PasskeyService:
         challenge_bytes = secrets.token_bytes(32)
 
         # 获取用户的凭证列表（如果提供了邮箱）
-        allow_credentials = []
+        credentials: list[UserPasskeyCredential] = []
         if email:
             user = db.query(User).filter(User.email == email).first()
             if user:
@@ -402,22 +433,37 @@ class PasskeyService:
                     )
                     .all()
                 )
-                allow_credentials = [
-                    {
-                        "id": cred.credential_id,
-                        "type": "public-key",
-                        "transports": cred.transports or [],
-                    }
-                    for cred in credentials
-                ]
+        pk_creds = (
+            [
+                PublicKeyCredentialDescriptor(
+                    id=base64url_to_bytes(_as_str(cred.credential_id)),
+                    type=PublicKeyCredentialType.PUBLIC_KEY,
+                    transports=[
+                        AuthenticatorTransport(transport)
+                        for transport in _as_str_list(cred.transports or [])
+                    ],
+                )
+                for cred in credentials
+            ]
+            if credentials
+            else None
+        )
 
-        # 生成认证选项
+        allow_credentials = [
+            {
+                "id": _as_str(cred.credential_id),
+                "type": PublicKeyCredentialType.PUBLIC_KEY,
+                "transports": _as_str_list(cred.transports or []),
+            }
+            for cred in credentials
+        ]
+
         options = generate_authentication_options(
             rp_id=rp["id"],
             challenge=challenge_bytes,
             timeout=120000,  # 2分钟超时
-            user_verification="required",
-            allow_credentials=allow_credentials if allow_credentials else None,
+            user_verification=UserVerificationRequirement.REQUIRED,
+            allow_credentials=pk_creds,
         )
 
         # 存储挑战
@@ -458,7 +504,7 @@ class PasskeyService:
         cls,
         db: Session,
         challenge_id: str,
-        credential: dict[str, Any],
+        credential: dict[str, object],
     ) -> User:
         """
         完成 Passkey 认证流程
@@ -472,8 +518,8 @@ class PasskeyService:
             认证成功的 User 对象
         """
         try:
-            from webauthn import verify_authentication_response  # pyright: ignore[reportMissingImports]
-            from webauthn.helpers import base64url_to_bytes  # pyright: ignore[reportMissingImports]
+            from webauthn import verify_authentication_response
+            from webauthn.helpers import base64url_to_bytes
         except ImportError:
             raise PasskeyServiceError("pywebauthn 库未安装", "library_not_installed")
 
@@ -482,12 +528,12 @@ class PasskeyService:
         if not challenge_data:
             raise PasskeyServiceError("挑战已过期或无效", "invalid_challenge")
 
-        expected_challenge = challenge_data["challenge"]
+        expected_challenge = _as_str(challenge_data["challenge"])
         rp = cls._get_rp_config()
 
         # 从凭证中获取 credential_id
         credential_id = credential.get("id")
-        if not credential_id:
+        if not isinstance(credential_id, str) or not credential_id:
             raise PasskeyServiceError("凭证 ID 缺失", "missing_credential_id")
 
         # 查找凭证
@@ -510,8 +556,10 @@ class PasskeyService:
                 expected_challenge=base64url_to_bytes(expected_challenge),
                 expected_origin=config.passkey_origin or f"https://{rp['id']}",
                 expected_rp_id=rp["id"],
-                credential_public_key=base64url_to_bytes(passkey_credential.public_key),
-                credential_current_sign_count=passkey_credential.sign_count,
+                credential_public_key=base64url_to_bytes(
+                    _as_str(passkey_credential.public_key)
+                ),
+                credential_current_sign_count=_as_int(passkey_credential.sign_count),
                 require_user_verification=True,
             )
         except Exception as e:
@@ -645,7 +693,7 @@ class PasskeyService:
         )
 
     @classmethod
-    def get_settings(cls) -> dict[str, Any]:
+    def get_settings(cls) -> dict[str, object]:
         """
         获取 Passkey 设置
 
