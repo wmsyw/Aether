@@ -1,7 +1,7 @@
 """add passkey credentials table for webauthn authentication
 
-Revision ID: 20260331_1500_add_passkey_credentials
-Revises: 20260324_1400_c3d4e5f6a7b8
+Revision ID: 20260331_add_passkey
+Revises: c3d4e5f6a7b8
 Create Date: 2026-03-31 15:00:00.000000+00:00
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "20260331_1500_add_passkey_credentials"
+revision = "20260331_add_passkey"
 down_revision = "c3d4e5f6a7b8"
 branch_labels = None
 depends_on = None
