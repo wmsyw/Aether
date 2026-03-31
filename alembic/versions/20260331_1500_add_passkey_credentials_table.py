@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "20260331_1500_add_passkey_credentials"
-down_revision = "20260324_1400_c3d4e5f6a7b8"
+down_revision = "c3d4e5f6a7b8"
 branch_labels = None
 depends_on = None
 
