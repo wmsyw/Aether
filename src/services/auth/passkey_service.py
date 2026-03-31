@@ -49,6 +49,14 @@ def _as_str_list(value: object) -> list[str]:
     return cast(list[str], value)
 
 
+def _normalize_credential_id_for_storage(value: object) -> str:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        return base64.urlsafe_b64encode(bytes(value)).rstrip(b"=").decode("ascii")
+    return _as_str(value)
+
+
 class PasskeyServiceError(Exception):
     """Passkey 服务错误"""
 
@@ -349,10 +357,14 @@ class PasskeyService:
             logger.error(f"Passkey 注册验证失败: {e}")
             raise PasskeyServiceError(f"凭证验证失败: {str(e)}", "verification_failed")
 
+        normalized_credential_id = _normalize_credential_id_for_storage(
+            verification.credential_id
+        )
+
         # 检查凭证 ID 是否已存在
         existing = (
             db.query(UserPasskeyCredential)
-            .filter(UserPasskeyCredential.credential_id == verification.credential_id)
+            .filter(UserPasskeyCredential.credential_id == normalized_credential_id)
             .first()
         )
         if existing:
@@ -371,7 +383,7 @@ class PasskeyService:
         # 创建凭证记录
         passkey_credential = UserPasskeyCredential(
             user_id=user_id,
-            credential_id=verification.credential_id,
+            credential_id=normalized_credential_id,
             public_key=bytes_to_base64url(verification.credential_public_key),
             sign_count=verification.sign_count,
             device_name=final_device_name,
