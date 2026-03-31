@@ -544,12 +544,12 @@
                             v-if="refreshingQuota"
                             class="w-3 h-3 text-muted-foreground/70 animate-spin"
                           />
-                            <span
-                              v-if="key.upstream_metadata.codex?.updated_at"
-                              class="text-[9px] text-muted-foreground/70"
-                            >
-                              {{ formatUpdatedAt(key.upstream_metadata.codex.updated_at) }}
-                            </span>
+                          <span
+                            v-if="key.upstream_metadata.codex?.updated_at"
+                            class="text-[9px] text-muted-foreground/70"
+                          >
+                            {{ formatUpdatedAt(key.upstream_metadata.codex.updated_at) }}
+                          </span>
                         </div>
                       </div>
                       <!-- 限额并排显示：Team/Plus/Enterprise 账号 2列, Free 账号 1列 -->

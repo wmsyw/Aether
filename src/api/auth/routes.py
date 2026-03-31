@@ -53,6 +53,9 @@ from src.services.user.service import UserService
 from src.services.wallet import WalletService
 from src.utils.request_utils import get_client_ip, get_user_agent
 
+# Import Passkey routes
+from src.api.auth import passkey_routes
+
 
 def validate_email_suffix(db: Session, email: str) -> tuple[bool, str | None]:
     """
@@ -129,7 +132,9 @@ def _issue_session_bound_tokens(
     if user is None:
         user = db.query(User).filter(User.id == user_id).first()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在"
+        )
 
     client_device_id = SessionService.extract_client_device_id(request)
     client_context = SessionService.build_client_context(
@@ -158,7 +163,9 @@ async def _logout_with_refresh_cookie_fallback(
         return None
 
     try:
-        token_payload = await AuthService.verify_token(refresh_token_value, token_type="refresh")
+        token_payload = await AuthService.verify_token(
+            refresh_token_value, token_type="refresh"
+        )
         user_id = token_payload.get("user_id")
         session_id = token_payload.get("session_id")
         if not user_id or not session_id:
@@ -198,7 +205,9 @@ async def _logout_with_refresh_cookie_fallback(
         )
         db.commit()
         request.state.tx_committed_by_route = True
-        logger.info("用户通过 refresh cookie 登出成功: {}", user.email if user else user_id)
+        logger.info(
+            "用户通过 refresh cookie 登出成功: {}", user.email if user else user_id
+        )
         return LogoutResponse(message="登出成功", success=True).model_dump()
     except HTTPException as exc:
         logger.info("Refresh cookie logout fallback skipped: {}", exc.detail)
@@ -223,7 +232,9 @@ async def registration_settings(request: Request, db: Session = Depends(get_db))
     此接口为公开接口，无需认证。
     """
     adapter = AuthRegistrationSettingsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/settings")
@@ -235,11 +246,15 @@ async def auth_settings(request: Request, db: Session = Depends(get_db)) -> Any:
     前端据此判断显示哪些登录选项。此接口为公开接口，无需认证。
     """
     adapter = AuthSettingsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/login", response_model=LoginResponse, response_model_exclude_none=True)
-async def login(request: Request, response: Response, db: Session = Depends(get_db)) -> Any:
+async def login(
+    request: Request, response: Response, db: Session = Depends(get_db)
+) -> Any:
     """
     用户登录
 
@@ -251,15 +266,23 @@ async def login(request: Request, response: Response, db: Session = Depends(get_
     速率限制: 20次/分钟/IP
     """
     adapter = AuthLoginAdapter()
-    result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
-    refresh_token = result.pop("_refresh_token", None) if isinstance(result, dict) else None
+    result = await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
+    refresh_token = (
+        result.pop("_refresh_token", None) if isinstance(result, dict) else None
+    )
     if refresh_token:
         set_refresh_token_cookie(response, refresh_token)
     return result
 
 
-@router.post("/refresh", response_model=RefreshTokenResponse, response_model_exclude_none=True)
-async def refresh_token(request: Request, response: Response, db: Session = Depends(get_db)) -> Any:
+@router.post(
+    "/refresh", response_model=RefreshTokenResponse, response_model_exclude_none=True
+)
+async def refresh_token(
+    request: Request, response: Response, db: Session = Depends(get_db)
+) -> Any:
     """
     刷新访问令牌
 
@@ -268,10 +291,14 @@ async def refresh_token(request: Request, response: Response, db: Session = Depe
     """
     adapter = AuthRefreshAdapter()
     try:
-        result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+        result = await pipeline.run(
+            adapter=adapter, http_request=request, db=db, mode=adapter.mode
+        )
     except HTTPException as exc:
         return error_response_with_cleared_cookie(exc)
-    refresh_token_value = result.pop("_refresh_token", None) if isinstance(result, dict) else None
+    refresh_token_value = (
+        result.pop("_refresh_token", None) if isinstance(result, dict) else None
+    )
     if refresh_token_value:
         set_refresh_token_cookie(response, refresh_token_value)
     return result
@@ -288,7 +315,9 @@ async def register(request: Request, db: Session = Depends(get_db)) -> Any:
     速率限制: 10次/分钟/IP
     """
     adapter = AuthRegisterAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/me")
@@ -300,11 +329,15 @@ async def get_current_user_info(request: Request, db: Session = Depends(get_db))
     需要 Bearer Token 认证。
     """
     adapter = AuthCurrentUserAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/logout", response_model=LogoutResponse)
-async def logout(request: Request, response: Response, db: Session = Depends(get_db)) -> Any:
+async def logout(
+    request: Request, response: Response, db: Session = Depends(get_db)
+) -> Any:
     """
     用户登出
 
@@ -313,7 +346,9 @@ async def logout(request: Request, response: Response, db: Session = Depends(get
     """
     try:
         adapter = AuthLogoutAdapter()
-        result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+        result = await pipeline.run(
+            adapter=adapter, http_request=request, db=db, mode=adapter.mode
+        )
     except HTTPException as exc:
         fallback_result = await _logout_with_refresh_cookie_fallback(request, db)
         if fallback_result is not None:
@@ -326,7 +361,9 @@ async def logout(request: Request, response: Response, db: Session = Depends(get
 
 
 @router.post("/send-verification-code", response_model=SendVerificationCodeResponse)
-async def send_verification_code(request: Request, db: Session = Depends(get_db)) -> None:
+async def send_verification_code(
+    request: Request, db: Session = Depends(get_db)
+) -> None:
     """
     发送邮箱验证码
 
@@ -336,7 +373,9 @@ async def send_verification_code(request: Request, db: Session = Depends(get_db)
     速率限制: 5次/分钟/IP
     """
     adapter = AuthSendVerificationCodeAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/verify-email", response_model=VerifyEmailResponse)
@@ -350,7 +389,9 @@ async def verify_email(request: Request, db: Session = Depends(get_db)) -> Any:
     速率限制: 20次/分钟/IP
     """
     adapter = AuthVerifyEmailAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.post("/verification-status", response_model=VerificationStatusResponse)
@@ -363,7 +404,9 @@ async def verification_status(request: Request, db: Session = Depends(get_db)) -
     速率限制: 20次/分钟/IP
     """
     adapter = AuthVerificationStatusAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ============== 适配器实现 ==============
@@ -394,7 +437,9 @@ class AuthLoginAdapter(AuthPublicAdapter):
         user_agent = get_user_agent(context.request)
 
         # IP 速率限制检查（登录接口：5次/分钟）
-        allowed, remaining, reset_after = await IPRateLimiter.check_limit(client_ip, "login")
+        allowed, remaining, reset_after = await IPRateLimiter.check_limit(
+            client_ip, "login"
+        )
         if not allowed:
             logger.warning(f"登录请求超过速率限制: IP={client_ip}, 剩余={remaining}")
             raise HTTPException(
@@ -416,11 +461,15 @@ class AuthLoginAdapter(AuthPublicAdapter):
             )
             db.commit()
             context.request.state.tx_committed_by_route = True
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误"
+            )
 
         db_user = db.query(User).filter(User.id == authenticated_user.user_id).first()
         if db_user is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在"
+            )
 
         _, access_token, refresh_token = _issue_session_bound_tokens(
             db=db,
@@ -445,7 +494,9 @@ class AuthLoginAdapter(AuthPublicAdapter):
             authenticated_user.user_id,
             authenticated_user.email or "",
         )
-        logger.info("用户登录成功: {} (ID: {})", login_request.email, authenticated_user.user_id)
+        logger.info(
+            "用户登录成功: {} (ID: {})", login_request.email, authenticated_user.user_id
+        )
 
         response = LoginResponse(
             access_token=access_token,
@@ -471,9 +522,13 @@ class AuthRefreshAdapter(AuthPublicAdapter):
                     detail="刷新接口不接受请求体，请使用 Cookie",
                 )
 
-        refresh_token_value = context.request.cookies.get(config.auth_refresh_cookie_name)
+        refresh_token_value = context.request.cookies.get(
+            config.auth_refresh_cookie_name
+        )
         if not refresh_token_value:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少刷新令牌")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少刷新令牌"
+            )
         try:
             token_payload = await AuthService.verify_token(
                 refresh_token_value, token_type="refresh"
@@ -491,7 +546,9 @@ class AuthRefreshAdapter(AuthPublicAdapter):
                     status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的刷新令牌"
                 )
             if not user.is_active:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已禁用")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="用户已禁用"
+                )
             if user.is_deleted:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail="用户不存在或已禁用"
@@ -517,14 +574,17 @@ class AuthRefreshAdapter(AuthPublicAdapter):
                 db.commit()
                 context.request.state.tx_committed_by_route = True
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED, detail="登录会话已失效，请重新登录"
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="登录会话已失效，请重新登录",
                 )
 
             new_access_token = AuthService.create_access_token(
                 data={
                     "user_id": user.id,
                     "role": user.role.value,
-                    "created_at": user.created_at.isoformat() if user.created_at else None,
+                    "created_at": user.created_at.isoformat()
+                    if user.created_at
+                    else None,
                     "session_id": session.id,
                 }
             )
@@ -533,7 +593,9 @@ class AuthRefreshAdapter(AuthPublicAdapter):
                 new_refresh_token = AuthService.create_refresh_token(
                     data={
                         "user_id": user.id,
-                        "created_at": user.created_at.isoformat() if user.created_at else None,
+                        "created_at": user.created_at.isoformat()
+                        if user.created_at
+                        else None,
                         "session_id": session.id,
                         "jti": str(uuid.uuid4()),
                     }
@@ -560,7 +622,9 @@ class AuthRefreshAdapter(AuthPublicAdapter):
             raise
         except Exception as exc:
             logger.error(f"刷新令牌失败: {exc}")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="刷新令牌失败")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="刷新令牌失败"
+            )
 
 
 class AuthRegistrationSettingsAdapter(AuthPublicAdapter):
@@ -620,7 +684,9 @@ class AuthRegisterAdapter(AuthPublicAdapter):
         user_agent = get_user_agent(context.request)
 
         # IP 速率限制检查（注册接口：3次/分钟）
-        allowed, remaining, reset_after = await IPRateLimiter.check_limit(client_ip, "register")
+        allowed, remaining, reset_after = await IPRateLimiter.check_limit(
+            client_ip, "register"
+        )
         if not allowed:
             logger.warning(f"注册请求超过速率限制: IP={client_ip}, 剩余={remaining}")
             raise HTTPException(
@@ -631,14 +697,18 @@ class AuthRegisterAdapter(AuthPublicAdapter):
         # 通过钩子检查是否有模块阻止本地注册（如 LDAP 排他模式）
         from src.core.modules.hooks import AUTH_CHECK_REGISTRATION, get_hook_dispatcher
 
-        block_result = await get_hook_dispatcher().dispatch(AUTH_CHECK_REGISTRATION, db=db)
+        block_result = await get_hook_dispatcher().dispatch(
+            AUTH_CHECK_REGISTRATION, db=db
+        )
         if block_result and block_result.get("blocked"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=block_result.get("reason", "注册已被禁止"),
             )
 
-        allow_registration = db.query(SystemConfig).filter_by(key="enable_registration").first()
+        allow_registration = (
+            db.query(SystemConfig).filter_by(key="enable_registration").first()
+        )
         if allow_registration and not allow_registration.value:
             AuditService.log_event(
                 db=db,
@@ -646,11 +716,16 @@ class AuthRegisterAdapter(AuthPublicAdapter):
                 description=f"Registration attempt rejected - registration disabled: {register_request.username}",
                 ip_address=client_ip,
                 user_agent=user_agent,
-                metadata={"username": register_request.username, "reason": "registration_disabled"},
+                metadata={
+                    "username": register_request.username,
+                    "reason": "registration_disabled",
+                },
             )
             db.commit()
             context.request.state.tx_committed_by_route = True
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="系统暂不开放注册")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="系统暂不开放注册"
+            )
 
         email = register_request.email
         email_configured = EmailSenderService.is_smtp_configured(db)
@@ -725,7 +800,11 @@ class AuthRegisterAdapter(AuthPublicAdapter):
                 user_id=user.id,
                 ip_address=client_ip,
                 user_agent=user_agent,
-                metadata={"email": user.email, "username": user.username, "role": user.role.value},
+                metadata={
+                    "email": user.email,
+                    "username": user.username,
+                    "role": user.role.value,
+                },
             )
 
             db.commit()
@@ -756,7 +835,9 @@ class AuthRegisterAdapter(AuthPublicAdapter):
             )
             db.commit()
             context.request.state.tx_committed_by_route = True
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
 
 
 class AuthCurrentUserAdapter(AuthenticatedApiAdapter):
@@ -771,7 +852,9 @@ class AuthCurrentUserAdapter(AuthenticatedApiAdapter):
             "is_active": user.is_active,
             "billing": WalletService.serialize_wallet_summary(wallet),
             "created_at": user.created_at.isoformat(),
-            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "last_login_at": user.last_login_at.isoformat()
+            if user.last_login_at
+            else None,
             "auth_source": user.auth_source.value,
         }
 
@@ -786,7 +869,9 @@ class AuthLogoutAdapter(AuthenticatedApiAdapter):
         # 从 Authorization header 获取 Token（与 pipeline 保持一致的大小写无关匹配）
         auth_header = context.request.headers.get("Authorization") or ""
         if not auth_header.lower().startswith("bearer "):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证令牌")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证令牌"
+            )
 
         token = auth_header[7:].strip()
 
@@ -826,7 +911,9 @@ class AuthLogoutAdapter(AuthenticatedApiAdapter):
             return LogoutResponse(message="登出成功", success=True).model_dump()
         else:
             logger.warning(f"用户登出失败（Redis不可用）: {user.email}")
-            return LogoutResponse(message="登出成功（降级模式）", success=False).model_dump()
+            return LogoutResponse(
+                message="登出成功（降级模式）", success=False
+            ).model_dump()
 
 
 class AuthSendVerificationCodeAdapter(AuthPublicAdapter):
@@ -852,7 +939,9 @@ class AuthSendVerificationCodeAdapter(AuthPublicAdapter):
             client_ip, "verification_send"
         )
         if not allowed:
-            logger.warning(f"验证码发送请求超过速率限制: IP={client_ip}, 剩余={remaining}")
+            logger.warning(
+                f"验证码发送请求超过速率限制: IP={client_ip}, 剩余={remaining}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"请求过于频繁，请在 {reset_after} 秒后重试",
@@ -876,9 +965,11 @@ class AuthSendVerificationCodeAdapter(AuthPublicAdapter):
             )
 
         # 生成并发送验证码（使用服务中的默认配置）
-        success, code_or_error, error_detail = (
-            await EmailVerificationService.send_verification_code(email)
-        )
+        (
+            success,
+            code_or_error,
+            error_detail,
+        ) = await EmailVerificationService.send_verification_code(email)
 
         if not success:
             logger.error(f"发送验证码失败: {email}, 错误: {code_or_error}")
@@ -933,7 +1024,9 @@ class AuthVerifyEmailAdapter(AuthPublicAdapter):
             client_ip, "verification_verify"
         )
         if not allowed:
-            logger.warning(f"验证码验证请求超过速率限制: IP={client_ip}, 剩余={remaining}")
+            logger.warning(
+                f"验证码验证请求超过速率限制: IP={client_ip}, 剩余={remaining}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"请求过于频繁，请在 {reset_after} 秒后重试",
@@ -973,7 +1066,9 @@ class AuthVerificationStatusAdapter(AuthPublicAdapter):
             client_ip, "verification_status", limit=20
         )
         if not allowed:
-            logger.warning(f"验证状态查询请求超过速率限制: IP={client_ip}, 剩余={remaining}")
+            logger.warning(
+                f"验证状态查询请求超过速率限制: IP={client_ip}, 剩余={remaining}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"请求过于频繁，请在 {reset_after} 秒后重试",

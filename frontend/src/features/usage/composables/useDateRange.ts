@@ -22,7 +22,7 @@ function getTimezoneParams() {
 export function getDateRangeFromPeriod(period: PeriodValue): DateRangeParams {
   const now = new Date()
   let startDate: Date
-  let endDate = new Date(now)
+  const endDate = new Date(now)
 
   switch (period) {
     case 'today':

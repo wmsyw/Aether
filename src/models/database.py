@@ -117,7 +117,9 @@ class User(Base):
     )  # 每分钟请求限制，NULL=继承系统默认，0=不限制，N=N RPM
 
     # Key 能力配置
-    model_capability_settings = Column(JSON, nullable=True)  # 用户针对特定模型的能力配置
+    model_capability_settings = Column(
+        JSON, nullable=True
+    )  # 用户针对特定模型的能力配置
     # 示例: {"claude-sonnet-4-20250514": {"cache_1h": true}}
 
     # 状态
@@ -126,7 +128,9 @@ class User(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -137,13 +141,20 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     # 关系 - CASCADE delete: 让数据库处理级联删除
-    api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
+    api_keys = relationship(
+        "ApiKey", back_populates="user", cascade="all, delete-orphan"
+    )
     management_tokens = relationship(
         "ManagementToken", back_populates="user", cascade="all, delete-orphan"
     )
-    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    sessions = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
+    )
     preferences = relationship(
-        "UserPreference", back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+        "UserPreference",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     announcement_reads = relationship(
         "AnnouncementRead",
@@ -154,8 +165,12 @@ class User(Base):
 
     # 关系 - SET NULL: 保留历史记录，让数据库处理 SET NULL
     usage_records = relationship("Usage", back_populates="user", passive_deletes=True)
-    wallet = relationship("Wallet", back_populates="user", uselist=False, passive_deletes=True)
-    payment_orders = relationship("PaymentOrder", back_populates="user", passive_deletes=True)
+    wallet = relationship(
+        "Wallet", back_populates="user", uselist=False, passive_deletes=True
+    )
+    payment_orders = relationship(
+        "PaymentOrder", back_populates="user", passive_deletes=True
+    )
     refund_requests = relationship(
         "RefundRequest",
         back_populates="user",
@@ -173,9 +188,9 @@ class User(Base):
     def set_password(self, password: str) -> None:
         """设置密码"""
         try:
-            self.password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode(
-                "utf-8"
-            )
+            self.password_hash = bcrypt.hashpw(
+                password.encode("utf-8"), bcrypt.gensalt()
+            ).decode("utf-8")
         except ValueError as exc:
             raise ValueError("密码长度不能超过72字节") from exc
 
@@ -184,7 +199,9 @@ class User(Base):
         if not self.password_hash:
             return False
         try:
-            return bcrypt.checkpw(password.encode("utf-8"), self.password_hash.encode("utf-8"))
+            return bcrypt.checkpw(
+                password.encode("utf-8"), self.password_hash.encode("utf-8")
+            )
         except ValueError:
             return False
 
@@ -196,7 +213,10 @@ class UserSession(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
     # 客户端标识
@@ -222,7 +242,9 @@ class UserSession(Base):
 
     # 状态
     last_seen_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
@@ -230,7 +252,9 @@ class UserSession(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -313,9 +337,14 @@ class ApiKey(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
-    key_hash = Column(String(64), unique=True, index=True, nullable=False)  # API密钥的SHA256哈希
+    key_hash = Column(
+        String(64), unique=True, index=True, nullable=False
+    )  # API密钥的SHA256哈希
     key_encrypted = Column(Text, nullable=True)  # 加密后的完整密钥，用于查看
     name = Column(String(100), nullable=True)  # 密钥名称，便于用户管理
 
@@ -346,11 +375,15 @@ class ApiKey(Base):
     is_locked = Column(Boolean, default=False, nullable=False)  # 仅普通用户Key可锁定
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)  # 过期时间
-    auto_delete_on_expiry = Column(Boolean, default=False, nullable=False)  # 过期后是否自动删除
+    auto_delete_on_expiry = Column(
+        Boolean, default=False, nullable=False
+    )  # 过期后是否自动删除
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -361,8 +394,12 @@ class ApiKey(Base):
 
     # 关系
     user = relationship("User", back_populates="api_keys")
-    usage_records = relationship("Usage", back_populates="api_key", passive_deletes=True)
-    wallet = relationship("Wallet", back_populates="api_key", uselist=False, passive_deletes=True)
+    usage_records = relationship(
+        "Usage", back_populates="api_key", passive_deletes=True
+    )
+    wallet = relationship(
+        "Wallet", back_populates="api_key", uselist=False, passive_deletes=True
+    )
     provider_mappings = relationship(
         "ApiKeyProviderMapping", back_populates="api_key", cascade="all, delete-orphan"
     )
@@ -420,7 +457,11 @@ class ApiKey(Base):
                 # 使用静默模式，避免在显示场景打印错误日志
                 full_key = crypto_service.decrypt(self.key_encrypted, silent=True)
                 # 格式：sk-SpJ3y...sdf4
-                prefix = full_key[:10] if len(full_key) >= 10 else full_key[: len(full_key) // 2]
+                prefix = (
+                    full_key[:10]
+                    if len(full_key) >= 10
+                    else full_key[: len(full_key) // 2]
+                )
                 suffix = full_key[-4:] if len(full_key) >= 4 else ""
                 return f"{prefix}...{suffix}"
             except Exception:
@@ -438,17 +479,26 @@ class Usage(Base):
         Index("idx_usage_user_created", "user_id", "created_at"),
         Index("idx_usage_status_user_created", "status", "user_id", "created_at"),
         Index("idx_usage_apikey_created", "api_key_id", "created_at"),
-        Index("idx_usage_provider_model_created", "provider_name", "model", "created_at"),
+        Index(
+            "idx_usage_provider_model_created", "provider_name", "model", "created_at"
+        ),
         Index("idx_usage_provider_created", "provider_name", "created_at"),
         Index("idx_usage_model_created", "model", "created_at"),
         Index("idx_usage_provider_key", "provider_id", "provider_api_key_id"),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    api_key_id = Column(String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    api_key_id = Column(
+        String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True
+    )
     wallet_id = Column(
-        String(36), ForeignKey("wallets.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("wallets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     # 归属快照（删除用户/Key 后仍可追溯）
@@ -464,7 +514,9 @@ class Usage(Base):
     )
 
     # Provider 侧追踪信息（记录最终成功的 Provider/Endpoint/Key）
-    provider_id = Column(String(36), ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
+    provider_id = Column(
+        String(36), ForeignKey("providers.id", ondelete="SET NULL"), nullable=True
+    )
     provider_endpoint_id = Column(
         String(36),
         ForeignKey("provider_endpoints.id", ondelete="SET NULL"),
@@ -481,9 +533,15 @@ class Usage(Base):
     # Token统计
     input_tokens = Column(Integer, default=0)
     output_tokens = Column(Integer, default=0)
-    input_output_total_tokens = Column(Integer, default=0)  # 输入 + 输出（旧 total_tokens 语义）
-    input_context_tokens = Column(Integer, default=0)  # 输入上下文（input + cache_read）
-    total_tokens = Column(Integer, default=0)  # 真正总计 tokens（输入 + 输出 + 缓存创建 + 缓存读取）
+    input_output_total_tokens = Column(
+        Integer, default=0
+    )  # 输入 + 输出（旧 total_tokens 语义）
+    input_context_tokens = Column(
+        Integer, default=0
+    )  # 输入上下文（input + cache_read）
+    total_tokens = Column(
+        Integer, default=0
+    )  # 真正总计 tokens（输入 + 输出 + 缓存创建 + 缓存读取）
 
     # 缓存相关 tokens (for Claude models)
     cache_creation_input_tokens = Column(Integer, default=0)
@@ -496,8 +554,12 @@ class Usage(Base):
     output_cost_usd = Column(Numeric(20, 8), default=0.0)
     cache_cost_usd = Column(Numeric(20, 8), default=0.0)  # 总缓存成本
     cache_creation_cost_usd = Column(Numeric(20, 8), default=0.0)  # 缓存创建成本
-    cache_creation_cost_usd_5m = Column(Numeric(20, 8), default=0.0)  # 5min TTL 缓存创建成本
-    cache_creation_cost_usd_1h = Column(Numeric(20, 8), default=0.0)  # 1h TTL 缓存创建成本
+    cache_creation_cost_usd_5m = Column(
+        Numeric(20, 8), default=0.0
+    )  # 5min TTL 缓存创建成本
+    cache_creation_cost_usd_1h = Column(
+        Numeric(20, 8), default=0.0
+    )  # 1h TTL 缓存创建成本
     cache_read_cost_usd = Column(Numeric(20, 8), default=0.0)  # 缓存读取成本
     request_cost_usd = Column(Numeric(20, 8), default=0.0)  # 按次计费成本
     total_cost_usd = Column(Numeric(20, 8), default=0.0)
@@ -505,7 +567,9 @@ class Usage(Base):
     # 真实成本计算（表面成本 × 倍率）
     actual_input_cost_usd = Column(Numeric(20, 8), default=0.0)  # 真实输入成本
     actual_output_cost_usd = Column(Numeric(20, 8), default=0.0)  # 真实输出成本
-    actual_cache_creation_cost_usd = Column(Numeric(20, 8), default=0.0)  # 真实缓存创建成本
+    actual_cache_creation_cost_usd = Column(
+        Numeric(20, 8), default=0.0
+    )  # 真实缓存创建成本
     actual_cache_creation_cost_usd_5m = Column(
         Numeric(20, 8), default=0.0
     )  # 真实 5min TTL 缓存创建成本
@@ -516,7 +580,9 @@ class Usage(Base):
     actual_cache_cost_usd = Column(Numeric(20, 8), default=0.0)  # 真实缓存总成本
     actual_request_cost_usd = Column(Numeric(20, 8), default=0.0)  # 真实按次计费成本
     actual_total_cost_usd = Column(Numeric(20, 8), default=0.0)  # 真实总成本
-    rate_multiplier = Column(Numeric(10, 6), default=1.0)  # 使用的倍率（来自 ProviderAPIKey）
+    rate_multiplier = Column(
+        Numeric(10, 6), default=1.0
+    )  # 使用的倍率（来自 ProviderAPIKey）
 
     # 历史价格记录（每1M tokens的美元价格，记录请求时的实际价格）
     input_price_per_1m = Column(Numeric(20, 8), nullable=True)  # 输入单价
@@ -529,17 +595,23 @@ class Usage(Base):
         Numeric(20, 8), nullable=True
     )  # 1h TTL 缓存创建单价
     cache_read_price_per_1m = Column(Numeric(20, 8), nullable=True)  # 缓存读取单价
-    price_per_request = Column(Numeric(20, 8), nullable=True)  # 按次计费单价（历史记录）
+    price_per_request = Column(
+        Numeric(20, 8), nullable=True
+    )  # 按次计费单价（历史记录）
 
     # 请求详情
     request_type = Column(String(50))  # chat, completion, embedding等
-    api_format = Column(String(50), nullable=True)  # API 格式: CLAUDE, OPENAI 等（用户请求格式）
+    api_format = Column(
+        String(50), nullable=True
+    )  # API 格式: CLAUDE, OPENAI 等（用户请求格式）
     api_family = Column(String(50), nullable=True)  # 协议族: claude, openai, gemini
     endpoint_kind = Column(String(50), nullable=True)  # 端点类型: chat, cli, video
     endpoint_api_format = Column(String(50), nullable=True)  # 端点原生 API 格式
     provider_api_family = Column(String(50), nullable=True)  # 提供商协议族
     provider_endpoint_kind = Column(String(50), nullable=True)  # 提供商端点类型
-    has_format_conversion = Column(Boolean, nullable=True, default=False)  # 是否发生了格式转换
+    has_format_conversion = Column(
+        Boolean, nullable=True, default=False
+    )  # 是否发生了格式转换
     is_stream = Column(Boolean, default=False)  # 是否为流式请求
     status_code = Column(Integer)
     error_message = Column(Text, nullable=True)
@@ -560,11 +632,19 @@ class Usage(Base):
     # - settled: 已结算（cost 已写入，且钱包侧结算动作已完成）
     # - void: 作废（明确不收费）
     billing_status = Column(String(20), default="pending", nullable=False, index=True)
-    finalized_at = Column(DateTime(timezone=True), nullable=True)  # 结算完成时间（可选）
-    wallet_balance_before = Column(Numeric(20, 8), nullable=True)  # 结算前可用总余额快照
+    finalized_at = Column(
+        DateTime(timezone=True), nullable=True
+    )  # 结算完成时间（可选）
+    wallet_balance_before = Column(
+        Numeric(20, 8), nullable=True
+    )  # 结算前可用总余额快照
     wallet_balance_after = Column(Numeric(20, 8), nullable=True)  # 结算后可用总余额快照
-    wallet_recharge_balance_before = Column(Numeric(20, 8), nullable=True)  # 结算前充值余额
-    wallet_recharge_balance_after = Column(Numeric(20, 8), nullable=True)  # 结算后充值余额
+    wallet_recharge_balance_before = Column(
+        Numeric(20, 8), nullable=True
+    )  # 结算前充值余额
+    wallet_recharge_balance_after = Column(
+        Numeric(20, 8), nullable=True
+    )  # 结算后充值余额
     wallet_gift_balance_before = Column(Numeric(20, 8), nullable=True)  # 结算前赠款余额
     wallet_gift_balance_after = Column(Numeric(20, 8), nullable=True)  # 结算后赠款余额
 
@@ -572,17 +652,29 @@ class Usage(Base):
     request_headers = Column(JSON, nullable=True)  # 客户端请求头
     request_body = Column(JSON, nullable=True)  # 客户端原始请求体（7天内未压缩）
     provider_request_headers = Column(JSON, nullable=True)  # 向提供商发送的请求头
-    provider_request_body = Column(JSON, nullable=True)  # 发给提供商的请求体（格式转换后）
+    provider_request_body = Column(
+        JSON, nullable=True
+    )  # 发给提供商的请求体（格式转换后）
     response_headers = Column(JSON, nullable=True)  # 提供商响应头
     response_body = Column(JSON, nullable=True)  # 提供商原始响应体（7天内未压缩）
     client_response_headers = Column(JSON, nullable=True)  # 返回给客户端的响应头
-    client_response_body = Column(JSON, nullable=True)  # 返回给客户端的响应体（格式转换后）
+    client_response_body = Column(
+        JSON, nullable=True
+    )  # 返回给客户端的响应体（格式转换后）
 
     # 压缩存储字段（7天后自动压缩到这里）
-    request_body_compressed = Column(LargeBinary, nullable=True)  # gzip压缩的客户端请求体
-    provider_request_body_compressed = Column(LargeBinary, nullable=True)  # gzip压缩的提供商请求体
-    response_body_compressed = Column(LargeBinary, nullable=True)  # gzip压缩的提供商响应体
-    client_response_body_compressed = Column(LargeBinary, nullable=True)  # gzip压缩的客户端响应体
+    request_body_compressed = Column(
+        LargeBinary, nullable=True
+    )  # gzip压缩的客户端请求体
+    provider_request_body_compressed = Column(
+        LargeBinary, nullable=True
+    )  # gzip压缩的提供商请求体
+    response_body_compressed = Column(
+        LargeBinary, nullable=True
+    )  # gzip压缩的提供商响应体
+    client_response_body_compressed = Column(
+        LargeBinary, nullable=True
+    )  # gzip压缩的客户端响应体
 
     # 元数据
     request_metadata = Column(JSON, nullable=True)  # 存储额外信息
@@ -599,7 +691,9 @@ class Usage(Base):
     user = relationship("User", back_populates="usage_records")
     api_key = relationship("ApiKey", back_populates="usage_records")
     wallet = relationship("Wallet", back_populates="usage_records")
-    provider_obj = relationship("Provider")  # 使用 provider_obj 避免与 provider 字段名冲突
+    provider_obj = relationship(
+        "Provider"
+    )  # 使用 provider_obj 避免与 provider 字段名冲突
     provider_endpoint = relationship("ProviderEndpoint")
     provider_api_key = relationship("ProviderAPIKey")
 
@@ -656,17 +750,25 @@ class Wallet(Base):
             "OR (user_id IS NULL AND api_key_id IS NULL)",
             name="ck_wallet_single_owner",
         ),
-        CheckConstraint("gift_balance >= 0", name="ck_wallets_gift_balance_non_negative"),
+        CheckConstraint(
+            "gift_balance >= 0", name="ck_wallets_gift_balance_non_negative"
+        ),
         # user_id/api_key_id 的 unique=True 已隐含唯一索引，无需额外 Index
         Index("idx_wallets_status", "status"),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, unique=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
     )
     api_key_id = Column(
-        String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, unique=True
+        String(36),
+        ForeignKey("api_keys.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
     )
 
     # balance: 充值余额（可退款余额）
@@ -684,7 +786,9 @@ class Wallet(Base):
     total_adjusted = Column(Numeric(20, 8), nullable=False, default=0)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -726,7 +830,9 @@ class WalletTransaction(Base):
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    wallet_id = Column(String(36), ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False)
+    wallet_id = Column(
+        String(36), ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False
+    )
 
     category = Column(String(20), nullable=False)
     reason_code = Column(String(40), nullable=False)
@@ -743,12 +849,17 @@ class WalletTransaction(Base):
     link_type = Column(String(30), nullable=True)
     link_id = Column(String(100), nullable=True)
     operator_id = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     description = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
     wallet = relationship("Wallet", back_populates="transactions")
@@ -771,7 +882,9 @@ class WalletDailyUsageLedger(Base):
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    wallet_id = Column(String(36), ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False)
+    wallet_id = Column(
+        String(36), ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False
+    )
 
     billing_date = Column(Date, nullable=False)
     billing_timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
@@ -787,7 +900,9 @@ class WalletDailyUsageLedger(Base):
     last_finalized_at = Column(DateTime(timezone=True), nullable=True)
     aggregated_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -813,8 +928,12 @@ class PaymentOrder(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     order_no = Column(String(64), nullable=False)
-    wallet_id = Column(String(36), ForeignKey("wallets.id", ondelete="RESTRICT"), nullable=False)
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    wallet_id = Column(
+        String(36), ForeignKey("wallets.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     amount_usd = Column(Numeric(20, 8), nullable=False)
     pay_amount = Column(Numeric(20, 2), nullable=True)
@@ -829,7 +948,9 @@ class PaymentOrder(Base):
 
     status = Column(String(20), nullable=False, default="pending")
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     paid_at = Column(DateTime(timezone=True), nullable=True)
     credited_at = Column(DateTime(timezone=True), nullable=True)
@@ -854,7 +975,10 @@ class PaymentCallback(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     payment_order_id = Column(
-        String(36), ForeignKey("payment_orders.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("payment_orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     payment_method = Column(String(30), nullable=False)
 
@@ -868,7 +992,9 @@ class PaymentCallback(Base):
     error_message = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     processed_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -889,13 +1015,22 @@ class RefundRequest(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     refund_no = Column(String(64), nullable=False)
-    wallet_id = Column(String(36), ForeignKey("wallets.id", ondelete="RESTRICT"), nullable=False)
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    wallet_id = Column(
+        String(36), ForeignKey("wallets.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     payment_order_id = Column(
-        String(36), ForeignKey("payment_orders.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("payment_orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
-    source_type = Column(String(30), nullable=False)  # payment_order/manual_recharge/card_recharge
+    source_type = Column(
+        String(30), nullable=False
+    )  # payment_order/manual_recharge/card_recharge
     source_id = Column(String(100), nullable=True)
     refund_mode = Column(String(30), nullable=False)  # original_channel/offline_payout
     amount_usd = Column(Numeric(20, 8), nullable=False)
@@ -903,13 +1038,22 @@ class RefundRequest(Base):
     status = Column(String(30), nullable=False, default="pending_approval")
     reason = Column(Text, nullable=True)
     requested_by = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     approved_by = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     processed_by = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     gateway_refund_id = Column(String(128), nullable=True)
@@ -920,7 +1064,9 @@ class RefundRequest(Base):
     idempotency_key = Column(String(128), nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -932,7 +1078,9 @@ class RefundRequest(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     wallet = relationship("Wallet", back_populates="refund_requests")
-    user = relationship("User", back_populates="refund_requests", foreign_keys=[user_id])
+    user = relationship(
+        "User", back_populates="refund_requests", foreign_keys=[user_id]
+    )
     payment_order = relationship("PaymentOrder", back_populates="refund_requests")
 
 
@@ -948,7 +1096,9 @@ class SystemConfig(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -964,9 +1114,13 @@ class LDAPConfig(Base):
     __tablename__ = "ldap_configs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    server_url = Column(String(255), nullable=False)  # ldap://host:389 或 ldaps://host:636
+    server_url = Column(
+        String(255), nullable=False
+    )  # ldap://host:389 或 ldaps://host:636
     bind_dn = Column(Text, nullable=False)  # 绑定账号 DN（可能很长）
-    bind_password_encrypted = Column(Text, nullable=True)  # 加密的绑定密码（允许 NULL 表示已清除）
+    bind_password_encrypted = Column(
+        Text, nullable=True
+    )  # 加密的绑定密码（允许 NULL 表示已清除）
     base_dn = Column(Text, nullable=False)  # 用户搜索基础 DN（可能很长）
     user_search_filter = Column(
         Text, default="(uid={username})", nullable=False
@@ -985,7 +1139,9 @@ class LDAPConfig(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1031,8 +1187,12 @@ class OAuthProvider(Base):
     provider_type = Column(String(50), primary_key=True)
     display_name = Column(String(100), nullable=False)
 
-    client_id = Column(Text, nullable=False)  # 某些 OAuth 提供商可能使用很长的 client_id
-    client_secret_encrypted = Column(Text, nullable=True)  # 允许 NULL 表示尚未配置/已清除
+    client_id = Column(
+        Text, nullable=False
+    )  # 某些 OAuth 提供商可能使用很长的 client_id
+    client_secret_encrypted = Column(
+        Text, nullable=True
+    )  # 允许 NULL 表示尚未配置/已清除
 
     # 可选覆盖端点（需在业务层做白名单校验）
     authorization_url_override = Column(String(500), nullable=True)
@@ -1053,7 +1213,9 @@ class OAuthProvider(Base):
     is_enabled = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1101,12 +1263,16 @@ class UserOAuthLink(Base):
     extra_data = Column(JSON, nullable=True)
 
     linked_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("provider_type", "provider_user_id", name="uq_oauth_provider_user"),
+        UniqueConstraint(
+            "provider_type", "provider_user_id", name="uq_oauth_provider_user"
+        ),
         UniqueConstraint("user_id", "provider_type", name="uq_user_oauth_provider"),
     )
 
@@ -1128,7 +1294,9 @@ class Provider(ExportMixin, Base):
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String(100), unique=True, nullable=False, index=True)  # 提供商名称（唯一）
+    name = Column(
+        String(100), unique=True, nullable=False, index=True
+    )  # 提供商名称（唯一）
     description = Column(Text, nullable=True)  # 提供商描述
     website = Column(String(500), nullable=True)  # 主站网站
 
@@ -1152,8 +1320,12 @@ class Provider(ExportMixin, Base):
     # 月卡配置
     monthly_quota_usd = Column(Numeric(20, 8), nullable=True)  # 月卡总额度
     monthly_used_usd = Column(Numeric(20, 8), default=0.0)  # 本月已用额度
-    quota_reset_day = Column(Integer, default=30)  # 额度重置周期(天数)，例如：7=每周，30=每月
-    quota_last_reset_at = Column(DateTime(timezone=True), nullable=True)  # 上次额度重置时间
+    quota_reset_day = Column(
+        Integer, default=30
+    )  # 额度重置周期(天数)，例如：7=每周，30=每月
+    quota_last_reset_at = Column(
+        DateTime(timezone=True), nullable=True
+    )  # 上次额度重置时间
     quota_expires_at = Column(DateTime(timezone=True), nullable=True)  # 月卡过期时间
 
     # 提供商优先级 (数字越小越优先，用于提供商优先模式下的 Provider 排序)
@@ -1197,7 +1369,9 @@ class Provider(ExportMixin, Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1207,7 +1381,9 @@ class Provider(ExportMixin, Base):
     )
 
     # 关系
-    models = relationship("Model", back_populates="provider", cascade="all, delete-orphan")
+    models = relationship(
+        "Model", back_populates="provider", cascade="all, delete-orphan"
+    )
     endpoints = relationship(
         "ProviderEndpoint", back_populates="provider", cascade="all, delete-orphan"
     )
@@ -1239,7 +1415,9 @@ class ProviderEndpoint(ExportMixin, Base):
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    provider_id = Column(String(36), ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
+    provider_id = Column(
+        String(36), ForeignKey("providers.id", ondelete="CASCADE"), nullable=False
+    )
 
     # API 格式和配置
     # 新模式：存储 endpoint signature key（family:kind），如 "openai:chat"
@@ -1250,8 +1428,12 @@ class ProviderEndpoint(ExportMixin, Base):
     base_url = Column(String(500), nullable=False)
 
     # 请求配置
-    header_rules = Column(JSON, nullable=True)  # 请求头规则 [{action, key, value, from, to}]
-    body_rules = Column(JSON, nullable=True)  # 请求体规则 [{action, path, value, from, to}]
+    header_rules = Column(
+        JSON, nullable=True
+    )  # 请求头规则 [{action, key, value, from, to}]
+    body_rules = Column(
+        JSON, nullable=True
+    )  # 请求体规则 [{action, path, value, from, to}]
     max_retries = Column(Integer, default=2)  # 最大重试次数
 
     # 状态
@@ -1278,7 +1460,9 @@ class ProviderEndpoint(ExportMixin, Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1317,7 +1501,9 @@ class ProxyNode(Base):
     region = Column(String(100), nullable=True)  # 区域标签
 
     # 手动节点专用字段
-    is_manual = Column(Boolean, default=False, nullable=False, comment="是否为手动添加的代理节点")
+    is_manual = Column(
+        Boolean, default=False, nullable=False, comment="是否为手动添加的代理节点"
+    )
     proxy_url = Column(String(500), nullable=True, comment="手动节点的完整代理 URL")
     proxy_username = Column(String(255), nullable=True, comment="手动节点的代理用户名")
     proxy_password = Column(String(500), nullable=True, comment="手动节点的代理密码")
@@ -1346,11 +1532,21 @@ class ProxyNode(Base):
     # 性能指标（心跳上报）
     active_connections = Column(Integer, default=0, nullable=False)
     total_requests = Column(BigInteger, default=0, nullable=False)
-    avg_latency_ms = Column(Float, nullable=True, comment="平均连接建立延迟(ms), DNS+TCP/TLS+TTFB")
-    failed_requests = Column(BigInteger, default=0, nullable=False, comment="累计失败请求数")
-    dns_failures = Column(BigInteger, default=0, nullable=False, comment="累计 DNS 失败数")
-    stream_errors = Column(BigInteger, default=0, nullable=False, comment="累计流错误数")
-    proxy_metadata = Column(JSON, nullable=True, comment="aether-proxy 上报元数据（版本等）")
+    avg_latency_ms = Column(
+        Float, nullable=True, comment="平均连接建立延迟(ms), DNS+TCP/TLS+TTFB"
+    )
+    failed_requests = Column(
+        BigInteger, default=0, nullable=False, comment="累计失败请求数"
+    )
+    dns_failures = Column(
+        BigInteger, default=0, nullable=False, comment="累计 DNS 失败数"
+    )
+    stream_errors = Column(
+        BigInteger, default=0, nullable=False, comment="累计流错误数"
+    )
+    proxy_metadata = Column(
+        JSON, nullable=True, comment="aether-proxy 上报元数据（版本等）"
+    )
 
     # 硬件信息（注册时上报，JSON 可扩展）
     hardware_info = Column(
@@ -1366,7 +1562,9 @@ class ProxyNode(Base):
     tunnel_mode = Column(
         Boolean, default=False, nullable=False, comment="是否使用 WebSocket 隧道模式"
     )
-    tunnel_connected = Column(Boolean, default=False, nullable=False, comment="隧道是否已连接")
+    tunnel_connected = Column(
+        Boolean, default=False, nullable=False, comment="隧道是否已连接"
+    )
     tunnel_connected_at = Column(
         DateTime(timezone=True), nullable=True, comment="隧道最近一次建立时间"
     )
@@ -1382,7 +1580,9 @@ class ProxyNode(Base):
     )
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1418,7 +1618,9 @@ class ProxyNodeEvent(Base):
         nullable=False,
     )
 
-    __table_args__ = (Index("idx_proxy_node_events_node_created", "node_id", "created_at"),)
+    __table_args__ = (
+        Index("idx_proxy_node_events_node_created", "node_id", "created_at"),
+    )
 
 
 class GlobalModel(ExportMixin, Base):
@@ -1442,7 +1644,9 @@ class GlobalModel(ExportMixin, Base):
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String(100), unique=True, nullable=False, index=True)  # 统一模型名（唯一）
+    name = Column(
+        String(100), unique=True, nullable=False, index=True
+    )  # 统一模型名（唯一）
     display_name = Column(String(100), nullable=False)
 
     # 按次计费配置（每次请求的固定费用，美元）- 可选，与按 token 计费叠加
@@ -1507,7 +1711,9 @@ class GlobalModel(ExportMixin, Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1546,7 +1752,9 @@ class Model(ExportMixin, Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     provider_id = Column(String(36), ForeignKey("providers.id"), nullable=False)
     # 必须关联一个 GlobalModel
-    global_model_id = Column(String(36), ForeignKey("global_models.id"), nullable=False, index=True)
+    global_model_id = Column(
+        String(36), ForeignKey("global_models.id"), nullable=False, index=True
+    )
 
     # Provider 映射配置
     provider_model_name = Column(String(200), nullable=False)  # Provider 侧的主模型名称
@@ -1577,7 +1785,9 @@ class Model(ExportMixin, Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1592,7 +1802,9 @@ class Model(ExportMixin, Base):
 
     # 唯一约束：同一个提供商下的 provider_model_name 不能重复
     __table_args__ = (
-        UniqueConstraint("provider_id", "provider_model_name", name="uq_provider_model"),
+        UniqueConstraint(
+            "provider_id", "provider_model_name", name="uq_provider_model"
+        ),
     )
 
     # 辅助方法：获取有效的阶梯计费配置
@@ -1712,7 +1924,11 @@ class Model(ExportMixin, Base):
         # 深度合并 config
         result = dict(global_config)
         for key, value in self.config.items():
-            if key == "billing" and isinstance(value, dict) and isinstance(result.get(key), dict):
+            if (
+                key == "billing"
+                and isinstance(value, dict)
+                and isinstance(result.get(key), dict)
+            ):
                 # 深度合并 billing
                 result[key] = {**result[key], **value}
             else:
@@ -1756,7 +1972,9 @@ class Model(ExportMixin, Base):
                 # 如果配置了作用域，只有匹配时才生效
                 if isinstance(mapping_api_formats, list):
                     target = str(api_format).strip().lower()
-                    allowed = {str(fmt).strip().lower() for fmt in mapping_api_formats if fmt}
+                    allowed = {
+                        str(fmt).strip().lower() for fmt in mapping_api_formats if fmt
+                    }
                     if target not in allowed:
                         continue
 
@@ -1781,7 +1999,9 @@ class Model(ExportMixin, Base):
 
         # 获取所有最高优先级的映射
         top_priority_mappings = [
-            mapping for mapping in sorted_mappings if mapping["priority"] == highest_priority
+            mapping
+            for mapping in sorted_mappings
+            if mapping["priority"] == highest_priority
         ]
 
         # 如果有多个相同优先级的映射，通过哈希分散选择
@@ -1820,10 +2040,16 @@ class BillingRule(Base):
 
     # 规则关联（两者必有其一）
     global_model_id = Column(
-        String(36), ForeignKey("global_models.id", ondelete="CASCADE"), nullable=True, index=True
+        String(36),
+        ForeignKey("global_models.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     model_id = Column(
-        String(36), ForeignKey("models.id", ondelete="CASCADE"), nullable=True, index=True
+        String(36),
+        ForeignKey("models.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
 
     name = Column(String(100), nullable=False)
@@ -1838,7 +2064,9 @@ class BillingRule(Base):
     is_enabled = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1899,7 +2127,9 @@ class DimensionCollector(Base):
     is_enabled = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -1973,12 +2203,17 @@ class ProviderAPIKey(ExportMixin, Base):
 
     # 外键关系 - 直接关联 Provider
     provider_id = Column(
-        String(36), ForeignKey("providers.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36),
+        ForeignKey("providers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
     # API 格式支持列表（核心字段）
     # None 表示支持所有格式，空列表 [] 表示不支持任何格式
-    api_formats = Column(JSON, nullable=True, default=list)  # ["claude:chat", "claude:cli"]
+    api_formats = Column(
+        JSON, nullable=True, default=list
+    )  # ["claude:chat", "claude:cli"]
 
     # 认证类型
     # - "api_key": 标准 API Key 认证（默认）
@@ -2019,25 +2254,35 @@ class ProviderAPIKey(ExportMixin, Base):
     rpm_limit = Column(Integer, nullable=True, default=None)
 
     # 模型权限控制
-    allowed_models = Column(JSON, nullable=True)  # 允许使用的模型列表（null = 支持所有模型）
+    allowed_models = Column(
+        JSON, nullable=True
+    )  # 允许使用的模型列表（null = 支持所有模型）
 
     # Key 能力标签
     capabilities = Column(JSON, nullable=True)  # Key 拥有的能力
     # 示例: {"cache_1h": true, "context_1m": true}
 
     # 自适应 RPM 调整（仅当 rpm_limit = NULL 时生效）
-    learned_rpm_limit = Column(Integer, nullable=True)  # 学习到的 RPM 限制（自适应模式下的有效值）
-    concurrent_429_count = Column(Integer, default=0, nullable=False)  # 因并发导致的429次数
+    learned_rpm_limit = Column(
+        Integer, nullable=True
+    )  # 学习到的 RPM 限制（自适应模式下的有效值）
+    concurrent_429_count = Column(
+        Integer, default=0, nullable=False
+    )  # 因并发导致的429次数
     rpm_429_count = Column(Integer, default=0, nullable=False)  # 因RPM导致的429次数
     last_429_at = Column(DateTime(timezone=True), nullable=True)  # 最后429时间
-    last_429_type = Column(String(50), nullable=True)  # 最后429类型: concurrent/rpm/unknown
+    last_429_type = Column(
+        String(50), nullable=True
+    )  # 最后429类型: concurrent/rpm/unknown
     last_rpm_peak = Column(Integer, nullable=True)  # 触发429时的RPM峰值
     adjustment_history = Column(JSON, nullable=True)  # RPM调整历史
     # 基于滑动窗口的利用率追踪
     utilization_samples = Column(
         JSON, nullable=True
     )  # 利用率采样窗口 [{"ts": timestamp, "util": 0.8}, ...]
-    last_probe_increase_at = Column(DateTime(timezone=True), nullable=True)  # 上次探测性扩容时间
+    last_probe_increase_at = Column(
+        DateTime(timezone=True), nullable=True
+    )  # 上次探测性扩容时间
 
     # 健康度追踪（按 endpoint signature 存储）
     # 结构: {"claude:chat": {"health_score": 1.0, "consecutive_failures": 0, ...}, ...}
@@ -2071,12 +2316,18 @@ class ProviderAPIKey(ExportMixin, Base):
     expires_at = Column(DateTime(timezone=True), nullable=True)  # 过期时间
 
     # 自动获取模型配置
-    auto_fetch_models = Column(Boolean, default=False, nullable=False)  # 是否启用自动获取模型
-    last_models_fetch_at = Column(DateTime(timezone=True), nullable=True)  # 最后获取时间
+    auto_fetch_models = Column(
+        Boolean, default=False, nullable=False
+    )  # 是否启用自动获取模型
+    last_models_fetch_at = Column(
+        DateTime(timezone=True), nullable=True
+    )  # 最后获取时间
     last_models_fetch_error = Column(Text, nullable=True)  # 最后获取错误信息
     locked_models = Column(JSON, nullable=True)  # 被锁定的模型列表（刷新时不会被删除）
     # 模型过滤规则（支持 * 和 ? 通配符，如 "gpt-*", "claude-?-sonnet"）
-    model_include_patterns = Column(JSON, nullable=True)  # 包含规则列表，空表示不过滤（包含所有）
+    model_include_patterns = Column(
+        JSON, nullable=True
+    )  # 包含规则列表，空表示不过滤（包含所有）
     model_exclude_patterns = Column(JSON, nullable=True)  # 排除规则列表，空表示不排除
 
     # 上游元数据（由响应头解析器采集，如 Codex 额度信息）
@@ -2085,7 +2336,9 @@ class ProviderAPIKey(ExportMixin, Base):
     # OAuth 失效状态（账号被封、授权撤销、刷新失败等）
     oauth_invalid_at = Column(DateTime(timezone=True), nullable=True)  # 失效时间
     oauth_invalid_reason = Column(String(255), nullable=True)  # 失效原因
-    status_snapshot = Column(JSON, nullable=True, default=None)  # 结构化状态快照（兼容旧字段）
+    status_snapshot = Column(
+        JSON, nullable=True, default=None
+    )  # 结构化状态快照（兼容旧字段）
 
     # Key 级别的代理配置（覆盖 Provider 级别的代理设置）
     # 结构: {"node_id": "xxx", "enabled": true} 或 {"url": "socks5://...", "enabled": true}
@@ -2097,7 +2350,9 @@ class ProviderAPIKey(ExportMixin, Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2106,7 +2361,9 @@ class ProviderAPIKey(ExportMixin, Base):
         nullable=False,
     )
 
-    __table_args__ = (Index("idx_provider_api_keys_provider_active", "provider_id", "is_active"),)
+    __table_args__ = (
+        Index("idx_provider_api_keys_provider_active", "provider_id", "is_active"),
+    )
 
     # 关系
     provider = relationship("Provider", back_populates="api_keys")
@@ -2137,21 +2394,30 @@ def _sync_provider_api_key_status_snapshot(
             state.attrs[field].history.has_changes()
             for field in _PROVIDER_API_KEY_STATUS_SNAPSHOT_FIELDS
         )
-        if not relevant_changed and getattr(target, "status_snapshot", None) is not None:
+        if (
+            not relevant_changed
+            and getattr(target, "status_snapshot", None) is not None
+        ):
             return
 
-    from src.services.provider_keys.status_snapshot_store import sync_provider_key_status_snapshot
+    from src.services.provider_keys.status_snapshot_store import (
+        sync_provider_key_status_snapshot,
+    )
 
     sync_provider_key_status_snapshot(target, connection=connection)
 
 
 @event.listens_for(ProviderAPIKey, "before_insert")
-def _provider_api_key_before_insert(mapper: Any, connection: Any, target: ProviderAPIKey) -> None:
+def _provider_api_key_before_insert(
+    mapper: Any, connection: Any, target: ProviderAPIKey
+) -> None:
     _sync_provider_api_key_status_snapshot(target, connection=connection, force=True)
 
 
 @event.listens_for(ProviderAPIKey, "before_update")
-def _provider_api_key_before_update(mapper: Any, connection: Any, target: ProviderAPIKey) -> None:
+def _provider_api_key_before_update(
+    mapper: Any, connection: Any, target: ProviderAPIKey
+) -> None:
     _sync_provider_api_key_status_snapshot(target, connection=connection, force=False)
 
 
@@ -2178,9 +2444,14 @@ class VideoTask(Base):
     external_task_id = Column(String(200))
 
     # 关联
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     api_key_id = Column(
-        String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("api_keys.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     # 归属快照（删除用户/Key 后仍可追溯）
@@ -2188,7 +2459,9 @@ class VideoTask(Base):
     api_key_name = Column(String(200), nullable=True, comment="API Key 名称快照")
     provider_id = Column(String(36), ForeignKey("providers.id"), index=True)
     endpoint_id = Column(String(36), ForeignKey("provider_endpoints.id"), index=True)
-    key_id = Column(String(36), ForeignKey("provider_api_keys.id", ondelete="SET NULL"), index=True)
+    key_id = Column(
+        String(36), ForeignKey("provider_api_keys.id", ondelete="SET NULL"), index=True
+    )
 
     # 格式转换追踪
     client_api_format = Column(String(50), nullable=False)
@@ -2238,11 +2511,16 @@ class VideoTask(Base):
 
     # Remix 支持
     remixed_from_task_id = Column(
-        String(36), ForeignKey("video_tasks.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("video_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     # 使用追踪（候选 key、请求头等）
-    request_metadata = Column(JSON, nullable=True)  # 存储候选 key 列表、请求头等追踪信息
+    request_metadata = Column(
+        JSON, nullable=True
+    )  # 存储候选 key 列表、请求头等追踪信息
     # 示例: {
     #   "candidate_keys": [{"key_id": "xxx", "endpoint_id": "yyy", "priority": 1}, ...],
     #   "selected_key_index": 0,
@@ -2253,7 +2531,9 @@ class VideoTask(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     submitted_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
@@ -2273,7 +2553,9 @@ class VideoTask(Base):
         Index("idx_video_tasks_user_status", "user_id", "status"),
         Index("idx_video_tasks_next_poll", "next_poll_at"),
         Index("idx_video_tasks_external_id", "external_task_id"),
-        UniqueConstraint("user_id", "external_task_id", name="uq_video_tasks_user_external_id"),
+        UniqueConstraint(
+            "user_id", "external_task_id", name="uq_video_tasks_user_external_id"
+        ),
     )
 
 
@@ -2284,7 +2566,10 @@ class UserPreference(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
     )
 
     # 个人信息
@@ -2292,7 +2577,9 @@ class UserPreference(Base):
     bio = Column(Text, nullable=True)  # 个人简介
 
     # 偏好设置
-    default_provider_id = Column(String(36), ForeignKey("providers.id"), nullable=True, index=True)
+    default_provider_id = Column(
+        String(36), ForeignKey("providers.id"), nullable=True, index=True
+    )
     theme = Column(String(20), default="light")  # light/dark/auto
     language = Column(String(10), default="zh-CN")
     timezone = Column(String(50), default="Asia/Shanghai")
@@ -2304,7 +2591,9 @@ class UserPreference(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2331,7 +2620,10 @@ class Announcement(Base):
 
     # 发布信息
     author_id = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     is_active = Column(Boolean, default=True, index=True)
     is_pinned = Column(Boolean, default=False)  # 置顶
@@ -2367,14 +2659,22 @@ class AnnouncementRead(Base):
     __tablename__ = "announcement_reads"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    announcement_id = Column(String(36), ForeignKey("announcements.id"), nullable=False, index=True)
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    announcement_id = Column(
+        String(36), ForeignKey("announcements.id"), nullable=False, index=True
+    )
     read_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
     # 唯一约束
-    __table_args__ = (UniqueConstraint("user_id", "announcement_id", name="uq_user_announcement"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "announcement_id", name="uq_user_announcement"),
+    )
 
     # 关系
     user = relationship("User", back_populates="announcement_reads")
@@ -2420,6 +2720,12 @@ class AuditEventType(PyEnum):
     MANAGEMENT_TOKEN_EXPIRED = "management_token_expired"
     MANAGEMENT_TOKEN_IP_BLOCKED = "management_token_ip_blocked"
 
+    # Passkey 相关
+    PASSKEY_REGISTERED = "passkey_registered"
+    PASSKEY_DELETED = "passkey_deleted"
+    PASSKEY_LOGIN_SUCCESS = "passkey_login_success"
+    PASSKEY_LOGIN_FAILED = "passkey_login_failed"
+
 
 class ManagementToken(Base):
     """Management Token 模型 - 用于程序化管理 API 调用"""
@@ -2431,11 +2737,17 @@ class ManagementToken(Base):
     TOKEN_RANDOM_LENGTH = 40
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
 
     # Token 信息
-    token_hash = Column(String(64), unique=True, index=True, nullable=False)  # SHA256 哈希
-    token_prefix = Column(String(12), nullable=True)  # Token 前缀用于显示（如 ae_xxxxxxxx）
+    token_hash = Column(
+        String(64), unique=True, index=True, nullable=False
+    )  # SHA256 哈希
+    token_prefix = Column(
+        String(12), nullable=True
+    )  # Token 前缀用于显示（如 ae_xxxxxxxx）
     name = Column(String(100), nullable=False)  # Token 名称
     description = Column(Text, nullable=True)  # 描述
 
@@ -2456,7 +2768,9 @@ class ManagementToken(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2535,10 +2849,14 @@ class ManagementToken(Base):
 
         # 防御性检查：空列表应该在数据库层被拒绝，但这里再检查一次
         if not self.allowed_ips:
-            logger.critical(f"Management Token {self.id} - allowed_ips 为空列表（违反数据库约束）")
+            logger.critical(
+                f"Management Token {self.id} - allowed_ips 为空列表（违反数据库约束）"
+            )
             return False  # fail-safe
 
-        def normalize_ip(ip_str: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+        def normalize_ip(
+            ip_str: str,
+        ) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
             """规范化 IP 地址，将 IPv4 映射的 IPv6 转换为 IPv4"""
             try:
                 ip = ipaddress.ip_address(ip_str)
@@ -2551,7 +2869,9 @@ class ManagementToken(Base):
         # 规范化客户端 IP
         client = normalize_ip(client_ip)
         if client is None:
-            logger.error(f"Management Token {self.id} - 拒绝无效的客户端 IP: {client_ip}")
+            logger.error(
+                f"Management Token {self.id} - 拒绝无效的客户端 IP: {client_ip}"
+            )
             return False
 
         valid_entries = 0
@@ -2567,18 +2887,24 @@ class ManagementToken(Base):
                     # 精确 IP
                     allowed_ip = normalize_ip(allowed)
                     if allowed_ip is None:
-                        logger.error(f"Management Token {self.id} - 白名单包含无效条目: {allowed}")
+                        logger.error(
+                            f"Management Token {self.id} - 白名单包含无效条目: {allowed}"
+                        )
                         continue
                     valid_entries += 1
                     if client == allowed_ip:
                         return True
             except ValueError:
-                logger.error(f"Management Token {self.id} - 白名单包含无效条目: {allowed}")
+                logger.error(
+                    f"Management Token {self.id} - 白名单包含无效条目: {allowed}"
+                )
                 continue
 
         # 如果白名单全部无效，记录严重错误并拒绝
         if valid_entries == 0:
-            logger.critical(f"Management Token {self.id} - 白名单全部无效，拒绝所有访问")
+            logger.critical(
+                f"Management Token {self.id} - 白名单全部无效，拒绝所有访问"
+            )
 
         return False
 
@@ -2593,7 +2919,9 @@ class ManagementToken(Base):
             # 数据库中的时间应该有时区信息，如果没有则表示数据完整性问题
             from src.core.logger import logger
 
-            logger.error(f"Management Token {self.id} expires_at 缺少时区信息（数据完整性问题）")
+            logger.error(
+                f"Management Token {self.id} expires_at 缺少时区信息（数据完整性问题）"
+            )
             expires = expires.replace(tzinfo=timezone.utc)
 
         return expires < datetime.now(timezone.utc)
@@ -2607,7 +2935,10 @@ class AuditLog(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     event_type = Column(String(50), nullable=False, index=True)
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     api_key_id = Column(String(36), nullable=True)
 
@@ -2647,10 +2978,16 @@ class RequestCandidate(Base):
     # 关联字段
     request_id = Column(String(100), nullable=False, index=True)
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     api_key_id = Column(
-        String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("api_keys.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     # 归属快照（删除用户/Key 后仍可追溯）
@@ -2660,14 +2997,18 @@ class RequestCandidate(Base):
     # 候选信息
     candidate_index = Column(Integer, nullable=False)  # 候选序号（从0开始）
     retry_index = Column(Integer, nullable=False, default=0)  # 重试序号（从0开始）
-    provider_id = Column(String(36), ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
+    provider_id = Column(
+        String(36), ForeignKey("providers.id", ondelete="CASCADE"), nullable=True
+    )
     endpoint_id = Column(
         String(36),
         ForeignKey("provider_endpoints.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
-    key_id = Column(String(36), nullable=True, index=True, comment="Provider Key ID 快照")
+    key_id = Column(
+        String(36), nullable=True, index=True, comment="Provider Key ID 快照"
+    )
 
     # 状态信息
     status = Column(
@@ -2689,7 +3030,9 @@ class RequestCandidate(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     started_at = Column(DateTime(timezone=True), nullable=True)  # 开始执行时间
     finished_at = Column(DateTime(timezone=True), nullable=True)  # 完成时间
@@ -2697,7 +3040,10 @@ class RequestCandidate(Base):
     # 唯一约束和索引
     __table_args__ = (
         UniqueConstraint(
-            "request_id", "candidate_index", "retry_index", name="uq_request_candidate_with_retry"
+            "request_id",
+            "candidate_index",
+            "retry_index",
+            name="uq_request_candidate_with_retry",
         ),
         Index("idx_request_candidates_request_id", "request_id"),
         Index("idx_request_candidates_status", "status"),
@@ -2753,7 +3099,9 @@ class StatsHourly(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2782,7 +3130,9 @@ class StatsHourlyUser(Base):
     total_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2814,7 +3164,9 @@ class StatsHourlyModel(Base):
     avg_response_time_ms = Column(Float, default=0.0, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2845,7 +3197,9 @@ class StatsHourlyProvider(Base):
     total_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2883,7 +3237,9 @@ class StatsDaily(Base):
 
     # 成本统计 (USD)
     total_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
-    actual_total_cost = Column(Numeric(20, 8), default=0.0, nullable=False)  # 倍率后成本
+    actual_total_cost = Column(
+        Numeric(20, 8), default=0.0, nullable=False
+    )  # 倍率后成本
     input_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
     output_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
     cache_creation_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
@@ -2909,7 +3265,9 @@ class StatsDaily(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2949,7 +3307,9 @@ class StatsDailyModel(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -2993,7 +3353,9 @@ class StatsDailyProvider(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -3016,7 +3378,9 @@ class StatsDailyApiKey(Base):
     __tablename__ = "stats_daily_api_key"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    api_key_id = Column(String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True)
+    api_key_id = Column(
+        String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True
+    )
     api_key_name = Column(
         String(200), nullable=True, comment="API Key 名称快照（删除 Key 后仍可追溯）"
     )
@@ -3034,7 +3398,9 @@ class StatsDailyApiKey(Base):
     total_cost = Column(Numeric(20, 8), default=0.0, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -3067,7 +3433,9 @@ class StatsDailyError(Base):
     count = Column(Integer, default=0, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -3122,7 +3490,9 @@ class StatsSummary(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -3140,8 +3510,12 @@ class StatsUserDaily(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
     # 用户关联
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    username = Column(String(100), nullable=True, comment="用户名快照（删除用户后仍可追溯）")
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    username = Column(
+        String(100), nullable=True, comment="用户名快照（删除用户后仍可追溯）"
+    )
 
     # 统计日期 (UTC)
     date = Column(DateTime(timezone=True), nullable=False, index=True)
@@ -3162,7 +3536,9 @@ class StatsUserDaily(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -3208,7 +3584,10 @@ class GeminiFileMapping(Base):
 
     # 用户 ID（用于权限验证，可选）
     user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
 
     # 文件元数据（可选，用于调试）
@@ -3221,7 +3600,9 @@ class GeminiFileMapping(Base):
 
     # 时间戳
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     # 过期时间（Gemini 文件 48 小时后过期）
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
@@ -3246,12 +3627,16 @@ class UserModelUsageCount(Base):
     __tablename__ = "user_model_usage_counts"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     model = Column(String(100), nullable=False)
     usage_count = Column(Integer, default=0, nullable=False)
 
     created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at = Column(
         DateTime(timezone=True),
@@ -3264,6 +3649,69 @@ class UserModelUsageCount(Base):
         UniqueConstraint("user_id", "model", name="uq_user_model_usage_count"),
         Index("idx_user_model_usage_user", "user_id"),
         Index("idx_user_model_usage_model", "model"),
+    )
+
+
+class UserPasskeyCredential(Base):
+    """用户 Passkey (WebAuthn) 凭证模型
+
+    存储用户的 WebAuthn 凭证信息，支持多凭证 per 用户。
+    """
+
+    __tablename__ = "user_passkey_credentials"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # WebAuthn 凭证核心字段
+    credential_id = Column(
+        String(512), nullable=False, unique=True, index=True
+    )  # Base64URL 编码的凭证 ID
+    public_key = Column(Text, nullable=False)  # Base64URL 编码的公钥 (COSE)
+    sign_count = Column(Integer, default=0, nullable=False)  # 签名计数器（防重放）
+
+    # 凭证元数据
+    device_name = Column(String(100), nullable=True)  # 用户自定义设备名称
+    device_type = Column(
+        String(50), nullable=True
+    )  # 设备类型（如 "security_key", "platform"）
+    backed_up = Column(
+        Boolean, default=False, nullable=False
+    )  # 是否已备份（多设备同步）
+    transports = Column(
+        JSON, nullable=True
+    )  # 传输方式列表 ["usb", "nfc", "ble", "hybrid", "internal"]
+
+    # AAGUID (Authenticator Attestation GUID) - 用于识别认证器型号
+    aaguid = Column(String(36), nullable=True)
+
+    # 凭证状态
+    is_active = Column(Boolean, default=True, nullable=False)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+
+    # 时间戳
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 关系
+    user = relationship("User", backref="passkey_credentials")
+
+    __table_args__ = (
+        Index("idx_passkey_credentials_user_active", "user_id", "is_active"),
     )
 
 

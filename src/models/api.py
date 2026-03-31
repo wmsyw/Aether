@@ -808,6 +808,97 @@ class ChangePasswordRequest(BaseModel):
         return v
 
 
+# ========== Passkey/WebAuthn 相关 ==========
+class PasskeyRegistrationBeginRequest(BaseModel):
+    """Passkey 注册开始请求"""
+
+    device_name: str | None = Field(None, max_length=100, description="设备名称")
+
+
+class PasskeyRegistrationBeginResponse(BaseModel):
+    """Passkey 注册开始响应"""
+
+    challenge_id: str
+    public_key_credential_creation_options: dict[str, Any]
+
+
+class PasskeyRegistrationCompleteRequest(BaseModel):
+    """Passkey 注册完成请求"""
+
+    challenge_id: str
+    credential: dict[str, Any]  # 客户端返回的凭证数据
+    device_name: str | None = Field(None, max_length=100, description="设备名称")
+
+
+class PasskeyRegistrationCompleteResponse(BaseModel):
+    """Passkey 注册完成响应"""
+
+    success: bool
+    credential_id: str
+    message: str
+
+
+class PasskeyLoginBeginRequest(BaseModel):
+    """Passkey 登录开始请求"""
+
+    email: str | None = Field(None, description="用户邮箱（可选，用于提示）")
+
+
+class PasskeyLoginBeginResponse(BaseModel):
+    """Passkey 登录开始响应"""
+
+    challenge_id: str
+    public_key_credential_request_options: dict[str, Any]
+
+
+class PasskeyLoginCompleteRequest(BaseModel):
+    """Passkey 登录完成请求"""
+
+    challenge_id: str
+    credential: dict[str, Any]  # 客户端返回的凭证数据
+
+
+class PasskeyLoginCompleteResponse(BaseModel):
+    """Passkey 登录完成响应"""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 86400
+    user_id: str
+    email: str | None = None
+    username: str
+    role: str
+
+
+class PasskeyCredentialResponse(BaseModel):
+    """Passkey 凭证响应"""
+
+    id: str
+    device_name: str | None
+    device_type: str | None
+    backed_up: bool
+    transports: list[str] | None
+    aaguid: str | None
+    is_active: bool
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class PasskeyUpdateRequest(BaseModel):
+    """Passkey 更新请求"""
+
+    device_name: str | None = Field(None, max_length=100, description="设备名称")
+    is_active: bool | None = None
+
+
+class PasskeyAuthSettingsResponse(BaseModel):
+    """Passkey 认证设置响应"""
+
+    enabled: bool
+    rp_id: str
+    rp_name: str
+
+
 class UserSessionResponse(BaseModel):
     """用户会话响应"""
 

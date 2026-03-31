@@ -42,7 +42,10 @@
               class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border"
               :class="item.iconClass"
             >
-              <component :is="item.icon" class="h-3.5 w-3.5" />
+              <component
+                :is="item.icon"
+                class="h-3.5 w-3.5"
+              />
             </div>
           </div>
 
@@ -118,7 +121,10 @@
               class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border"
               :class="item.iconClass"
             >
-              <component :is="item.icon" class="h-4 w-4" />
+              <component
+                :is="item.icon"
+                class="h-4 w-4"
+              />
             </div>
           </div>
 
@@ -180,7 +186,10 @@
       </Card>
 
       <Card class="overflow-hidden border-border/60 bg-card p-4">
-        <div class="space-y-4" :class="{ 'opacity-60 transition-opacity': isRefreshing }">
+        <div
+          class="space-y-4"
+          :class="{ 'opacity-60 transition-opacity': isRefreshing }"
+        >
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 class="text-sm font-semibold">
@@ -272,7 +281,10 @@
         >
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
-              <div class="truncate text-xs font-semibold" :title="provider.provider_name">
+              <div
+                class="truncate text-xs font-semibold"
+                :title="provider.provider_name"
+              >
                 {{ provider.provider_name }}
               </div>
               <div class="mt-1 text-[10px] text-muted-foreground tabular-nums">

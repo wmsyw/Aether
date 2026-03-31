@@ -61,7 +61,10 @@
     </div>
 
     <section class="flex flex-col gap-4 lg:flex-row lg:items-start">
-      <div ref="activityPanelRef" class="min-w-0 space-y-3 lg:flex-1">
+      <div
+        ref="activityPanelRef"
+        class="min-w-0 space-y-3 lg:flex-1"
+      >
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
           <Card class="p-3">
             <div class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">

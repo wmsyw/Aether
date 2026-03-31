@@ -63,7 +63,11 @@ class Config:
             self.require_redis = redis_required_env.lower() == "true"
         else:
             # 保持向后兼容：开发环境可选，生产环境必需
-            self.require_redis = self.environment not in {"development", "test", "testing"}
+            self.require_redis = self.environment not in {
+                "development",
+                "test",
+                "testing",
+            }
 
         # CORS配置 - 使用环境变量配置允许的源
         # 格式: 逗号分隔的域名列表,如 "http://localhost:3000,https://example.com"
@@ -87,7 +91,9 @@ class Config:
 
         # CORS是否允许凭证(Cookie/Authorization header)
         # 注意: allow_credentials=True 时不能使用 allow_origins=["*"]
-        self.cors_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
+        self.cors_allow_credentials = (
+            os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
+        )
 
         # 应用时区配置（用于定时任务、账单日期等业务逻辑）
         self.app_timezone = os.getenv("APP_TIMEZONE", "Asia/Shanghai")
@@ -150,14 +156,18 @@ class Config:
         # 数据库连接池配置 - 智能自动调整
         # 系统会根据 Worker 数量和 PostgreSQL 限制自动计算安全值
         self.db_pool_size = int(os.getenv("DB_POOL_SIZE") or self._auto_pool_size())
-        self.db_max_overflow = int(os.getenv("DB_MAX_OVERFLOW") or self._auto_max_overflow())
+        self.db_max_overflow = int(
+            os.getenv("DB_MAX_OVERFLOW") or self._auto_max_overflow()
+        )
         self.db_pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "60"))
         self.db_pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "3600"))
         self.db_pool_warn_threshold = int(os.getenv("DB_POOL_WARN_THRESHOLD", "70"))
 
         # 并发控制配置
         # CACHE_RESERVATION_RATIO: 缓存用户预留比例（默认 10%，新用户可用 90%）
-        self.cache_reservation_ratio = float(os.getenv("CACHE_RESERVATION_RATIO", "0.1"))
+        self.cache_reservation_ratio = float(
+            os.getenv("CACHE_RESERVATION_RATIO", "0.1")
+        )
 
         # RPM 计数器时间窗口配置
         from src.config.constants import RPMDefaults
@@ -169,7 +179,10 @@ class Config:
             os.getenv("RPM_KEY_TTL_SECONDS", str(RPMDefaults.RPM_KEY_TTL_SECONDS))
         )
         self.rpm_cleanup_interval_seconds = int(
-            os.getenv("RPM_CLEANUP_INTERVAL_SECONDS", str(RPMDefaults.RPM_CLEANUP_INTERVAL_SECONDS))
+            os.getenv(
+                "RPM_CLEANUP_INTERVAL_SECONDS",
+                str(RPMDefaults.RPM_CLEANUP_INTERVAL_SECONDS),
+            )
         )
 
         # 限流降级策略配置
@@ -182,7 +195,9 @@ class Config:
         # False: fail-close - 拒绝所有请求（优先安全性）
         #   风险：Redis 故障会导致 API 网关不可用
         #   适用：有严格速率限制要求的安全敏感场景
-        self.rate_limit_fail_open = os.getenv("RATE_LIMIT_FAIL_OPEN", "true").lower() == "true"
+        self.rate_limit_fail_open = (
+            os.getenv("RATE_LIMIT_FAIL_OPEN", "true").lower() == "true"
+        )
 
         # HTTP 请求超时配置（秒）
         self.http_connect_timeout = float(os.getenv("HTTP_CONNECT_TIMEOUT", "10.0"))
@@ -206,7 +221,8 @@ class Config:
             os.getenv("HTTP_MAX_CONNECTIONS") or self._auto_http_max_connections()
         )
         self.http_keepalive_connections = int(
-            os.getenv("HTTP_KEEPALIVE_CONNECTIONS") or self._auto_http_keepalive_connections()
+            os.getenv("HTTP_KEEPALIVE_CONNECTIONS")
+            or self._auto_http_keepalive_connections()
         )
         self.http_keepalive_expiry = float(os.getenv("HTTP_KEEPALIVE_EXPIRY", "30.0"))
 
@@ -222,22 +238,38 @@ class Config:
         # STREAM_FIRST_BYTE_TIMEOUT: 首字节超时（秒），等待首字节超过此时间触发故障转移
         self.stream_prefetch_lines = int(os.getenv("STREAM_PREFETCH_LINES", "5"))
         self.stream_stats_delay = float(os.getenv("STREAM_STATS_DELAY", "0.1"))
-        self.stream_first_byte_timeout = float(os.getenv("STREAM_FIRST_BYTE_TIMEOUT", "30.0"))
+        self.stream_first_byte_timeout = float(
+            os.getenv("STREAM_FIRST_BYTE_TIMEOUT", "30.0")
+        )
 
         # Usage 队列配置（Redis Streams）
         # 默认启用队列模式，通过 Redis Streams 异步写入 DB，提升响应性能
-        self.usage_queue_enabled = os.getenv("USAGE_QUEUE_ENABLED", "true").lower() == "true"
+        self.usage_queue_enabled = (
+            os.getenv("USAGE_QUEUE_ENABLED", "true").lower() == "true"
+        )
         # 队列事件是否包含 headers/bodies 由系统配置（request_record_level）决定；
         # 最终写入 DB 前仍会按 SystemConfigService 做脱敏与截断。
-        self.usage_queue_stream_key = os.getenv("USAGE_QUEUE_STREAM_KEY", "usage:events")
-        self.usage_queue_stream_group = os.getenv("USAGE_QUEUE_STREAM_GROUP", "usage_consumers")
+        self.usage_queue_stream_key = os.getenv(
+            "USAGE_QUEUE_STREAM_KEY", "usage:events"
+        )
+        self.usage_queue_stream_group = os.getenv(
+            "USAGE_QUEUE_STREAM_GROUP", "usage_consumers"
+        )
         # 主队列只做短暂缓冲；成功消费后会立即删除，不应把 Redis 当历史存储。
-        self.usage_queue_stream_maxlen = int(os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "2000"))
+        self.usage_queue_stream_maxlen = int(
+            os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "2000")
+        )
         self.usage_queue_dlq_key = os.getenv("USAGE_QUEUE_DLQ_KEY", "usage:events:dlq")
         self.usage_queue_dlq_maxlen = int(os.getenv("USAGE_QUEUE_DLQ_MAXLEN", "5000"))
-        self.usage_queue_consumer_batch = int(os.getenv("USAGE_QUEUE_CONSUMER_BATCH", "200"))
-        self.usage_queue_consumer_block_ms = int(os.getenv("USAGE_QUEUE_CONSUMER_BLOCK_MS", "500"))
-        self.usage_queue_claim_idle_ms = int(os.getenv("USAGE_QUEUE_CLAIM_IDLE_MS", "30000"))
+        self.usage_queue_consumer_batch = int(
+            os.getenv("USAGE_QUEUE_CONSUMER_BATCH", "200")
+        )
+        self.usage_queue_consumer_block_ms = int(
+            os.getenv("USAGE_QUEUE_CONSUMER_BLOCK_MS", "500")
+        )
+        self.usage_queue_claim_idle_ms = int(
+            os.getenv("USAGE_QUEUE_CLAIM_IDLE_MS", "30000")
+        )
         self.usage_queue_claim_interval_seconds = float(
             os.getenv("USAGE_QUEUE_CLAIM_INTERVAL_SECONDS", "5")
         )
@@ -274,12 +306,16 @@ class Config:
         # PERF_METRICS_ENABLED: 是否启用性能指标上报（监控插件）
         # PERF_LOG_SLOW_MS: 慢请求日志阈值（毫秒），0 表示关闭
         # PERF_SAMPLE_RATE: 采样率 (0-1)，降低高频指标开销
-        self.perf_metrics_enabled = os.getenv("PERF_METRICS_ENABLED", "false").lower() == "true"
+        self.perf_metrics_enabled = (
+            os.getenv("PERF_METRICS_ENABLED", "false").lower() == "true"
+        )
         self.perf_log_slow_ms = int(os.getenv("PERF_LOG_SLOW_MS", "0"))
         self.perf_sample_rate = float(os.getenv("PERF_SAMPLE_RATE", "1.0"))
         # PERF_STORE_ENABLED: 是否将性能指标写入 Usage.request_metadata
         # PERF_STORE_SAMPLE_RATE: 存储采样率 (0-1)，用于降低写入压力
-        self.perf_store_enabled = os.getenv("PERF_STORE_ENABLED", "false").lower() == "true"
+        self.perf_store_enabled = (
+            os.getenv("PERF_STORE_ENABLED", "false").lower() == "true"
+        )
         self.perf_store_sample_rate = float(os.getenv("PERF_STORE_SAMPLE_RATE", "1.0"))
 
         # 解密缓存配置（降低高频解密带来的CPU开销）
@@ -289,7 +325,9 @@ class Config:
         self.crypto_decrypt_cache_enabled = (
             os.getenv("CRYPTO_DECRYPT_CACHE_ENABLED", "true").lower() == "true"
         )
-        self.crypto_decrypt_cache_size = int(os.getenv("CRYPTO_DECRYPT_CACHE_SIZE", "256"))
+        self.crypto_decrypt_cache_size = int(
+            os.getenv("CRYPTO_DECRYPT_CACHE_SIZE", "256")
+        )
         self.crypto_decrypt_cache_ttl_seconds = float(
             os.getenv("CRYPTO_DECRYPT_CACHE_TTL_SECONDS", "60.0")
         )
@@ -299,7 +337,9 @@ class Config:
         self.internal_user_agent_claude_cli = os.getenv(
             "CLAUDE_CLI_USER_AGENT", "claude-code/1.0.1"
         )
-        self.internal_user_agent_openai_cli = os.getenv("OPENAI_CLI_USER_AGENT", "openai-codex/1.0")
+        self.internal_user_agent_openai_cli = os.getenv(
+            "OPENAI_CLI_USER_AGENT", "openai-codex/1.0"
+        )
         self.internal_user_agent_gemini_cli = os.getenv(
             "GEMINI_CLI_USER_AGENT",
             "GeminiCLI/0.1.5 (Windows; AMD64)",
@@ -311,13 +351,19 @@ class Config:
         self.verification_code_expire_minutes = int(
             os.getenv("VERIFICATION_CODE_EXPIRE_MINUTES", "5")
         )
-        self.verification_send_cooldown = int(os.getenv("VERIFICATION_SEND_COOLDOWN", "60"))
+        self.verification_send_cooldown = int(
+            os.getenv("VERIFICATION_SEND_COOLDOWN", "60")
+        )
 
         # 计费系统配置（多维度计费 / 异步任务）
         # BILLING_REQUIRE_RULE: Video/Image/Audio 缺失 billing_rule 时是否拒绝请求（默认 false，缺失则 cost=0 并告警）
         # BILLING_STRICT_MODE: required 维度缺失时是否拒绝请求/标记任务失败（默认 false，缺失则 cost=0 + 标记 incomplete）
-        self.billing_require_rule = os.getenv("BILLING_REQUIRE_RULE", "false").lower() == "true"
-        self.billing_strict_mode = os.getenv("BILLING_STRICT_MODE", "false").lower() == "true"
+        self.billing_require_rule = (
+            os.getenv("BILLING_REQUIRE_RULE", "false").lower() == "true"
+        )
+        self.billing_strict_mode = (
+            os.getenv("BILLING_STRICT_MODE", "false").lower() == "true"
+        )
 
         # Usage.request_metadata 体积控制（用于降低 DB/CPU/内存压力）
         # USAGE_METADATA_MAX_BYTES:
@@ -335,16 +381,22 @@ class Config:
         # VIDEO_MAX_POLL_COUNT: 最大轮询次数，默认 360 次（约 1 小时）
         # VIDEO_POLL_BATCH_SIZE: 每批处理任务数，默认 50
         # VIDEO_POLL_CONCURRENCY: 并发轮询数，默认 10
-        self.video_poll_interval_seconds = int(os.getenv("VIDEO_POLL_INTERVAL_SECONDS", "10"))
+        self.video_poll_interval_seconds = int(
+            os.getenv("VIDEO_POLL_INTERVAL_SECONDS", "10")
+        )
         self.video_max_poll_count = int(os.getenv("VIDEO_MAX_POLL_COUNT", "360"))
         self.video_poll_batch_size = int(os.getenv("VIDEO_POLL_BATCH_SIZE", "50"))
         self.video_poll_concurrency = int(os.getenv("VIDEO_POLL_CONCURRENCY", "10"))
 
         # Management Token 速率限制（每分钟每 IP）
-        self.management_token_rate_limit = int(os.getenv("MANAGEMENT_TOKEN_RATE_LIMIT", "30"))
+        self.management_token_rate_limit = int(
+            os.getenv("MANAGEMENT_TOKEN_RATE_LIMIT", "30")
+        )
 
         # 每个用户最多可创建的 Management Token 数量
-        self.management_token_max_per_user = int(os.getenv("MANAGEMENT_TOKEN_MAX_PER_USER", "20"))
+        self.management_token_max_per_user = int(
+            os.getenv("MANAGEMENT_TOKEN_MAX_PER_USER", "20")
+        )
 
         # 启动任务开关
         # MAINTENANCE_STARTUP_TASKS_ENABLED: 是否在启动时执行维护调度器初始化任务（清理、统计回填等）
@@ -356,11 +408,15 @@ class Config:
         # STARTUP_WARMUP_ENABLED: 是否启用启动期预热任务（默认 true）
         # STARTUP_WARMUP_GATE_READINESS: /readyz 是否等待预热完成（默认 true）
         # STARTUP_WARMUP_PROVIDER_TYPES: 预热时优先 bootstrap 的 provider_type 列表（逗号分隔）
-        self.startup_warmup_enabled = os.getenv("STARTUP_WARMUP_ENABLED", "true").lower() == "true"
+        self.startup_warmup_enabled = (
+            os.getenv("STARTUP_WARMUP_ENABLED", "true").lower() == "true"
+        )
         self.startup_warmup_gate_readiness = (
             os.getenv("STARTUP_WARMUP_GATE_READINESS", "true").lower() == "true"
         )
-        warmup_provider_types_env = os.getenv("STARTUP_WARMUP_PROVIDER_TYPES", "").strip()
+        warmup_provider_types_env = os.getenv(
+            "STARTUP_WARMUP_PROVIDER_TYPES", ""
+        ).strip()
         self.startup_warmup_provider_types = (
             [
                 provider_type.strip()
@@ -382,6 +438,11 @@ class Config:
         else:
             # 默认：开发环境启用，生产环境禁用
             self.docs_enabled = self.environment == "development"
+
+        # Passkey/WebAuthn 配置
+        self.passkey_rp_id = os.getenv("PASSKEY_RP_ID", "")
+        self.passkey_rp_name = os.getenv("PASSKEY_RP_NAME", "Aether")
+        self.passkey_origin = os.getenv("PASSKEY_ORIGIN", "")
 
         # 验证连接池配置
         self._validate_pool_config()
@@ -511,11 +572,15 @@ class Config:
 
         # 加密密钥警告
         if not self.encryption_key and self.environment != "production":
-            logger.warning("ENCRYPTION_KEY 未设置，使用开发环境默认密钥。生产环境必须设置。")
+            logger.warning(
+                "ENCRYPTION_KEY 未设置，使用开发环境默认密钥。生产环境必须设置。"
+            )
 
         # CORS 配置警告（生产环境）
         if self.environment == "production" and not self.cors_origins:
-            logger.warning("生产环境 CORS 未配置，前端将无法访问 API。请设置 CORS_ORIGINS。")
+            logger.warning(
+                "生产环境 CORS 未配置，前端将无法访问 API。请设置 CORS_ORIGINS。"
+            )
         if self.environment == "production" and not self.payment_callback_secret:
             logger.warning(
                 "生产环境未设置 PAYMENT_CALLBACK_SECRET，支付回调将被拒绝。"
@@ -533,8 +598,13 @@ class Config:
         errors: list[str] = []
 
         if self._invalid_auth_refresh_cookie_samesite:
-            errors.append("AUTH_REFRESH_COOKIE_SAMESITE must be one of: lax, strict, none.")
-        if self.auth_refresh_cookie_samesite == "none" and not self.auth_refresh_cookie_secure:
+            errors.append(
+                "AUTH_REFRESH_COOKIE_SAMESITE must be one of: lax, strict, none."
+            )
+        if (
+            self.auth_refresh_cookie_samesite == "none"
+            and not self.auth_refresh_cookie_secure
+        ):
             errors.append(
                 "AUTH_REFRESH_COOKIE_SECURE must be true when AUTH_REFRESH_COOKIE_SAMESITE=none."
             )
@@ -547,7 +617,9 @@ class Config:
                     "Use 'python generate_keys.py' to generate a secure key."
                 )
             elif len(self.jwt_secret_key) < 32:
-                errors.append("JWT_SECRET_KEY must be at least 32 characters in production.")
+                errors.append(
+                    "JWT_SECRET_KEY must be at least 32 characters in production."
+                )
 
             # 生产环境必须设置加密密钥
             if not self.encryption_key:

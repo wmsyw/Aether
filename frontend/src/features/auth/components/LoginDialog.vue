@@ -45,6 +45,17 @@
         </div>
       </div>
 
+      <!-- Passkey 登录按钮 -->
+      <div
+        v-if="passkeyEnabled"
+        class="mb-5"
+      >
+        <PasskeyLoginButton
+          :email="form.email"
+          @success="handlePasskeySuccess"
+        />
+      </div>
+
       <!-- OAuth 登录按钮 -->
       <div
         v-if="oauthProviders.length > 0"
@@ -251,6 +262,8 @@ import { oauthApi, type OAuthProviderInfo } from '@/api/oauth'
 import { getClientDeviceId } from '@/utils/deviceId'
 import { getApiUrl } from '@/utils/url'
 import { getOAuthIcon } from '@/utils/oauth-icons'
+import { passkeyApi } from '@/api/passkey'
+import PasskeyLoginButton from '@/components/passkey/PasskeyLoginButton.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -283,6 +296,7 @@ const authType = ref<'local' | 'ldap'>(getStoredAuthType())
 const localEnabled = ref(true)
 const ldapEnabled = ref(false)
 const ldapExclusive = ref(false)
+const passkeyEnabled = ref(false)
 
 const oauthProviders = ref<OAuthProviderInfo[]>([])
 
@@ -349,6 +363,10 @@ async function handleLogin() {
   }
 }
 
+function handlePasskeySuccess() {
+  isOpen.value = false
+}
+
 function handleOAuthLogin(providerType: string) {
   // 如果 sessionStorage 中没有 redirectPath（用户直接点击登录而非被守卫拦截），
   // 则不设置，让 AuthCallback 使用默认跳转逻辑
@@ -379,10 +397,11 @@ function handleSwitchToLogin() {
 // Load authentication and registration settings on mount
 onMounted(async () => {
   try {
-    const [regSettings, authSettings, providers] = await Promise.all([
+    const [regSettings, authSettings, providers, passkeySettings] = await Promise.all([
       authApi.getRegistrationSettings(),
       authApi.getAuthSettings(),
       oauthApi.getProviders().catch(() => []),
+      passkeyApi.getSettings().catch(() => ({ enabled: false }))
     ])
 
     allowRegistration.value = !!regSettings.enable_registration
@@ -393,6 +412,7 @@ onMounted(async () => {
     localEnabled.value = authSettings.local_enabled
     ldapEnabled.value = authSettings.ldap_enabled
     ldapExclusive.value = authSettings.ldap_exclusive
+    passkeyEnabled.value = !!passkeySettings.enabled
     // 若仅允许 LDAP 登录，则禁用本地注册入口
     if (ldapExclusive.value) {
       allowRegistration.value = false

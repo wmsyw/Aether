@@ -16,6 +16,7 @@
     "version": "git describe --tags --always"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
     "@types/dompurify": "^3.0.5",
     "@types/marked": "^5.0.2",
     "@types/three": "^0.180.0",

@@ -155,6 +155,14 @@
           </form>
         </Card>
 
+        <!-- Passkey 管理 -->
+        <Card
+          v-if="passkeyEnabled"
+          class="p-6"
+        >
+          <PasskeyManager />
+        </Card>
+
         <Card class="p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
@@ -598,7 +606,9 @@ import { useAuthStore } from '@/stores/auth'
 import { meApi, type Profile } from '@/api/me'
 import { type UserSession, formatSessionMeta } from '@/types/session'
 import { authApi } from '@/api/auth'
+import { passkeyApi } from '@/api/passkey'
 import { oauthApi, type OAuthLinkInfo, type OAuthProviderInfo } from '@/api/oauth'
+import PasskeyManager from '@/components/passkey/PasskeyManager.vue'
 import { getClientDeviceId } from '@/utils/deviceId'
 import { getOAuthIcon } from '@/utils/oauth-icons'
 import { useDarkMode, type ThemeMode } from '@/composables/useDarkMode'
@@ -671,6 +681,7 @@ const themeSelectOpen = ref(false)
 const languageSelectOpen = ref(false)
 
 const oauthUnavailable = ref(false)
+const passkeyEnabled = ref(false)
 const oauthActionLoading = ref(false)
 const oauthLinks = ref<OAuthLinkInfo[]>([])
 const bindableProviders = ref<OAuthProviderInfo[]>([])
@@ -731,8 +742,18 @@ onMounted(async () => {
     loadSessions(),
     loadOAuthBindings(),
     loadEmailConfigured(),
+    loadPasskeySettings(),
   ])
 })
+
+async function loadPasskeySettings() {
+  try {
+    const settings = await passkeyApi.getSettings()
+    passkeyEnabled.value = !!settings.enabled
+  } catch {
+    passkeyEnabled.value = false
+  }
+}
 
 async function loadEmailConfigured() {
   try {

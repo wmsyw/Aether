@@ -1,7 +1,10 @@
 <template>
   <div class="h-full flex flex-col min-h-0">
     <!-- 对比模式 - 并排 Diff -->
-    <div v-show="viewMode === 'compare'" class="h-full flex flex-col min-h-0">
+    <div
+      v-show="viewMode === 'compare'"
+      class="h-full flex flex-col min-h-0"
+    >
       <div
         v-if="!resolvedClientHeaders || !resolvedProviderHeaders"
         class="text-sm text-muted-foreground"
@@ -125,7 +128,10 @@
     </div>
 
     <!-- 格式化模式 - 直接使用 JsonContent -->
-    <div v-show="viewMode === 'formatted'" class="h-full flex flex-col min-h-0">
+    <div
+      v-show="viewMode === 'formatted'"
+      class="h-full flex flex-col min-h-0"
+    >
       <JsonContent
         :data="currentHeaderData"
         :view-mode="viewMode"
@@ -137,7 +143,10 @@
     </div>
 
     <!-- 原始模式 -->
-    <div v-show="viewMode === 'raw'" class="h-full flex flex-col min-h-0">
+    <div
+      v-show="viewMode === 'raw'"
+      class="h-full flex flex-col min-h-0"
+    >
       <div
         v-if="!currentHeaderData || Object.keys(currentHeaderData).length === 0"
         class="text-sm text-muted-foreground"

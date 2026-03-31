@@ -110,7 +110,10 @@
       </TableBody>
     </Table>
 
-    <template v-if="showPagination" #pagination>
+    <template
+      v-if="showPagination"
+      #pagination
+    >
       <Pagination
         :current="currentPage"
         :total="totalItems"

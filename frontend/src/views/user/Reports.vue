@@ -231,12 +231,12 @@
                     colspan="10"
                     class="py-8 text-center"
                   >
-                  <div class="flex items-center justify-center gap-2">
-                    <Skeleton class="h-5 w-5 rounded-full" />
-                    <span class="text-xs text-muted-foreground">加载中...</span>
-                  </div>
-                </TableCell>
-              </TableRow>
+                    <div class="flex items-center justify-center gap-2">
+                      <Skeleton class="h-5 w-5 rounded-full" />
+                      <span class="text-xs text-muted-foreground">加载中...</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
                 <TableRow v-else-if="reportsUnavailable">
                   <TableCell
                     colspan="10"
@@ -254,10 +254,10 @@
                   </TableCell>
                 </TableRow>
                 <template v-else>
-                    <TableRow
-                      v-for="stat in paginatedBucketStats"
-                      :key="stat.bucket_start"
-                    >
+                  <TableRow
+                    v-for="stat in paginatedBucketStats"
+                    :key="stat.bucket_start"
+                  >
                     <TableCell class="text-xs font-medium">
                       {{ formatBucketLabel(stat.bucket_start, stat.bucket_end) }}
                     </TableCell>
@@ -507,137 +507,137 @@
               </div>
             </div>
 
-	            <Table
-                class="hidden sm:table"
-                :class="{ 'opacity-60 transition-opacity': isRefreshing }"
-              >
-                <TableHeader>
-                  <TableRow>
-                    <TableHead class="text-left">
-                      模型
-                    </TableHead>
-                    <TableHead class="text-center">
-                      请求次数
-                    </TableHead>
-                    <TableHead class="text-center">
-                      Tokens（总计）
-                    </TableHead>
-                    <TableHead class="text-center">
-                      Tokens（明细）
-                    </TableHead>
-                    <TableHead class="text-center">
-                      缓存命中率
-                    </TableHead>
-                    <TableHead class="text-center">
-                      费用
-                    </TableHead>
-                    <TableHead class="text-center">
-                      效率
-                    </TableHead>
-                    <TableHead class="text-center">
-                      平均响应
-                    </TableHead>
-                    <TableHead class="text-center">
-                      TTFB
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow v-if="isInitialLoading">
-                    <TableCell
-                      colspan="9"
-                      class="py-8 text-center"
-                    >
-                      <div class="flex items-center justify-center gap-2">
-                        <Skeleton class="h-5 w-5 rounded-full" />
-                        <span class="text-xs text-muted-foreground">加载中...</span>
+            <Table
+              class="hidden sm:table"
+              :class="{ 'opacity-60 transition-opacity': isRefreshing }"
+            >
+              <TableHeader>
+                <TableRow>
+                  <TableHead class="text-left">
+                    模型
+                  </TableHead>
+                  <TableHead class="text-center">
+                    请求次数
+                  </TableHead>
+                  <TableHead class="text-center">
+                    Tokens（总计）
+                  </TableHead>
+                  <TableHead class="text-center">
+                    Tokens（明细）
+                  </TableHead>
+                  <TableHead class="text-center">
+                    缓存命中率
+                  </TableHead>
+                  <TableHead class="text-center">
+                    费用
+                  </TableHead>
+                  <TableHead class="text-center">
+                    效率
+                  </TableHead>
+                  <TableHead class="text-center">
+                    平均响应
+                  </TableHead>
+                  <TableHead class="text-center">
+                    TTFB
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-if="isInitialLoading">
+                  <TableCell
+                    colspan="9"
+                    class="py-8 text-center"
+                  >
+                    <div class="flex items-center justify-center gap-2">
+                      <Skeleton class="h-5 w-5 rounded-full" />
+                      <span class="text-xs text-muted-foreground">加载中...</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+                <TableRow v-else-if="reportsUnavailable">
+                  <TableCell
+                    colspan="9"
+                    class="py-8 text-center text-xs text-muted-foreground"
+                  >
+                    模型报表暂不可用
+                  </TableCell>
+                </TableRow>
+                <TableRow v-else-if="modelSummary.length === 0">
+                  <TableCell
+                    colspan="9"
+                    class="py-8 text-center text-xs text-muted-foreground"
+                  >
+                    暂无数据
+                  </TableCell>
+                </TableRow>
+                <template v-else>
+                  <TableRow
+                    v-for="model in paginatedModelSummary"
+                    :key="model.model"
+                  >
+                    <TableCell class="font-medium text-xs">
+                      {{ model.model }}
+                    </TableCell>
+                    <TableCell class="text-center text-xs">
+                      {{ model.requests.toLocaleString() }}
+                    </TableCell>
+                    <TableCell class="text-center">
+                      <Badge
+                        variant="secondary"
+                        class="text-[10px]"
+                      >
+                        {{ formatTokens(model.tokens) }}
+                      </Badge>
+                    </TableCell>
+                    <TableCell class="max-w-[220px] text-center text-xs text-muted-foreground">
+                      <div class="space-y-0.5 leading-5">
+                        <div
+                          v-for="line in getModelCompositionLines(model)"
+                          :key="`${model.model}-${line}`"
+                        >
+                          {{ line }}
+                        </div>
                       </div>
                     </TableCell>
-                  </TableRow>
-                  <TableRow v-else-if="reportsUnavailable">
-                    <TableCell
-                      colspan="9"
-                      class="py-8 text-center text-xs text-muted-foreground"
-                    >
-                      模型报表暂不可用
+                    <TableCell class="text-center text-xs">
+                      {{ getModelCacheHitRateLabel(model) }}
+                    </TableCell>
+                    <TableCell class="text-center">
+                      <Badge
+                        variant="success"
+                        class="text-[10px]"
+                      >
+                        ${{ model.cost.toFixed(4) }}
+                      </Badge>
+                    </TableCell>
+                    <TableCell class="text-center">
+                      <Badge
+                        variant="outline"
+                        class="text-[10px]"
+                      >
+                        {{ getModelEfficiencyLabel(model) }}
+                      </Badge>
+                    </TableCell>
+                    <TableCell class="text-center">
+                      <Badge
+                        variant="outline"
+                        class="text-[10px]"
+                      >
+                        {{ formatResponseTime(model.avg_response_time ?? 0) }}
+                      </Badge>
+                    </TableCell>
+                    <TableCell class="text-center">
+                      <Badge
+                        variant="outline"
+                        class="text-[10px]"
+                      >
+                        {{ formatResponseTime(model.avg_first_byte_time ?? 0) }}
+                      </Badge>
                     </TableCell>
                   </TableRow>
-                  <TableRow v-else-if="modelSummary.length === 0">
-                    <TableCell
-                      colspan="9"
-                      class="py-8 text-center text-xs text-muted-foreground"
-                    >
-                      暂无数据
-                    </TableCell>
-                  </TableRow>
-                  <template v-else>
-                    <TableRow
-                      v-for="model in paginatedModelSummary"
-                      :key="model.model"
-                    >
-                      <TableCell class="font-medium text-xs">
-                        {{ model.model }}
-                      </TableCell>
-                      <TableCell class="text-center text-xs">
-                        {{ model.requests.toLocaleString() }}
-                      </TableCell>
-                      <TableCell class="text-center">
-                        <Badge
-                          variant="secondary"
-                          class="text-[10px]"
-                        >
-                          {{ formatTokens(model.tokens) }}
-                        </Badge>
-                      </TableCell>
-                      <TableCell class="max-w-[220px] text-center text-xs text-muted-foreground">
-                        <div class="space-y-0.5 leading-5">
-                          <div
-                            v-for="line in getModelCompositionLines(model)"
-                            :key="`${model.model}-${line}`"
-                          >
-                            {{ line }}
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell class="text-center text-xs">
-                        {{ getModelCacheHitRateLabel(model) }}
-                      </TableCell>
-                      <TableCell class="text-center">
-                        <Badge
-                          variant="success"
-                          class="text-[10px]"
-                        >
-                          ${{ model.cost.toFixed(4) }}
-                        </Badge>
-                      </TableCell>
-                      <TableCell class="text-center">
-                        <Badge
-                          variant="outline"
-                          class="text-[10px]"
-                        >
-                          {{ getModelEfficiencyLabel(model) }}
-                        </Badge>
-                      </TableCell>
-                      <TableCell class="text-center">
-                        <Badge
-                          variant="outline"
-                          class="text-[10px]"
-                        >
-                          {{ formatResponseTime(model.avg_response_time ?? 0) }}
-                        </Badge>
-                      </TableCell>
-                      <TableCell class="text-center">
-                        <Badge
-                          variant="outline"
-                          class="text-[10px]"
-                        >
-                          {{ formatResponseTime(model.avg_first_byte_time ?? 0) }}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  </template>
-	                </TableBody>
-	            </Table>
+                </template>
+              </TableBody>
+            </Table>
             <div
               v-if="modelSummary.length > 0"
               class="border-t border-border bg-muted/30 px-4 py-3 text-xs backdrop-blur-sm"
@@ -713,7 +713,6 @@
             />
           </Card>
         </div>
-
       </div>
     </Tabs>
   </div>
