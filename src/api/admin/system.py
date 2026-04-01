@@ -1590,7 +1590,8 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         cls._import_format_alias_map = alias_map
         return alias_map
 
-    def _normalize_import_api_format(self, value: str) -> str:
+    @classmethod
+    def _normalize_import_api_format(cls, value: str) -> str:
         from src.core.api_format.signature import normalize_signature_key
 
         raw = str(value or "").strip()
@@ -1602,7 +1603,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         except (ValueError, KeyError):
             pass
 
-        alias_map = self._get_import_format_alias_map()
+        alias_map = cls._get_import_format_alias_map()
         token = raw.lower().replace(" ", "")
 
         mapped = (
@@ -1631,6 +1632,35 @@ class AdminImportConfigAdapter(AdminApiAdapter):
 
         fallback = token.replace("_", ":").replace("-", ":")
         return normalize_signature_key(fallback)
+
+    @classmethod
+    def _normalize_import_key_formats_for_storage(
+        cls, raw_formats: list[Any], endpoint_formats: set[str]
+    ) -> tuple[list[str], list[str]]:
+        normalized_formats: list[str] = []
+        missing_formats: list[str] = []
+        seen: set[str] = set()
+
+        for fmt in raw_formats:
+            if not isinstance(fmt, str):
+                continue
+            fmt_stripped = fmt.strip()
+            if not fmt_stripped:
+                continue
+            try:
+                fmt_normalized = cls._normalize_import_api_format(fmt_stripped)
+            except (ValueError, KeyError):
+                missing_formats.append(fmt_stripped)
+                continue
+            if fmt_normalized in seen:
+                continue
+            seen.add(fmt_normalized)
+            if endpoint_formats and fmt_normalized not in endpoint_formats:
+                missing_formats.append(fmt_normalized)
+                continue
+            normalized_formats.append(fmt_normalized)
+
+        return normalized_formats, missing_formats
 
     def _resolve_import_key_is_active(
         self, key_data: dict[str, Any], provider_type: str
@@ -2165,30 +2195,11 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         )
                         continue
 
-                    normalized_formats: list[str] = []
-                    seen: set[str] = set()
-                    missing_formats: list[str] = []
-                    for fmt in raw_formats:
-                        if not isinstance(fmt, str):
-                            continue
-                        fmt_stripped = fmt.strip()
-                        if not fmt_stripped:
-                            continue
-                        try:
-                            fmt_normalized = self._normalize_import_api_format(
-                                fmt_stripped
-                            )
-                        except (ValueError, KeyError):
-                            missing_formats.append(fmt_stripped)
-                            continue
-                        if fmt_normalized in seen:
-                            continue
-                        seen.add(fmt_normalized)
-                        if endpoint_formats and fmt_normalized not in endpoint_formats:
-                            missing_formats.append(fmt_normalized)
-                            continue
-                        # 存储时使用大写格式以保持向后兼容
-                        normalized_formats.append(fmt_normalized.upper())
+                    normalized_formats, missing_formats = (
+                        self._normalize_import_key_formats_for_storage(
+                            raw_formats, endpoint_formats
+                        )
+                    )
 
                     if missing_formats:
                         stats["errors"].append(

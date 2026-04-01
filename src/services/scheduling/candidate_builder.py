@@ -35,7 +35,10 @@ from src.models.database import (
     ProviderEndpoint,
 )
 from src.services.health.monitor import get_health_monitor
-from src.services.provider.format import normalize_endpoint_signature
+from src.services.provider.format import (
+    normalize_endpoint_signature,
+    normalize_endpoint_signature_list,
+)
 from src.services.provider.pool.account_state import (
     resolve_pool_account_state as _resolve_pool_account_state,
 )
@@ -162,7 +165,10 @@ class CandidateBuilder:
             allowed_values = [value for value in allowed_providers if value]
             if allowed_values:
                 provider_query = provider_query.filter(
-                    or_(Provider.id.in_(allowed_values), Provider.name.in_(allowed_values))
+                    or_(
+                        Provider.id.in_(allowed_values),
+                        Provider.name.in_(allowed_values),
+                    )
                 )
 
         if provider_ids is not None:
@@ -179,8 +185,12 @@ class CandidateBuilder:
         if provider_ids is None:
             return providers
 
-        order_map = {provider_id: index for index, provider_id in enumerate(provider_ids)}
-        providers.sort(key=lambda provider: order_map.get(str(provider.id), len(order_map)))
+        order_map = {
+            provider_id: index for index, provider_id in enumerate(provider_ids)
+        }
+        providers.sort(
+            key=lambda provider: order_map.get(str(provider.id), len(order_map))
+        )
         return providers
 
     async def _check_model_support(
@@ -223,21 +233,26 @@ class CandidateBuilder:
         if not normalized_name:
             return False, "模型不存在或名称无效", None, None
 
-        global_model = await ModelCacheService.get_global_model_by_name(db, normalized_name)
+        global_model = await ModelCacheService.get_global_model_by_name(
+            db, normalized_name
+        )
         if not global_model or not global_model.is_active:
             return False, "模型不存在或已停用", None, None
 
         # 找到 GlobalModel 后，检查当前 Provider 是否支持
-        is_supported, skip_reason, caps, provider_model_names = (
-            await self._check_model_support_for_global_model(
-                db,
-                provider,
-                global_model,
-                model_name,
-                api_format,
-                is_stream,
-                capability_requirements,
-            )
+        (
+            is_supported,
+            skip_reason,
+            caps,
+            provider_model_names,
+        ) = await self._check_model_support_for_global_model(
+            db,
+            provider,
+            global_model,
+            model_name,
+            api_format,
+            is_stream,
+            capability_requirements,
         )
         return is_supported, skip_reason, caps, provider_model_names
 
@@ -279,7 +294,9 @@ class CandidateBuilder:
             pass
 
         # 获取模型支持的能力列表
-        model_supported_capabilities: list[str] = list(global_model.supported_capabilities or [])
+        model_supported_capabilities: list[str] = list(
+            global_model.supported_capabilities or []
+        )
 
         # 查询该 Provider 是否有实现这个 GlobalModel
         for model in provider.models:
@@ -288,7 +305,12 @@ class CandidateBuilder:
                 if is_stream:
                     supports_streaming = model.get_effective_supports_streaming()
                     if not supports_streaming:
-                        return False, f"模型 {model_name} 在此 Provider 不支持流式", None, None
+                        return (
+                            False,
+                            f"模型 {model_name} 在此 Provider 不支持流式",
+                            None,
+                            None,
+                        )
 
                 # 检查模型是否支持所需的能力（在 Provider 级别检查，而不是 Key 级别）
                 # 只有当 model_supported_capabilities 非空时才进行检查
@@ -298,7 +320,10 @@ class CandidateBuilder:
                     for cap_name, is_required in capability_requirements.items():
                         if is_required and cap_name not in model_supported_capabilities:
                             cap_def = get_capability(cap_name)
-                            if cap_def and cap_def.match_mode == CapabilityMatchMode.COMPATIBLE:
+                            if (
+                                cap_def
+                                and cap_def.match_mode == CapabilityMatchMode.COMPATIBLE
+                            ):
                                 continue
                             return (
                                 False,
@@ -323,14 +348,21 @@ class CandidateBuilder:
                             if isinstance(mapping_api_formats, list):
                                 target = str(api_format).strip().lower()
                                 allowed = {
-                                    str(fmt).strip().lower() for fmt in mapping_api_formats if fmt
+                                    str(fmt).strip().lower()
+                                    for fmt in mapping_api_formats
+                                    if fmt
                                 }
                                 if target not in allowed:
                                     continue
 
                         provider_model_names.add(name.strip())
 
-                return True, None, list(model_supported_capabilities), provider_model_names
+                return (
+                    True,
+                    None,
+                    list(model_supported_capabilities),
+                    provider_model_names,
+                )
 
         return False, "Provider 未实现此模型", None, None
 
@@ -395,12 +427,18 @@ class CandidateBuilder:
             return False, "映射匹配超时，请简化配置", None
         except re.error as e:
             # 正则语法错误（配置问题）
-            logger.warning("映射规则无效: key_id={}, model={}, error={}", key.id, model_name, e)
+            logger.warning(
+                "映射规则无效: key_id={}, model={}, error={}", key.id, model_name, e
+            )
             return False, f"映射规则无效: {str(e)}", None
         except Exception as e:
             # 其他未知异常
             logger.error(
-                "映射匹配异常: key_id={}, model={}, error={}", key.id, model_name, e, exc_info=True
+                "映射匹配异常: key_id={}, model={}, error={}",
+                key.id,
+                model_name,
+                e,
+                exc_info=True,
             )
             # 异常时保守处理：不允许使用该 Key
             return False, "映射匹配失败", None
@@ -417,7 +455,9 @@ class CandidateBuilder:
         # 始终执行检查，即使 capability_requirements 为空
         # 因为 check_capability_match 会检查 Key 的 EXCLUSIVE 能力是否被浪费
         key_caps: dict[str, bool] = dict(key.capabilities or {})
-        is_match, skip_reason = check_capability_match(key_caps, capability_requirements)
+        is_match, skip_reason = check_capability_match(
+            key_caps, capability_requirements
+        )
         if not is_match:
             return False, skip_reason, None
 
@@ -566,7 +606,9 @@ class CandidateBuilder:
                 provider_conversion_enabled = bool(
                     getattr(provider, "enable_format_conversion", False)
                 )
-                skip_endpoint_check = global_conversion_enabled or provider_conversion_enabled
+                skip_endpoint_check = (
+                    global_conversion_enabled or provider_conversion_enabled
+                )
 
                 is_compatible, needs_conversion, _compat_reason = is_format_compatible(
                     client_format_str,
@@ -581,7 +623,9 @@ class CandidateBuilder:
 
                 # 检查模型支持（按端点格式过滤 provider_model_mappings）
                 if endpoint_format_str not in model_support_cache:
-                    model_support_cache[endpoint_format_str] = await self._check_model_support(
+                    model_support_cache[
+                        endpoint_format_str
+                    ] = await self._check_model_support(
                         db,
                         provider,
                         model_name,
@@ -601,12 +645,18 @@ class CandidateBuilder:
                     key
                     for key in provider.api_keys
                     if key.is_active
-                    and (key.api_formats is None or endpoint_format_str in key.api_formats)
+                    and (
+                        key.api_formats is None
+                        or endpoint_format_str
+                        in normalize_endpoint_signature_list(key.api_formats)
+                    )
                 ]
                 if not active_keys:
                     continue
 
-                use_random = all((key.cache_ttl_minutes or 0) == 0 for key in active_keys)
+                use_random = all(
+                    (key.cache_ttl_minutes or 0) == 0 for key in active_keys
+                )
                 if pool_cfg is not None:
                     use_random = False
                 elif use_random and len(active_keys) > 1:
@@ -633,7 +683,10 @@ class CandidateBuilder:
                     # upstream_metadata 是 deferred 字段，逐条 lazy load 会产生 N+1 查询；
                     # 这里集中触发后，PoolManager 排序时直接读取 _pool_account_state 即可。
                     provider_type_str = (
-                        str(getattr(provider, "provider_type", "") or "").strip().lower() or None
+                        str(getattr(provider, "provider_type", "") or "")
+                        .strip()
+                        .lower()
+                        or None
                     )
                     for pk in pool_keys:
                         setattr(
@@ -641,8 +694,12 @@ class CandidateBuilder:
                             "_pool_account_state",
                             _resolve_pool_account_state(
                                 provider_type=provider_type_str,
-                                upstream_metadata=getattr(pk, "upstream_metadata", None),
-                                oauth_invalid_reason=getattr(pk, "oauth_invalid_reason", None),
+                                upstream_metadata=getattr(
+                                    pk, "upstream_metadata", None
+                                ),
+                                oauth_invalid_reason=getattr(
+                                    pk, "oauth_invalid_reason", None
+                                ),
                             ),
                         )
 

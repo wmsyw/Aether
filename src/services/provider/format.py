@@ -6,6 +6,8 @@ Endpoint signature 辅助函数。
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.core.api_format.enums import ApiFamily, EndpointKind
 from src.core.api_format.signature import (
     EndpointSignature,
@@ -13,7 +15,9 @@ from src.core.api_format.signature import (
     normalize_signature_key,
 )
 
-DEFAULT_ENDPOINT_SIGNATURE: str = make_signature_key(ApiFamily.CLAUDE, EndpointKind.CHAT)
+DEFAULT_ENDPOINT_SIGNATURE: str = make_signature_key(
+    ApiFamily.CLAUDE, EndpointKind.CHAT
+)
 
 
 def normalize_endpoint_signature(
@@ -43,3 +47,24 @@ def normalize_endpoint_signature(
             # 如果解析失败，返回默认值
             return default
     return default
+
+
+def normalize_endpoint_signature_list(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            signature = normalize_signature_key(text)
+        except ValueError:
+            continue
+        if signature in seen:
+            continue
+        seen.add(signature)
+        normalized.append(signature)
+    return normalized

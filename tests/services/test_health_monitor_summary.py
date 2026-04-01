@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -11,6 +11,9 @@ from src.services.health.monitor import HealthMonitor
 class _SequentialQuery:
     def __init__(self, result: Any) -> None:
         self._result = result
+
+    def join(self, *_args: object, **_kwargs: object) -> "_SequentialQuery":
+        return self
 
     def filter(self, *_args: object, **_kwargs: object) -> "_SequentialQuery":
         return self
@@ -37,14 +40,20 @@ def test_get_all_health_status_aggregates_endpoint_health_from_key_formats() -> 
     db = _SequentialSession(
         results=[
             [
-                SimpleNamespace(provider_id="provider-1", api_format="openai:chat", is_active=True),
-                SimpleNamespace(provider_id="provider-1", api_format="claude:chat", is_active=False),
-                SimpleNamespace(provider_id="provider-2", api_format="openai:chat", is_active=True),
+                SimpleNamespace(
+                    provider_id="provider-1", api_format="openai:chat", is_active=True
+                ),
+                SimpleNamespace(
+                    provider_id="provider-1", api_format="claude:chat", is_active=False
+                ),
+                SimpleNamespace(
+                    provider_id="provider-2", api_format="openai:chat", is_active=True
+                ),
             ],
             [
                 (
                     "provider-1",
-                    ["openai:chat", "claude:chat"],
+                    ["OPENAI:CHAT", "claude:chat"],
                     {
                         "openai:chat": {"health_score": 0.4},
                         "claude:chat": {"health_score": 0.7},
@@ -57,18 +66,43 @@ def test_get_all_health_status_aggregates_endpoint_health_from_key_formats() -> 
                 ),
             ],
             [
-                (True, {"openai:chat": {"health_score": 0.4}}, {"openai:chat": {"open": True}}),
-                (False, {"claude:chat": {"health_score": 0.7}}, {}),
-                (True, {"openai:chat": {"health_score": 0.9}}, {}),
+                ("provider-1", "openai:chat"),
+                ("provider-2", "openai:chat"),
+            ],
+            [
+                (
+                    "provider-1",
+                    True,
+                    ["OPENAI:CHAT", "claude:chat"],
+                    {"openai:chat": {"health_score": 0.4}},
+                    {"openai:chat": {"open": True}},
+                    True,
+                ),
+                (
+                    "provider-1",
+                    False,
+                    ["CLAUDE:CHAT"],
+                    {"claude:chat": {"health_score": 0.7}},
+                    {},
+                    True,
+                ),
+                (
+                    "provider-2",
+                    True,
+                    ["openai:chat"],
+                    {"openai:chat": {"health_score": 0.9}},
+                    {},
+                    True,
+                ),
             ],
         ]
     )
 
-    result = HealthMonitor.get_all_health_status(db)  # type: ignore[arg-type]
+    result = HealthMonitor.get_all_health_status(cast(Any, db))
 
     assert result == {
         "endpoints": {"total": 3, "active": 2, "unhealthy": 1},
-        "keys": {"total": 3, "active": 2, "unhealthy": 1, "circuit_open": 1},
+        "keys": {"total": 3, "active": 1, "unhealthy": 1, "circuit_open": 1},
     }
 
 
@@ -103,7 +137,7 @@ def test_get_endpoint_health_aggregates_matching_key_format_data() -> None:
                     },
                 ),
                 (
-                    ["claude:chat"],
+                    ["CLAUDE:CHAT"],
                     {
                         "claude:chat": {
                             "health_score": 0.1,
@@ -116,7 +150,7 @@ def test_get_endpoint_health_aggregates_matching_key_format_data() -> None:
         ]
     )
 
-    result = HealthMonitor.get_endpoint_health(db, "endpoint-1")  # type: ignore[arg-type]
+    result = HealthMonitor.get_endpoint_health(cast(Any, db), "endpoint-1")
 
     assert result is not None
     assert result["endpoint_id"] == "endpoint-1"
@@ -124,3 +158,33 @@ def test_get_endpoint_health_aggregates_matching_key_format_data() -> None:
     assert result["health_score"] == pytest.approx(0.6)
     assert result["consecutive_failures"] == 2
     assert result["last_failure_at"] == "2026-03-23T02:00:00+00:00"
+
+
+def test_get_endpoint_health_matches_uppercase_key_formats() -> None:
+    db = _SequentialSession(
+        results=[
+            SimpleNamespace(
+                id="endpoint-1",
+                provider_id="provider-1",
+                api_format="openai:chat",
+                is_active=True,
+            ),
+            [
+                (
+                    ["OPENAI:CHAT"],
+                    {
+                        "openai:chat": {
+                            "health_score": 0.8,
+                            "consecutive_failures": 1,
+                            "last_failure_at": "2026-03-23T02:00:00+00:00",
+                        }
+                    },
+                )
+            ],
+        ]
+    )
+
+    result = HealthMonitor.get_endpoint_health(cast(Any, db), "endpoint-1")
+
+    assert result is not None
+    assert result["health_score"] == pytest.approx(0.8)

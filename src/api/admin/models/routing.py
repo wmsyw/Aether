@@ -32,6 +32,7 @@ from src.models.database import (
     ProviderAPIKey,
     ProviderEndpoint,
 )
+from src.services.provider.format import normalize_endpoint_signature_list
 from src.services.scheduling.aware_scheduler import CacheAwareScheduler
 from src.services.system.config import SystemConfigService
 
@@ -60,7 +61,9 @@ class RoutingKeyInfo(BaseModel):
     is_active: bool
     api_formats: list[str] = Field(default_factory=list, description="支持的 API 格式")
     # 模型白名单
-    allowed_models: list[str] | None = Field(None, description="允许的模型列表，null 表示不限制")
+    allowed_models: list[str] | None = Field(
+        None, description="允许的模型列表，null 表示不限制"
+    )
     # 熔断状态
     circuit_breaker_open: bool = Field(False, description="熔断器是否打开")
     circuit_breaker_formats: list[str] = Field(
@@ -99,8 +102,12 @@ class RoutingProviderInfo(BaseModel):
 
     id: str
     name: str
-    model_id: str = Field(..., description="Model ID（GlobalModel 与 Provider 的关联记录 ID）")
-    provider_priority: int = Field(..., description="提供商优先级（数字越小优先级越高）")
+    model_id: str = Field(
+        ..., description="Model ID（GlobalModel 与 Provider 的关联记录 ID）"
+    )
+    provider_priority: int = Field(
+        ..., description="提供商优先级（数字越小优先级越高）"
+    )
     billing_type: str | None = Field(None, description="计费类型")
     monthly_quota_usd: float | None = Field(None, description="月额度（美元）")
     monthly_used_usd: float | None = Field(None, description="已用额度（美元）")
@@ -127,7 +134,9 @@ class GlobalKeyWhitelistItem(BaseModel):
     masked_key: str = Field(..., description="脱敏的 API Key")
     provider_id: str = Field(..., description="Provider ID")
     provider_name: str = Field(..., description="Provider 名称")
-    allowed_models: list[str] = Field(default_factory=list, description="Key 白名单模型列表")
+    allowed_models: list[str] = Field(
+        default_factory=list, description="Key 白名单模型列表"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -197,7 +206,9 @@ async def get_model_routing_preview(
     - `priority_mode`: 优先级模式（provider, global_key）
     """
     adapter = AdminGetModelRoutingPreviewAdapter(global_model_id=global_model_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # ========== Adapters ==========
@@ -213,7 +224,9 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
         db = context.db
 
         # 获取 GlobalModel
-        global_model = db.query(GlobalModel).filter(GlobalModel.id == self.global_model_id).first()
+        global_model = (
+            db.query(GlobalModel).filter(GlobalModel.id == self.global_model_id).first()
+        )
         if not global_model:
             from fastapi import HTTPException
 
@@ -247,7 +260,9 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
         keys_by_provider: dict[str, list[ProviderAPIKey]] = {}
         if provider_ids:
             keys = (
-                db.query(ProviderAPIKey).filter(ProviderAPIKey.provider_id.in_(provider_ids)).all()
+                db.query(ProviderAPIKey)
+                .filter(ProviderAPIKey.provider_id.in_(provider_ids))
+                .all()
             )
             for key in keys:
                 if key.provider_id not in keys_by_provider:
@@ -287,8 +302,7 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
             # 按 api_format 组织 Keys
             keys_by_endpoint: dict[str, list[ProviderAPIKey]] = {}
             for key in provider_keys:
-                # 每个 Key 可能支持多个 api_formats
-                for fmt in key.api_formats or []:
+                for fmt in normalize_endpoint_signature_list(key.api_formats):
                     if fmt not in keys_by_endpoint:
                         keys_by_endpoint[fmt] = []
                     keys_by_endpoint[fmt].append(key)
@@ -325,7 +339,10 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
 
                 def get_key_priority(k: ProviderAPIKey) -> tuple[int, int]:
                     format_priority = 999
-                    if k.global_priority_by_format and api_format in k.global_priority_by_format:
+                    if (
+                        k.global_priority_by_format
+                        and api_format in k.global_priority_by_format
+                    ):
                         format_priority = k.global_priority_by_format[api_format]
                     return (format_priority, k.internal_priority or 0)
 
@@ -371,7 +388,10 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
                                 # 取最早的探测时间
                                 fmt_next_probe = cb_state.get("next_probe_at")
                                 if fmt_next_probe:
-                                    if next_probe_at is None or fmt_next_probe < next_probe_at:
+                                    if (
+                                        next_probe_at is None
+                                        or fmt_next_probe < next_probe_at
+                                    ):
                                         next_probe_at = fmt_next_probe
 
                     # 解析 allowed_models
@@ -432,7 +452,9 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
             ]
             order_map = {key: i for i, key in enumerate(preferred_order)}
             endpoint_infos.sort(
-                key=lambda e: order_map.get(str(e.api_format or "").strip().lower(), 999)
+                key=lambda e: order_map.get(
+                    str(e.api_format or "").strip().lower(), 999
+                )
             )
 
             active_endpoints = sum(1 for e in endpoint_infos if e.is_active)
@@ -458,7 +480,9 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
         # 按 provider_priority 排序
         provider_infos.sort(key=lambda p: p.provider_priority)
 
-        active_providers = sum(1 for p in provider_infos if p.is_active and p.model_is_active)
+        active_providers = sum(
+            1 for p in provider_infos if p.is_active and p.model_is_active
+        )
 
         # 从数据库获取当前调度配置
         scheduling_mode = (

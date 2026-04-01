@@ -20,7 +20,12 @@ from src.api.base.pipeline import get_pipeline
 from src.core.exceptions import NotFoundException
 from src.core.logger import logger
 from src.database import get_db
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, RequestCandidate
+from src.models.database import (
+    Provider,
+    ProviderAPIKey,
+    ProviderEndpoint,
+    RequestCandidate,
+)
 from src.models.endpoint_models import (
     ApiFormatHealthMonitor,
     ApiFormatHealthMonitorResponse,
@@ -28,18 +33,23 @@ from src.models.endpoint_models import (
     HealthStatusResponse,
     HealthSummaryResponse,
 )
+from src.services.provider.format import normalize_endpoint_signature_list
 from src.services.health.endpoint import EndpointHealthService
 from src.services.health.monitor import HealthMonitor, get_health_monitor
 
 router = APIRouter(tags=["Endpoint Health"])
 
 
-def _recover_key_health_sync(db: Session, key_id: str, api_format: str | None) -> dict[str, Any]:
+def _recover_key_health_sync(
+    db: Session, key_id: str, api_format: str | None
+) -> dict[str, Any]:
     key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
     if not key:
         raise NotFoundException(f"Key {key_id} 不存在")
 
-    success = get_health_monitor().reset_health(db, key_id=key_id, api_format=api_format)
+    success = get_health_monitor().reset_health(
+        db, key_id=key_id, api_format=api_format
+    )
     if not success:
         raise Exception("重置健康度失败")
 
@@ -90,7 +100,11 @@ def _recover_all_keys_health_sync(db: Session) -> list[dict[str, Any]]:
 
 def _format_str(api_format_enum: Any) -> str:
     """将 DB 查询返回的 api_format（可能是 enum 或 str）统一转为 str。"""
-    return api_format_enum.value if hasattr(api_format_enum, "value") else str(api_format_enum)
+    return (
+        api_format_enum.value
+        if hasattr(api_format_enum, "value")
+        else str(api_format_enum)
+    )
 
 
 def _fetch_recent_attempts_for_api_format(
@@ -142,7 +156,9 @@ async def get_health_summary(
     - `circuit_breaker_open_keys`: 熔断的 Key 数量
     """
     adapter = AdminHealthSummaryAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/health/status")
@@ -171,14 +187,18 @@ async def get_endpoint_health_status(
     - `time_range_end`: 时间范围结束
     """
     adapter = AdminEndpointHealthStatusAdapter(lookback_hours=lookback_hours)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/health/api-formats", response_model=ApiFormatHealthMonitorResponse)
 async def get_api_format_health_monitor(
     request: Request,
     lookback_hours: int = Query(6, ge=1, le=72, description="回溯的小时数"),
-    per_format_limit: int = Query(60, ge=10, le=200, description="每个 API 格式的事件数量"),
+    per_format_limit: int = Query(
+        60, ge=10, le=200, description="每个 API 格式的事件数量"
+    ),
     db: Session = Depends(get_db),
 ) -> ApiFormatHealthMonitorResponse:
     """
@@ -212,14 +232,18 @@ async def get_api_format_health_monitor(
         lookback_hours=lookback_hours,
         per_format_limit=per_format_limit,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/health/key/{key_id}", response_model=HealthStatusResponse)
 async def get_key_health(
     key_id: str,
     request: Request,
-    api_format: str | None = Query(None, description="API 格式（可选，如 CLAUDE、OPENAI）"),
+    api_format: str | None = Query(
+        None, description="API 格式（可选，如 CLAUDE、OPENAI）"
+    ),
     db: Session = Depends(get_db),
 ) -> HealthStatusResponse:
     """
@@ -245,14 +269,18 @@ async def get_key_health(
     - `circuit_breaker_open`: 熔断器是否打开（有 api_format 参数时）
     """
     adapter = AdminKeyHealthAdapter(key_id=key_id, api_format=api_format)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/health/keys/{key_id}")
 async def recover_key_health(
     key_id: str,
     request: Request,
-    api_format: str | None = Query(None, description="API 格式（可选，不指定则恢复所有格式）"),
+    api_format: str | None = Query(
+        None, description="API 格式（可选，不指定则恢复所有格式）"
+    ),
     db: Session = Depends(get_db),
 ) -> dict:
     """
@@ -277,7 +305,9 @@ async def recover_key_health(
       - `is_active`: 是否活跃
     """
     adapter = AdminRecoverKeyHealthAdapter(key_id=key_id, api_format=api_format)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/health/keys")
@@ -303,7 +333,9 @@ async def recover_all_keys_health(
       - `endpoint_id`: Endpoint ID
     """
     adapter = AdminRecoverAllKeysHealthAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # -------- Adapters --------
@@ -353,7 +385,11 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
 
         # 1. 单次查询获取所有活跃 endpoint 行，在内存中聚合 provider_count / endpoint_map
         endpoint_rows = (
-            db.query(ProviderEndpoint.api_format, ProviderEndpoint.id, ProviderEndpoint.provider_id)
+            db.query(
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.id,
+                ProviderEndpoint.provider_id,
+            )
             .join(Provider, ProviderEndpoint.provider_id == Provider.id)
             .filter(
                 ProviderEndpoint.is_active.is_(True),
@@ -390,7 +426,7 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
             )
             for provider_id, api_formats in active_provider_keys:
                 pid = str(provider_id)
-                for fmt in api_formats or []:
+                for fmt in normalize_endpoint_signature_list(api_formats):
                     if (pid, fmt) not in active_provider_formats:
                         continue
                     key_counts[fmt] = key_counts.get(fmt, 0) + 1
@@ -436,7 +472,9 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
             # 获取窗口内的真实统计数据
             # 只统计最终状态：success, failed, skipped
             # 中间状态（available, pending, used, started）不计入统计
-            format_stats = status_counts.get(api_format, {"success": 0, "failed": 0, "skipped": 0})
+            format_stats = status_counts.get(
+                api_format, {"success": 0, "failed": 0, "skipped": 0}
+            )
             real_success_count = format_stats.get("success", 0)
             real_failed_count = format_stats.get("failed", 0)
             real_skipped_count = format_stats.get("skipped", 0)
@@ -447,7 +485,9 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
             attempts_sorted = list(reversed(attempts))
             events: list[EndpointHealthEvent] = []
             for attempt in attempts_sorted:
-                event_timestamp = attempt.finished_at or attempt.started_at or attempt.created_at
+                event_timestamp = (
+                    attempt.finished_at or attempt.started_at or attempt.created_at
+                )
                 events.append(
                     EndpointHealthEvent(
                         timestamp=event_timestamp,
@@ -463,7 +503,9 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
             # skipped 不算失败，不计入成功率分母
             # 无实际完成请求时成功率为 1.0（灰色状态）
             actual_completed = real_success_count + real_failed_count
-            success_rate = real_success_count / actual_completed if actual_completed > 0 else 1.0
+            success_rate = (
+                real_success_count / actual_completed if actual_completed > 0 else 1.0
+            )
             last_event_at = events[-1].timestamp if events else None
 
             # 生成 Usage 基于时间窗口的健康时间线
@@ -511,7 +553,9 @@ class AdminKeyHealthAdapter(AdminApiAdapter):
     api_format: str | None = None
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        health_data = get_health_monitor().get_key_health(context.db, self.key_id, self.api_format)
+        health_data = get_health_monitor().get_key_health(
+            context.db, self.key_id, self.api_format
+        )
         if not health_data:
             raise NotFoundException(f"Key {self.key_id} 不存在")
 
@@ -526,7 +570,9 @@ class AdminKeyHealthAdapter(AdminApiAdapter):
         if self.api_format:
             # 单格式查询
             response_data["api_format"] = self.api_format
-            response_data["key_consecutive_failures"] = health_data.get("consecutive_failures")
+            response_data["key_consecutive_failures"] = health_data.get(
+                "consecutive_failures"
+            )
             response_data["key_last_failure_at"] = health_data.get("last_failure_at")
             circuit = health_data.get("circuit_breaker", {})
             response_data["circuit_breaker_open"] = circuit.get("open", False)
@@ -537,7 +583,9 @@ class AdminKeyHealthAdapter(AdminApiAdapter):
             response_data["half_open_failures"] = circuit.get("half_open_failures", 0)
         else:
             # 全格式查询
-            response_data["any_circuit_open"] = health_data.get("any_circuit_open", False)
+            response_data["any_circuit_open"] = health_data.get(
+                "any_circuit_open", False
+            )
             response_data["health_by_format"] = health_data.get("health_by_format")
 
         return HealthStatusResponse(**response_data)
@@ -550,7 +598,9 @@ class AdminRecoverKeyHealthAdapter(AdminApiAdapter):
 
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
-        await asyncio.to_thread(_recover_key_health_sync, db, self.key_id, self.api_format)
+        await asyncio.to_thread(
+            _recover_key_health_sync, db, self.key_id, self.api_format
+        )
 
         if self.api_format:
             logger.info(f"管理员恢复Key健康状态: {self.key_id}/{self.api_format}")

@@ -30,7 +30,14 @@ from src.core.logger import logger
 from src.core.provider_types import ProviderType
 from src.database import create_session
 from src.database.database import get_db
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, RequestCandidate, User
+from src.models.database import (
+    Provider,
+    ProviderAPIKey,
+    ProviderEndpoint,
+    RequestCandidate,
+    User,
+)
+from src.services.provider.format import normalize_endpoint_signature_list
 from src.services.model.fetch_scheduler import (
     MODEL_FETCH_HTTP_TIMEOUT,
     UPSTREAM_MODELS_CACHE_TTL_SECONDS,
@@ -74,7 +81,9 @@ async def _get_provider_upstream_models_cache(provider_id: str) -> list[dict] | 
     return cached  # type: ignore[return-value]
 
 
-async def _set_provider_upstream_models_cache(provider_id: str, models: list[dict]) -> None:
+async def _set_provider_upstream_models_cache(
+    provider_id: str, models: list[dict]
+) -> None:
     cache_key = f"upstream_models_provider:{provider_id}"
     await CacheService.set(cache_key, models, UPSTREAM_MODELS_CACHE_TTL_SECONDS)
 
@@ -176,7 +185,9 @@ async def _resolve_key_auth(
     api_key_value: str | None = None
     auth_config: dict[str, Any] | None = None
     if auth_type == "oauth":
-        endpoint_api_format = "gemini:chat" if provider_type == ProviderType.ANTIGRAVITY else None
+        endpoint_api_format = (
+            "gemini:chat" if provider_type == ProviderType.ANTIGRAVITY else None
+        )
         try:
             resolved = await resolve_oauth_access_token(
                 key_id=str(api_key.id),
@@ -192,7 +203,9 @@ async def _resolve_key_auth(
             api_key_value = resolved.access_token
             auth_config = resolved.decrypted_auth_config
         except Exception as e:
-            logger.error("[provider-query] OAuth auth failed for key {}: {}", api_key.id, e)
+            logger.error(
+                "[provider-query] OAuth auth failed for key {}: {}", api_key.id, e
+            )
             raise _KeyAuthError("oauth auth failed") from e
 
         if not api_key_value:
@@ -244,7 +257,9 @@ class TestModelFailoverRequest(BaseModel):
 
     provider_id: str
     mode: str  # "global" = 模拟外部请求(用全局模型名), "direct" = 直接测试(用provider_model_name)
-    model_name: str  # global 模式传 global_model_name, direct 模式传 provider_model_name
+    model_name: (
+        str  # global 模式传 global_model_name, direct 模式传 provider_model_name
+    )
     api_format: str | None = None  # 指定 API 格式（endpoint signature）
     endpoint_id: str | None = None  # 指定仅使用该端点测试
     message: str | None = None
@@ -309,7 +324,9 @@ def _build_test_request_payload(request: TestModelFailoverRequest) -> dict[str, 
 
     return {
         "model": request.model_name,
-        "messages": [{"role": "user", "content": _resolve_test_message(request.message)}],
+        "messages": [
+            {"role": "user", "content": _resolve_test_message(request.message)}
+        ],
         "max_tokens": 30,
         "temperature": 0.7,
         "stream": True,
@@ -367,7 +384,9 @@ def _test_check_response_has_error(resp: dict[str, Any]) -> bool:
     resp_data = resp.get("response", {})
     if isinstance(resp_data, dict) and resp_data.get("error"):
         return True
-    resp_body = resp_data.get("response_body", {}) if isinstance(resp_data, dict) else {}
+    resp_body = (
+        resp_data.get("response_body", {}) if isinstance(resp_data, dict) else {}
+    )
     parsed = resp_body
     if isinstance(resp_body, str):
         try:
@@ -506,11 +525,15 @@ async def query_available_models(
     # 延迟导入避免循环依赖（与 upstream_fetcher.fetch_models_for_key 保持一致）
     from src.services.provider.envelope import ensure_providers_bootstrapped
 
-    ensure_providers_bootstrapped(provider_types=[provider_type] if provider_type else None)
+    ensure_providers_bootstrapped(
+        provider_types=[provider_type] if provider_type else None
+    )
     has_custom_fetcher = UpstreamModelsFetcherRegistry.get(provider_type) is not None
 
     if not format_to_endpoint and not has_custom_fetcher:
-        raise HTTPException(status_code=400, detail="No active endpoints found for this provider")
+        raise HTTPException(
+            status_code=400, detail="No active endpoints found for this provider"
+        )
 
     # 如果指定了 api_key_id，只获取该 Key 的模型
     if request.api_key_id:
@@ -524,7 +547,9 @@ async def query_available_models(
     # 未指定 api_key_id，遍历所有活跃的 Key 并聚合结果
     active_keys = [key for key in provider.api_keys if key.is_active]
     if not active_keys:
-        raise HTTPException(status_code=400, detail="No active API Key found for this provider")
+        raise HTTPException(
+            status_code=400, detail="No active API Key found for this provider"
+        )
 
     # Antigravity: 按 tier/可用性排序后逐个尝试，成功即停止
     if provider_type == ProviderType.ANTIGRAVITY:
@@ -539,7 +564,9 @@ async def query_available_models(
     async def fetch_for_key(api_key: Any) -> Any:
         # 非强制刷新时，先检查缓存
         if not request.force_refresh:
-            cached_models = await get_upstream_models_from_cache(request.provider_id, api_key.id)
+            cached_models = await get_upstream_models_from_cache(
+                request.provider_id, api_key.id
+            )
             if cached_models is not None:
                 return cached_models, None, True  # models, error, from_cache
 
@@ -566,11 +593,17 @@ async def query_available_models(
         )
 
         # 写入缓存（按 model id 聚合，保证返回 api_formats 数组，避免前端 schema 不一致）
-        unique_models = _aggregate_models_by_id([m for m in models if isinstance(m, dict)])
+        unique_models = _aggregate_models_by_id(
+            [m for m in models if isinstance(m, dict)]
+        )
         if unique_models:
-            await set_upstream_models_to_cache(request.provider_id, api_key.id, unique_models)
+            await set_upstream_models_to_cache(
+                request.provider_id, api_key.id, unique_models
+            )
 
-        error = f"Key {api_key.name or api_key.id}: {'; '.join(errors)}" if errors else None
+        error = (
+            f"Key {api_key.name or api_key.id}: {'; '.join(errors)}" if errors else None
+        )
         return unique_models, error, False  # models, error, from_cache
 
     # 合并结果
@@ -746,13 +779,19 @@ async def _fetch_models_antigravity_ordered(
         )
 
         if not has_success:
-            err = f"Key {key_label}: {'; '.join(errors)}" if errors else f"Key {key_label}: failed"
+            err = (
+                f"Key {key_label}: {'; '.join(errors)}"
+                if errors
+                else f"Key {key_label}: failed"
+            )
             all_errors.append(err)
             logger.info("Antigravity 上游模型获取失败, 尝试下一个账号: {}", err)
             continue
 
         # 成功: 聚合并写入 Provider 级别缓存
-        unique_models = _aggregate_models_by_id([m for m in models if isinstance(m, dict)])
+        unique_models = _aggregate_models_by_id(
+            [m for m in models if isinstance(m, dict)]
+        )
         if unique_models:
             await _set_provider_upstream_models_cache(provider.id, unique_models)
 
@@ -812,7 +851,9 @@ async def _fetch_models_for_single_key(
             if unique_cached and (
                 not safe_models or "api_formats" not in safe_models[0]  # type: ignore[operator]
             ):
-                await set_upstream_models_to_cache(provider.id, api_key_id, unique_cached)
+                await set_upstream_models_to_cache(
+                    provider.id, api_key_id, unique_cached
+                )
             return {
                 "success": True,
                 "data": {"models": unique_cached, "error": None, "from_cache": True},
@@ -922,16 +963,21 @@ async def test_model(
                 ),
                 None,
             )
-            if api_key and request.api_format not in (api_key.api_formats or []):
+            if api_key and request.api_format not in normalize_endpoint_signature_list(
+                api_key.api_formats
+            ):
                 raise HTTPException(
-                    status_code=400, detail=f"API Key does not support format: {request.api_format}"
+                    status_code=400,
+                    detail=f"API Key does not support format: {request.api_format}",
                 )
         else:
             # 找支持该格式的第一个可用 Key
             for key in provider.api_keys:
                 if not key.is_active:
                     continue
-                if request.api_format in (key.api_formats or []):
+                if request.api_format in normalize_endpoint_signature_list(
+                    key.api_formats
+                ):
                     api_key = key
                     break
     elif request.endpoint_id:
@@ -950,7 +996,9 @@ async def test_model(
                 ),
                 None,
             )
-            if api_key and endpoint.api_format not in (api_key.api_formats or []):
+            if api_key and endpoint.api_format not in normalize_endpoint_signature_list(
+                api_key.api_formats
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"API Key does not support endpoint format: {endpoint.api_format}",
@@ -960,18 +1008,24 @@ async def test_model(
             for key in provider.api_keys:
                 if not key.is_active:
                     continue
-                if endpoint.api_format in (key.api_formats or []):
+                if endpoint.api_format in normalize_endpoint_signature_list(
+                    key.api_formats
+                ):
                     api_key = key
                     break
     elif request.api_key_id:
         # 使用指定的 API Key
         api_key = next(
-            (key for key in provider.api_keys if key.id == request.api_key_id and key.is_active),
+            (
+                key
+                for key in provider.api_keys
+                if key.id == request.api_key_id and key.is_active
+            ),
             None,
         )
         if api_key:
             # 找到该 Key 支持的第一个活跃 Endpoint
-            for fmt in api_key.api_formats or []:
+            for fmt in normalize_endpoint_signature_list(api_key.api_formats):
                 if fmt in format_to_endpoint:
                     endpoint = format_to_endpoint[fmt]
                     break
@@ -984,7 +1038,7 @@ async def test_model(
             for key in provider.api_keys:
                 if not key.is_active:
                     continue
-                if ep.api_format in (key.api_formats or []):
+                if ep.api_format in normalize_endpoint_signature_list(key.api_formats):
                     endpoint = ep
                     api_key = key
                     break
@@ -992,7 +1046,9 @@ async def test_model(
                 break
 
     if not endpoint or not api_key:
-        raise HTTPException(status_code=404, detail="No active endpoint or API key found")
+        raise HTTPException(
+            status_code=404, detail="No active endpoint or API key found"
+        )
 
     auth_type = str(getattr(api_key, "auth_type", "api_key") or "api_key").lower()
 
@@ -1002,7 +1058,9 @@ async def test_model(
                 key_id=str(api_key.id),
                 encrypted_api_key=str(api_key.api_key or ""),
                 encrypted_auth_config=(
-                    str(api_key.auth_config) if getattr(api_key, "auth_config", None) else None
+                    str(api_key.auth_config)
+                    if getattr(api_key, "auth_config", None)
+                    else None
                 ),
                 provider_proxy_config=resolve_effective_proxy(
                     getattr(provider, "proxy", None), getattr(api_key, "proxy", None)
@@ -1031,7 +1089,9 @@ async def test_model(
             account_id = oauth_meta.get("account_id")
             if account_id:
                 extra_headers["chatgpt-account-id"] = str(account_id)
-                logger.debug("[test-model] Added chatgpt-account-id header: {}", account_id)
+                logger.debug(
+                    "[test-model] Added chatgpt-account-id header: {}", account_id
+                )
         except Exception as e:
             logger.warning("[test-model] Failed to apply OAuth extra headers: {}", e)
 
@@ -1060,12 +1120,16 @@ async def test_model(
 
         logger.debug(f"[test-model] 使用 Adapter: {adapter_class.__name__}")
         logger.debug(f"[test-model] 端点 API Format: {endpoint.api_format}")
-        logger.debug(f"[test-model] 使用 Key: {api_key.name or api_key.id} (auth_type={auth_type})")
+        logger.debug(
+            f"[test-model] 使用 Key: {api_key.name or api_key.id} (auth_type={auth_type})"
+        )
 
         # 准备测试请求数据（优先使用流式）
         check_request = {
             "model": request.model_name,
-            "messages": [{"role": "user", "content": _resolve_test_message(request.message)}],
+            "messages": [
+                {"role": "user", "content": _resolve_test_message(request.message)}
+            ],
             "max_tokens": 30,
             "temperature": 0.7,
             "stream": True,
@@ -1077,9 +1141,13 @@ async def test_model(
         extra_headers = endpoint_config.get("extra_headers") or {}
 
         if body_rules:
-            logger.debug(f"[test-model] 将传递 body_rules 给 check_endpoint: {body_rules}")
+            logger.debug(
+                f"[test-model] 将传递 body_rules 给 check_endpoint: {body_rules}"
+            )
         if header_rules:
-            logger.debug(f"[test-model] 将传递 header_rules 给 check_endpoint: {header_rules}")
+            logger.debug(
+                f"[test-model] 将传递 header_rules 给 check_endpoint: {header_rules}"
+            )
 
         # 发送测试请求（使用代理配置）
         test_proxy = resolve_effective_proxy(
@@ -1274,7 +1342,9 @@ async def test_model(
                     upstream_status = 500
                 raise HTTPException(
                     status_code=upstream_status,
-                    detail=str(error_message)[:500] if error_message else "Provider error",
+                    detail=str(error_message)[:500]
+                    if error_message
+                    else "Provider error",
                 )
             else:
                 logger.debug(f"[test-model] Error: {error_obj}")
@@ -1302,7 +1372,9 @@ async def test_model(
                     choice = response_data["choices"][0]
                     if "message" in choice:
                         content = choice["message"].get("content", "")
-                        logger.debug(f"[test-model] Content Preview: {content[:200]}...")
+                        logger.debug(
+                            f"[test-model] Content Preview: {content[:200]}..."
+                        )
                 elif "content" in response_data and response_data["content"]:
                     content = str(response_data["content"])
                     logger.debug(f"[test-model] Content Preview: {content[:200]}...")
@@ -1402,7 +1474,9 @@ def _build_direct_test_candidates(
     return candidates
 
 
-def _direct_candidate_sort_key(candidate: ProviderCandidate) -> tuple[int, float, int, int]:
+def _direct_candidate_sort_key(
+    candidate: ProviderCandidate,
+) -> tuple[int, float, int, int]:
     """
     按可用性排序候选：
     1. 熔断器状态：关闭(0) > 打开(2)
@@ -1424,7 +1498,9 @@ def _direct_candidate_sort_key(candidate: ProviderCandidate) -> tuple[int, float
     health_score = 1.0
     consecutive_failures = 0
     health_data = getattr(key, "health_by_format", None) or {}
-    health_entry = health_data.get(ep_format, {}) if isinstance(health_data, dict) else {}
+    health_entry = (
+        health_data.get(ep_format, {}) if isinstance(health_data, dict) else {}
+    )
     if isinstance(health_entry, dict):
         health_score = health_entry.get("health_score", 1.0)
         consecutive_failures = health_entry.get("consecutive_failures", 0)
@@ -1438,7 +1514,12 @@ def _direct_candidate_sort_key(candidate: ProviderCandidate) -> tuple[int, float
     except (TypeError, ValueError):
         internal_priority = 999999
 
-    return (circuit_breaker_order, -health_score, consecutive_failures, internal_priority)
+    return (
+        circuit_breaker_order,
+        -health_score,
+        consecutive_failures,
+        internal_priority,
+    )
 
 
 def _filter_test_candidates_by_endpoint(
@@ -1452,7 +1533,8 @@ def _filter_test_candidates_by_endpoint(
     return [
         candidate
         for candidate in candidates
-        if str(getattr(getattr(candidate, "endpoint", None), "id", "") or "") == target_id
+        if str(getattr(getattr(candidate, "endpoint", None), "id", "") or "")
+        == target_id
     ]
 
 
@@ -1479,9 +1561,13 @@ def _resolve_test_effective_model(
 
     current_key = key or getattr(candidate, "key", None)
     pool_mapping = (
-        getattr(current_key, "_pool_mapping_matched_model", None) if current_key else None
+        getattr(current_key, "_pool_mapping_matched_model", None)
+        if current_key
+        else None
     )
-    mapping_matched_model = pool_mapping or getattr(candidate, "mapping_matched_model", None)
+    mapping_matched_model = pool_mapping or getattr(
+        candidate, "mapping_matched_model", None
+    )
     if mapping_matched_model:
         return str(mapping_matched_model)
 
@@ -1496,7 +1582,9 @@ def _resolve_test_effective_model(
             continue
         if str(getattr(model, "global_model_id", "") or "") != gm_id_str:
             continue
-        selected = model.select_provider_model_name(affinity_key=None, api_format=ep_format)
+        selected = model.select_provider_model_name(
+            affinity_key=None, api_format=ep_format
+        )
         if selected:
             return str(selected)
     return effective_model
@@ -1566,7 +1654,9 @@ def _flatten_test_candidates_for_concurrency(
             continue
 
         for pool_key in candidate.pool_keys or []:
-            key_skipped = candidate.is_skipped or bool(getattr(pool_key, "_pool_skipped", False))
+            key_skipped = candidate.is_skipped or bool(
+                getattr(pool_key, "_pool_skipped", False)
+            )
             key_skip_reason_raw = (
                 getattr(pool_key, "_pool_skip_reason", None) if key_skipped else None
             )
@@ -1587,13 +1677,17 @@ def _flatten_test_candidates_for_concurrency(
                         getattr(pool_key, "_pool_mapping_matched_model", None)
                         or getattr(candidate, "mapping_matched_model", None)
                     ),
-                    needs_conversion=bool(getattr(candidate, "needs_conversion", False)),
+                    needs_conversion=bool(
+                        getattr(candidate, "needs_conversion", False)
+                    ),
                     provider_api_format=(
                         getattr(candidate, "provider_api_format", "")
                         or str(getattr(candidate.endpoint, "api_format", "") or "")
                     ),
                     output_limit=getattr(candidate, "output_limit", None),
-                    capability_miss_count=int(getattr(candidate, "capability_miss_count", 0) or 0),
+                    capability_miss_count=int(
+                        getattr(candidate, "capability_miss_count", 0) or 0
+                    ),
                 )
             )
 
@@ -1609,7 +1703,9 @@ def _build_test_candidate_extra_data(candidate: ProviderCandidate) -> dict[str, 
         ),
         "mapping_matched_model": (
             getattr(candidate, "mapping_matched_model", None)
-            or getattr(getattr(candidate, "key", None), "_pool_mapping_matched_model", None)
+            or getattr(
+                getattr(candidate, "key", None), "_pool_mapping_matched_model", None
+            )
         ),
     }
     key_extra = getattr(getattr(candidate, "key", None), "_pool_extra_data", None)
@@ -1645,7 +1741,9 @@ def _precreate_concurrent_test_records(
                 "endpoint_id": str(getattr(candidate.endpoint, "id", "") or "") or None,
                 "key_id": str(getattr(candidate.key, "id", "") or "") or None,
                 "status": (
-                    "skipped" if bool(getattr(candidate, "is_skipped", False)) else "available"
+                    "skipped"
+                    if bool(getattr(candidate, "is_skipped", False))
+                    else "available"
                 ),
                 "skip_reason": getattr(candidate, "skip_reason", None),
                 "is_cached": bool(getattr(candidate, "is_cached", False)),
@@ -1815,15 +1913,21 @@ async def _run_concurrent_test(
             str(getattr(candidate.key, "id", "") or ""),
         )
 
-    preloaded_runtime_objects: dict[int, tuple[Provider, ProviderEndpoint, ProviderAPIKey]] = {}
+    preloaded_runtime_objects: dict[
+        int, tuple[Provider, ProviderEndpoint, ProviderAPIKey]
+    ] = {}
     providers_by_id: dict[str, Provider] = {}
     endpoints_by_id: dict[str, ProviderEndpoint] = {}
     keys_by_id: dict[str, ProviderAPIKey] = {}
     provider_ids = {
-        provider_id for provider_id, _, _ in candidate_identity_map.values() if provider_id
+        provider_id
+        for provider_id, _, _ in candidate_identity_map.values()
+        if provider_id
     }
     endpoint_ids = {
-        endpoint_id for _, endpoint_id, _ in candidate_identity_map.values() if endpoint_id
+        endpoint_id
+        for _, endpoint_id, _ in candidate_identity_map.values()
+        if endpoint_id
     }
     key_ids = {key_id for _, _, key_id in candidate_identity_map.values() if key_id}
 
@@ -1858,7 +1962,11 @@ async def _run_concurrent_test(
             for key in keys_by_id.values():
                 preload_db.expunge(key)
 
-    for candidate_index, (provider_id, endpoint_id, key_id) in candidate_identity_map.items():
+    for candidate_index, (
+        provider_id,
+        endpoint_id,
+        key_id,
+    ) in candidate_identity_map.items():
         if not provider_id or not endpoint_id or not key_id:
             continue
         local_provider = providers_by_id.get(provider_id)
@@ -1866,7 +1974,11 @@ async def _run_concurrent_test(
         local_key = keys_by_id.get(key_id)
         if local_provider is None or local_endpoint is None or local_key is None:
             continue
-        preloaded_runtime_objects[candidate_index] = (local_provider, local_endpoint, local_key)
+        preloaded_runtime_objects[candidate_index] = (
+            local_provider,
+            local_endpoint,
+            local_key,
+        )
 
     def _load_candidate_runtime_objects(
         candidate_index: int,
@@ -1926,7 +2038,9 @@ async def _run_concurrent_test(
             with create_session() as parse_db:
                 parse_key = (
                     parse_db.query(ProviderAPIKey)
-                    .filter(ProviderAPIKey.id == str(getattr(local_key, "id", "") or ""))
+                    .filter(
+                        ProviderAPIKey.id == str(getattr(local_key, "id", "") or "")
+                    )
                     .first()
                 )
                 parsed = await _extract_test_response_or_raise(
@@ -1963,7 +2077,11 @@ async def _run_concurrent_test(
             return {"status": "cancelled"}
         except Exception as exc:
             last_error = exc
-            elapsed_ms = max(0, int((time.perf_counter() - started_at) * 1000)) if started else None
+            elapsed_ms = (
+                max(0, int((time.perf_counter() - started_at) * 1000))
+                if started
+                else None
+            )
             status_code = None
             if isinstance(exc, httpx.HTTPStatusError):
                 status_code = int(exc.response.status_code)
@@ -1972,7 +2090,11 @@ async def _run_concurrent_test(
             elif isinstance(exc, EmbeddedErrorException):
                 status_code = int(exc.error_code or 200)
 
-            if local_provider is not None and local_key is not None and status_code is not None:
+            if (
+                local_provider is not None
+                and local_key is not None
+                and status_code is not None
+            ):
                 await pool_on_error(local_provider, local_key, status_code, exc)
 
             with create_session() as update_db:
@@ -2154,9 +2276,13 @@ async def _extract_test_response_or_raise(
             error_payload=parsed_payload,
         )
         error_obj = parsed_payload["error"]
-        error_code = error_obj.get("code") if isinstance(error_obj, dict) else status_code or 500
+        error_code = (
+            error_obj.get("code") if isinstance(error_obj, dict) else status_code or 500
+        )
         error_message = (
-            error_obj.get("message") if isinstance(error_obj, dict) else str(error_obj or "")
+            error_obj.get("message")
+            if isinstance(error_obj, dict)
+            else str(error_obj or "")
         )
         error_status = error_obj.get("status") if isinstance(error_obj, dict) else None
         from src.core.exceptions import EmbeddedErrorException
@@ -2206,7 +2332,9 @@ async def _extract_test_response_or_raise(
         raise httpx.TimeoutException(error_message or "Request timeout")
 
     if error_type in {"network_error", "connection_failed"}:
-        raise httpx.ConnectError(error_message or "Connection failed", request=request_obj)
+        raise httpx.ConnectError(
+            error_message or "Connection failed", request=request_obj
+        )
 
     from src.core.exceptions import ProviderNotAvailableException
 
@@ -2233,9 +2361,9 @@ def _build_test_attempts_from_candidate_keys(
         candidate_index = int(getattr(candidate_key, "candidate_index", 0) or 0)
         retry_index = int(getattr(candidate_key, "retry_index", 0) or 0)
         key_id = str(getattr(candidate_key, "key_id", "") or "")
-        meta = candidate_meta_by_pair.get((candidate_index, key_id)) or candidate_meta_by_index.get(
-            candidate_index, {}
-        )
+        meta = candidate_meta_by_pair.get(
+            (candidate_index, key_id)
+        ) or candidate_meta_by_index.get(candidate_index, {})
         debug_payload = get_model_test_debug_from_extra_data(
             getattr(candidate_key, "extra_data", None)
         )
@@ -2250,7 +2378,9 @@ def _build_test_attempts_from_candidate_keys(
                 key_id=key_id,
                 auth_type=str(getattr(candidate_key, "auth_type", "") or ""),
                 effective_model=(
-                    str(meta.get("effective_model")) if meta.get("effective_model") else None
+                    str(meta.get("effective_model"))
+                    if meta.get("effective_model")
+                    else None
                 ),
                 status=status,
                 skip_reason=getattr(candidate_key, "skip_reason", None),
@@ -2264,16 +2394,22 @@ def _build_test_attempts_from_candidate_keys(
                 ),
                 request_headers=(
                     dict(debug_payload.get("request_headers"))
-                    if debug_payload and isinstance(debug_payload.get("request_headers"), dict)
+                    if debug_payload
+                    and isinstance(debug_payload.get("request_headers"), dict)
                     else None
                 ),
-                request_body=debug_payload.get("request_body") if debug_payload else None,
+                request_body=debug_payload.get("request_body")
+                if debug_payload
+                else None,
                 response_headers=(
                     dict(debug_payload.get("response_headers"))
-                    if debug_payload and isinstance(debug_payload.get("response_headers"), dict)
+                    if debug_payload
+                    and isinstance(debug_payload.get("response_headers"), dict)
                     else None
                 ),
-                response_body=debug_payload.get("response_body") if debug_payload else None,
+                response_body=debug_payload.get("response_body")
+                if debug_payload
+                else None,
             )
         )
 
@@ -2336,7 +2472,9 @@ async def test_model_failover(
             raise HTTPException(status_code=404, detail="Endpoint not found")
         ep_format = str(getattr(requested_endpoint, "api_format", "") or "")
         if request.api_format and ep_format != request.api_format:
-            raise HTTPException(status_code=400, detail="endpoint_id does not match api_format")
+            raise HTTPException(
+                status_code=400, detail="endpoint_id does not match api_format"
+            )
 
     client_format = request.api_format
     if request.mode == "global":
@@ -2353,20 +2491,25 @@ async def test_model_failover(
                         break
         if not client_format:
             raise HTTPException(
-                status_code=400, detail="No active endpoint found to determine API format"
+                status_code=400,
+                detail="No active endpoint found to determine API format",
             )
 
         from src.services.cache.model_cache import ModelCacheService
 
         model_mappings: list[str] = []
         try:
-            gm_obj = await ModelCacheService.get_global_model_by_name(db, request.model_name)
+            gm_obj = await ModelCacheService.get_global_model_by_name(
+                db, request.model_name
+            )
             if gm_obj and isinstance(gm_obj.config, dict):
                 raw_mappings = gm_obj.config.get("model_mappings", [])
                 if isinstance(raw_mappings, list):
                     model_mappings = raw_mappings
         except Exception as e:
-            logger.warning("[test-model-failover] Failed to get GlobalModel mappings: {}", e)
+            logger.warning(
+                "[test-model-failover] Failed to get GlobalModel mappings: {}", e
+            )
 
         try:
             candidates = await builder._build_candidates(
@@ -2381,7 +2524,9 @@ async def test_model_failover(
         except Exception as e:
             logger.warning("[test-model-failover] CandidateBuilder failed: {}", e)
             candidates = []
-        candidates = _filter_test_candidates_by_endpoint(candidates, request.endpoint_id)
+        candidates = _filter_test_candidates_by_endpoint(
+            candidates, request.endpoint_id
+        )
     else:
         if not client_format and requested_endpoint is not None:
             client_format = str(getattr(requested_endpoint, "api_format", "") or "")
@@ -2407,10 +2552,14 @@ async def test_model_failover(
     request_payload = _build_test_request_payload(request)
     request_headers = _build_test_request_headers(request)
     request_id = str(request.request_id or f"provider-test-{uuid4().hex[:12]}")
-    request_timeout = float(getattr(provider, "request_timeout", 0) or TimeoutDefaults.HTTP_REQUEST)
+    request_timeout = float(
+        getattr(provider, "request_timeout", 0) or TimeoutDefaults.HTTP_REQUEST
+    )
     provider_type = str(getattr(provider, "provider_type", "") or "").lower()
 
-    async def _request_func(provider_obj: Any, endpoint: Any, key: Any, candidate: Any) -> Any:
+    async def _request_func(
+        provider_obj: Any, endpoint: Any, key: Any, candidate: Any
+    ) -> Any:
         effective_model = _resolve_test_effective_model(
             provider=provider,
             candidate=candidate,
@@ -2518,7 +2667,11 @@ async def test_model_failover(
         else (
             int(concurrent_result.get("attempt_count", 0))
             if concurrent_result is not None
-            else sum(1 for attempt in attempts if attempt.status not in {"skipped", "cancelled"})
+            else sum(
+                1
+                for attempt in attempts
+                if attempt.status not in {"skipped", "cancelled"}
+            )
         )
     )
 
@@ -2560,7 +2713,11 @@ async def test_model_failover(
             error_message = str(run_error.upstream_response)[:500]
         if not error_message:
             error_message = str(run_error)
-    if not error_message and concurrent_result is not None and concurrent_result.get("run_error"):
+    if (
+        not error_message
+        and concurrent_result is not None
+        and concurrent_result.get("run_error")
+    ):
         error_message = str(concurrent_result.get("run_error"))
     if not error_message and exec_result is not None and exec_result.error_message:
         error_message = str(exec_result.error_message)
@@ -2570,7 +2727,9 @@ async def test_model_failover(
             None,
         )
         error_message = (
-            failed_attempt.error_message if failed_attempt else "服务暂时不可用，请稍后重试"
+            failed_attempt.error_message
+            if failed_attempt
+            else "服务暂时不可用，请稍后重试"
         )
 
     return TestModelFailoverResponse(

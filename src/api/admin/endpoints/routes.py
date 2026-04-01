@@ -31,7 +31,11 @@ from src.models.endpoint_models import (
     ProviderEndpointResponse,
     ProviderEndpointUpdate,
 )
-from src.services.provider.stream_policy import UpstreamStreamPolicy, parse_upstream_stream_policy
+from src.services.provider.format import normalize_endpoint_signature_list
+from src.services.provider.stream_policy import (
+    UpstreamStreamPolicy,
+    parse_upstream_stream_policy,
+)
 
 router = APIRouter(tags=["Endpoint Management"])
 pipeline = get_pipeline()
@@ -58,7 +62,9 @@ def _is_fixed_provider(provider_type: str | None) -> bool:
         return False
 
 
-@router.get("/providers/{provider_id}/endpoints", response_model=list[ProviderEndpointResponse])
+@router.get(
+    "/providers/{provider_id}/endpoints", response_model=list[ProviderEndpointResponse]
+)
 async def list_provider_endpoints(
     provider_id: str,
     request: Request,
@@ -98,10 +104,14 @@ async def list_provider_endpoints(
         skip=skip,
         limit=limit,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
-@router.post("/providers/{provider_id}/endpoints", response_model=ProviderEndpointResponse)
+@router.post(
+    "/providers/{provider_id}/endpoints", response_model=ProviderEndpointResponse
+)
 async def create_provider_endpoint(
     provider_id: str,
     endpoint_data: ProviderEndpointCreate,
@@ -134,7 +144,9 @@ async def create_provider_endpoint(
         provider_id=provider_id,
         endpoint_data=endpoint_data,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/defaults/{api_format}/body-rules")
@@ -148,7 +160,9 @@ async def get_default_endpoint_body_rules(
     adapter = AdminGetDefaultBodyRulesAdapter(
         api_format=api_format, provider_type=provider_type or None
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{endpoint_id}", response_model=ProviderEndpointResponse)
@@ -180,7 +194,9 @@ async def get_endpoint(
     - 其他配置字段
     """
     adapter = AdminGetProviderEndpointAdapter(endpoint_id=endpoint_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/{endpoint_id}", response_model=ProviderEndpointResponse)
@@ -214,7 +230,9 @@ async def update_endpoint(
         endpoint_id=endpoint_id,
         endpoint_data=endpoint_data,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/{endpoint_id}")
@@ -237,7 +255,9 @@ async def delete_endpoint(
     - `affected_keys_count`: 受影响的 Key 数量（包含该 API 格式）
     """
     adapter = AdminDeleteProviderEndpointAdapter(endpoint_id=endpoint_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 # -------- Adapters --------
@@ -273,7 +293,7 @@ class AdminListProviderEndpointsAdapter(AdminApiAdapter):
         total_keys_map: dict[str, int] = {}
         active_keys_map: dict[str, int] = {}
         for api_formats, is_active in keys:
-            for fmt in api_formats or []:
+            for fmt in normalize_endpoint_signature_list(api_formats):
                 total_keys_map[fmt] = total_keys_map.get(fmt, 0) + 1
                 if is_active:
                     active_keys_map[fmt] = active_keys_map.get(fmt, 0) + 1
@@ -361,7 +381,9 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             max_retries=self.endpoint_data.max_retries,
             is_active=True,
             config=self.endpoint_data.config,
-            proxy=self.endpoint_data.proxy.model_dump() if self.endpoint_data.proxy else None,
+            proxy=self.endpoint_data.proxy.model_dump()
+            if self.endpoint_data.proxy
+            else None,
             format_acceptance_config=self.endpoint_data.format_acceptance_config,
             created_at=now,
             updated_at=now,
@@ -450,7 +472,9 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         endpoint = (
-            db.query(ProviderEndpoint).filter(ProviderEndpoint.id == self.endpoint_id).first()
+            db.query(ProviderEndpoint)
+            .filter(ProviderEndpoint.id == self.endpoint_id)
+            .first()
         )
         if not endpoint:
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
@@ -458,7 +482,9 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
         update_data = self.endpoint_data.model_dump(exclude_unset=True)
 
         # 固定类型 Provider 的 endpoint：锁定 base_url/custom_path（前端禁用仅是 UX，后端必须强校验）
-        provider = db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
+        provider = (
+            db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
+        )
         if provider:
             provider_type = getattr(provider, "provider_type", "custom")
             if _is_fixed_provider(provider_type):
@@ -466,8 +492,12 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
                     raise InvalidRequestException(
                         "固定类型 Provider 的 Endpoint 不允许修改 base_url/custom_path"
                     )
-                normalized_provider_type = str(provider_type or "custom").strip().lower()
-                endpoint_sig = str(getattr(endpoint, "api_format", "") or "").strip().lower()
+                normalized_provider_type = (
+                    str(provider_type or "custom").strip().lower()
+                )
+                endpoint_sig = (
+                    str(getattr(endpoint, "api_format", "") or "").strip().lower()
+                )
                 if (
                     normalized_provider_type == ProviderType.CODEX.value
                     and endpoint_sig == "openai:cli"
@@ -511,7 +541,13 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             # proxy 为 None 时保留，用于清除代理配置
 
         # JSON 列需要 flag_modified 以确保 SQLAlchemy 检测到变更
-        json_fields = {"header_rules", "body_rules", "config", "proxy", "format_acceptance_config"}
+        json_fields = {
+            "header_rules",
+            "body_rules",
+            "config",
+            "proxy",
+            "format_acceptance_config",
+        }
 
         for field, value in update_data.items():
             setattr(endpoint, field, value)
@@ -530,7 +566,9 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
         # 清除 /v1/models 列表缓存（is_active 变更会影响模型可用性）
         await invalidate_models_list_cache()
 
-        provider = db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
+        provider = (
+            db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
+        )
         logger.info(
             f"[OK] 更新 Endpoint: ID={self.endpoint_id}, Updates={list(update_data.keys())}"
         )
@@ -575,7 +613,9 @@ class AdminDeleteProviderEndpointAdapter(AdminApiAdapter):
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         endpoint = (
-            db.query(ProviderEndpoint).filter(ProviderEndpoint.id == self.endpoint_id).first()
+            db.query(ProviderEndpoint)
+            .filter(ProviderEndpoint.id == self.endpoint_id)
+            .first()
         )
         if not endpoint:
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
@@ -627,7 +667,9 @@ class AdminGetDefaultBodyRulesAdapter(AdminApiAdapter):
         try:
             normalized_api_format = parse_signature_key(self.api_format).key
         except Exception as exc:
-            raise InvalidRequestException(f"无效的 api_format: {self.api_format}") from exc
+            raise InvalidRequestException(
+                f"无效的 api_format: {self.api_format}"
+            ) from exc
 
         return {
             "api_format": normalized_api_format,

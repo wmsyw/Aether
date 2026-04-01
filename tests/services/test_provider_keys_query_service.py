@@ -112,7 +112,9 @@ def test_get_keys_grouped_by_format_builds_expected_shape(
     monkeypatch.setattr(
         query_service_module,
         "get_capability",
-        lambda name: SimpleNamespace(short_name="缓存1h") if name == "cache_1h" else None,
+        lambda name: (
+            SimpleNamespace(short_name="缓存1h") if name == "cache_1h" else None
+        ),
     )
 
     result = get_keys_grouped_by_format(cast(Any, db))
@@ -136,6 +138,45 @@ def test_get_keys_grouped_by_format_builds_expected_shape(
     assert cli_item["health_score"] == 1.0
 
 
+def test_get_keys_grouped_by_format_normalizes_uppercase_key_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(id="p1", is_active=True, name="Provider-1")
+    key = SimpleNamespace(
+        id="k1",
+        name="Key-1",
+        api_formats=["OPENAI:CHAT", "OPENAI:CLI"],
+        auth_type="api_key",
+        api_key="enc-key",
+        internal_priority=3,
+        global_priority_by_format=None,
+        rate_multipliers=None,
+        is_active=True,
+        capabilities=None,
+        success_count=0,
+        request_count=0,
+        total_response_time_ms=0,
+        health_by_format={},
+        circuit_breaker_by_format={},
+    )
+    db = _FakeGroupedDB(
+        key_provider_rows=[(key, provider)],
+        endpoint_rows=[
+            ("p1", "openai:chat", "https://chat.example"),
+            ("p1", "openai:cli", "https://cli.example"),
+        ],
+    )
+
+    monkeypatch.setattr(
+        query_service_module.crypto_service, "decrypt", lambda _v: "sk-1234567890abcd"
+    )
+    monkeypatch.setattr(query_service_module, "get_capability", lambda _name: None)
+
+    result = get_keys_grouped_by_format(cast(Any, db))
+
+    assert set(result.keys()) == {"openai:chat", "openai:cli"}
+
+
 def test_list_provider_keys_responses_provider_not_found_raises() -> None:
     db = _FakeListDB(provider=None, keys=[])
     with pytest.raises(NotFoundException, match="Provider p1 不存在"):
@@ -149,7 +190,16 @@ def test_list_provider_keys_responses_uses_response_builder(
     keys = [SimpleNamespace(id="k1"), SimpleNamespace(id="k2")]
     db = _FakeListDB(provider=provider, keys=keys)
 
-    monkeypatch.setattr(query_service_module, "build_key_response", lambda key: {"id": key.id})
+    monkeypatch.setattr(
+        query_service_module,
+        "build_key_response",
+        lambda key, provider_type=None: {"id": key.id, "provider_type": provider_type},
+    )
 
-    result = list_provider_keys_responses(cast(Any, db), provider_id="p1", skip=0, limit=10)
-    assert result == [{"id": "k1"}, {"id": "k2"}]
+    result = list_provider_keys_responses(
+        cast(Any, db), provider_id="p1", skip=0, limit=10
+    )
+    assert result == [
+        {"id": "k1", "provider_type": None},
+        {"id": "k2", "provider_type": None},
+    ]

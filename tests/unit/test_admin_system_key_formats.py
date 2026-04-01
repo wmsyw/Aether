@@ -77,6 +77,18 @@ def test_import_key_api_formats_keeps_explicit_empty_list() -> None:
     assert result == []
 
 
+def test_import_key_formats_for_storage_keeps_canonical_lowercase() -> None:
+    formats, missing = (
+        AdminImportConfigAdapter._normalize_import_key_formats_for_storage(
+            [" OPENAI:CHAT ", "openai:cli", "openai:cli"],
+            {"openai:chat", "openai:cli"},
+        )
+    )
+
+    assert formats == ["openai:chat", "openai:cli"]
+    assert missing == []
+
+
 class _FakeCrypto:
     def encrypt(self, value: str) -> str:
         return f"enc:{value}"

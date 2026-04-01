@@ -39,6 +39,7 @@ from src.models.endpoint_models import (
     ProviderUpdateRequest,
     ProviderWithEndpointsSummary,
 )
+from src.services.provider.format import normalize_endpoint_signature_list
 from src.services.cache.model_cache import ModelCacheService
 from src.services.cache.provider_cache import ProviderCacheService
 from src.utils.cache_decorator import cache_result
@@ -54,7 +55,9 @@ router = APIRouter(tags=["Provider Summary"])
 pipeline = get_pipeline()
 
 
-def _provider_summary_ordering(provider_model: _HasProviderSortFields) -> tuple[Any, Any, Any]:
+def _provider_summary_ordering(
+    provider_model: _HasProviderSortFields,
+) -> tuple[Any, Any, Any]:
     """Provider 摘要列表排序：启用在前，其次按优先级与创建时间。"""
     return (
         case((provider_model.is_active == True, 0), else_=1).asc(),
@@ -83,7 +86,9 @@ async def get_providers_summary(
         api_format=api_format,
         model_id=model_id,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/{provider_id}/summary", response_model=ProviderWithEndpointsSummary)
@@ -130,15 +135,22 @@ async def get_provider_summary(
     - `updated_at`: 更新时间
     """
     adapter = AdminProviderDetailAdapter(provider_id=provider_id)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
-@router.get("/{provider_id}/health-monitor", response_model=ProviderEndpointHealthMonitorResponse)
+@router.get(
+    "/{provider_id}/health-monitor",
+    response_model=ProviderEndpointHealthMonitorResponse,
+)
 async def get_provider_health_monitor(
     provider_id: str,
     request: Request,
     lookback_hours: int = Query(6, ge=1, le=72, description="回溯的小时数"),
-    per_endpoint_limit: int = Query(48, ge=10, le=200, description="每个端点的事件数量"),
+    per_endpoint_limit: int = Query(
+        48, ge=10, le=200, description="每个端点的事件数量"
+    ),
     db: Session = Depends(get_db),
 ) -> ProviderEndpointHealthMonitorResponse:
     """
@@ -175,7 +187,9 @@ async def get_provider_health_monitor(
         lookback_hours=lookback_hours,
         per_endpoint_limit=per_endpoint_limit,
     )
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.patch("/{provider_id}", response_model=ProviderWithEndpointsSummary)
@@ -210,8 +224,12 @@ async def update_provider_settings(
     **返回字段**: 返回更新后的提供商摘要信息（与 GET /summary 接口返回格式相同）
     """
 
-    adapter = AdminUpdateProviderSettingsAdapter(provider_id=provider_id, update_data=update_data)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    adapter = AdminUpdateProviderSettingsAdapter(
+        provider_id=provider_id, update_data=update_data
+    )
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 def _extract_pool_advanced_from_config(
@@ -314,7 +332,9 @@ def _extract_failover_rules_from_config(
         return None
 
 
-def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndpointsSummary:
+def _build_provider_summary(
+    db: Session, provider: Provider
+) -> ProviderWithEndpointsSummary:
     endpoints = (
         db.query(ProviderEndpoint)
         .options(
@@ -332,7 +352,9 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
     key_stats = (
         db.query(
             func.count(ProviderAPIKey.id).label("total"),
-            func.sum(case((ProviderAPIKey.is_active == True, 1), else_=0)).label("active"),
+            func.sum(case((ProviderAPIKey.is_active == True, 1), else_=0)).label(
+                "active"
+            ),
         )
         .filter(ProviderAPIKey.provider_id == provider.id)
         .first()
@@ -409,7 +431,7 @@ def _compose_provider_summary(
     format_to_endpoint_id: dict[str, str] = {e.api_format: e.id for e in endpoints}
     keys_by_endpoint: dict[str, list[ProviderAPIKey]] = {e.id: [] for e in endpoints}
     for key in all_keys:
-        formats = key.api_formats or []
+        formats = normalize_endpoint_signature_list(key.api_formats)
         for fmt in formats:
             endpoint_id = format_to_endpoint_id.get(fmt)
             if endpoint_id:
@@ -429,13 +451,17 @@ def _compose_provider_summary(
                         health_scores.append(float(score))
                 else:
                     health_scores.append(1.0)
-            avg_health = sum(health_scores) / len(health_scores) if health_scores else 1.0
+            avg_health = (
+                sum(health_scores) / len(health_scores) if health_scores else 1.0
+            )
             endpoint_health_map[endpoint.id] = avg_health
         else:
             endpoint_health_map[endpoint.id] = 1.0
 
     all_health_scores = list(endpoint_health_map.values())
-    avg_health_score = sum(all_health_scores) / len(all_health_scores) if all_health_scores else 1.0
+    avg_health_score = (
+        sum(all_health_scores) / len(all_health_scores) if all_health_scores else 1.0
+    )
     unhealthy_endpoints = sum(1 for score in all_health_scores if score < 0.5)
 
     active_keys_by_endpoint: dict[str, int] = {}
@@ -454,7 +480,9 @@ def _compose_provider_summary(
     ]
 
     provider_config_raw = provider.config
-    provider_config = provider_config_raw if isinstance(provider_config_raw, dict) else {}
+    provider_config = (
+        provider_config_raw if isinstance(provider_config_raw, dict) else {}
+    )
     if provider_config_raw is not None and not isinstance(provider_config_raw, dict):
         logger.warning(
             "Provider {} 的 config 类型无效: {}，按空配置处理",
@@ -569,7 +597,9 @@ def _build_provider_summaries_batch(
         db.query(
             ProviderAPIKey.provider_id.label("provider_id"),
             func.count(ProviderAPIKey.id).label("total"),
-            func.sum(case((ProviderAPIKey.is_active == True, 1), else_=0)).label("active"),
+            func.sum(case((ProviderAPIKey.is_active == True, 1), else_=0)).label(
+                "active"
+            ),
         )
         .filter(ProviderAPIKey.provider_id.in_(provider_ids))
         .group_by(ProviderAPIKey.provider_id)
@@ -613,7 +643,9 @@ def _build_provider_summaries_batch(
     )
     global_model_ids_by_provider: dict[str, list[Any]] = {}
     for provider_id, global_model_id in global_model_rows:
-        global_model_ids_by_provider.setdefault(str(provider_id), []).append(global_model_id)
+        global_model_ids_by_provider.setdefault(str(provider_id), []).append(
+            global_model_id
+        )
 
     summaries: list[ProviderWithEndpointsSummary] = []
     for provider in providers:
@@ -726,7 +758,9 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
             .all()
         )
 
-        events_by_endpoint: dict[str, list[EndpointHealthEvent]] = {eid: [] for eid in endpoint_ids}
+        events_by_endpoint: dict[str, list[EndpointHealthEvent]] = {
+            eid: [] for eid in endpoint_ids
+        }
         for row in attempt_rows:
             endpoint_id = str(row.endpoint_id) if row.endpoint_id is not None else ""
             if not endpoint_id or endpoint_id not in events_by_endpoint:
@@ -884,7 +918,9 @@ class AdminUpdateProviderSettingsAdapter(AdminApiAdapter):
         update_dict = self.update_data.model_dump(exclude_unset=True)
         if "claude_code_advanced" in update_dict:
             claude_advanced = update_dict.pop("claude_code_advanced")
-            provider_type = str(getattr(provider, "provider_type", "") or "").strip().lower()
+            provider_type = (
+                str(getattr(provider, "provider_type", "") or "").strip().lower()
+            )
             if claude_advanced is not None and provider_type != "claude_code":
                 raise InvalidRequestException(
                     "claude_code_advanced 仅适用于 provider_type=claude_code"
@@ -907,7 +943,9 @@ class AdminUpdateProviderSettingsAdapter(AdminApiAdapter):
             update_dict["config"] = provider_config or None
 
         if "billing_type" in update_dict and update_dict["billing_type"] is not None:
-            update_dict["billing_type"] = ProviderBillingType(update_dict["billing_type"])
+            update_dict["billing_type"] = ProviderBillingType(
+                update_dict["billing_type"]
+            )
 
         for key, value in update_dict.items():
             setattr(provider, key, value)
@@ -920,7 +958,10 @@ class AdminUpdateProviderSettingsAdapter(AdminApiAdapter):
         logger.info(f"Provider {provider.name} updated by {admin_name}: {update_dict}")
 
         # 缓存失效
-        affects_model_visibility = {"is_active", "enable_format_conversion"} & update_dict.keys()
+        affects_model_visibility = {
+            "is_active",
+            "enable_format_conversion",
+        } & update_dict.keys()
         if affects_model_visibility:
             await invalidate_models_list_cache()
             if "is_active" in update_dict:

@@ -19,7 +19,13 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session, load_only
 
 from src.core.logger import logger
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, RequestCandidate
+from src.models.database import (
+    Provider,
+    ProviderAPIKey,
+    ProviderEndpoint,
+    RequestCandidate,
+)
+from src.services.provider.format import normalize_endpoint_signature_list
 
 # 缓存配置
 CACHE_TTL_SECONDS = 30  # 缓存 30 秒
@@ -105,7 +111,7 @@ class EndpointHealthService:
         # 按 api_format 分组密钥（通过 api_formats 字段）
         keys_by_format: dict[str, list[ProviderAPIKey]] = defaultdict(list)
         for key in all_keys:
-            for fmt in key.api_formats or []:
+            for fmt in normalize_endpoint_signature_list(key.api_formats):
                 keys_by_format[fmt].append(key)
 
         # 按 API 格式聚合
@@ -194,10 +200,14 @@ class EndpointHealthService:
                 known_count = healthy_count + warning_count + unhealthy_count
 
                 if known_count > 0:
-                    avg_health = (healthy_count * 1.0 + warning_count * 0.8) / known_count
+                    avg_health = (
+                        healthy_count * 1.0 + warning_count * 0.8
+                    ) / known_count
                 else:
                     if stats["health_scores"]:
-                        avg_health = sum(stats["health_scores"]) / len(stats["health_scores"])
+                        avg_health = sum(stats["health_scores"]) / len(
+                            stats["health_scores"]
+                        )
                     elif stats["total_keys"] == 0:
                         avg_health = 0.0
                     else:
@@ -210,8 +220,12 @@ class EndpointHealthService:
                 "display_name": EndpointHealthService._format_display_name(api_format),
                 "health_score": avg_health,
                 "timeline": timeline,
-                "time_range_start": time_range_start.isoformat() if time_range_start else None,
-                "time_range_end": time_range_end.isoformat() if time_range_end else None,
+                "time_range_start": time_range_start.isoformat()
+                if time_range_start
+                else None,
+                "time_range_end": time_range_end.isoformat()
+                if time_range_end
+                else None,
             }
 
             if include_admin_fields:
@@ -291,7 +305,8 @@ class EndpointHealthService:
         final_statuses = ["success", "failed", "skipped"]
 
         segment_expr = func.floor(
-            func.extract("epoch", RequestCandidate.created_at - start_time) / segment_seconds
+            func.extract("epoch", RequestCandidate.created_at - start_time)
+            / segment_seconds
         ).label("segment_idx")
 
         candidate_stats = (
@@ -299,9 +314,9 @@ class EndpointHealthService:
                 RequestCandidate.endpoint_id,
                 segment_expr,
                 func.count(RequestCandidate.id).label("total_count"),
-                func.sum(case((RequestCandidate.status == "success", 1), else_=0)).label(
-                    "success_count"
-                ),
+                func.sum(
+                    case((RequestCandidate.status == "success", 1), else_=0)
+                ).label("success_count"),
                 func.sum(case((RequestCandidate.status == "failed", 1), else_=0)).label(
                     "failed_count"
                 ),
@@ -349,10 +364,16 @@ class EndpointHealthService:
                 seg_data["failed"] += row.failed_count or 0
 
                 if row.min_time:
-                    if seg_data["min_time"] is None or row.min_time < seg_data["min_time"]:
+                    if (
+                        seg_data["min_time"] is None
+                        or row.min_time < seg_data["min_time"]
+                    ):
                         seg_data["min_time"] = row.min_time
                 if row.max_time:
-                    if seg_data["max_time"] is None or row.max_time > seg_data["max_time"]:
+                    if (
+                        seg_data["max_time"] is None
+                        or row.max_time > seg_data["max_time"]
+                    ):
                         seg_data["max_time"] = row.max_time
 
         # 生成各格式的时间线
@@ -454,7 +475,9 @@ class EndpointHealthService:
             return raw or api_format
 
         fam, kind = normalized.split(":", 1)
-        fam_label = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}.get(fam, fam)
+        fam_label = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}.get(
+            fam, fam
+        )
         kind_label = {
             "chat": "Chat",
             "cli": "CLI",
