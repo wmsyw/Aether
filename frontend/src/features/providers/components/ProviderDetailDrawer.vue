@@ -1134,7 +1134,7 @@ import {
   sortApiFormats,
 } from '@/api/endpoints'
 import type { UpstreamMetadata, AntigravityModelQuota } from '@/api/endpoints/types'
-import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { formatApiFormat, normalizeApiFormats } from '@/api/endpoints/types/api-format'
 import { isOAuthAccountProviderType, isKeyManagedProviderType } from '../utils/providerTypeUtils'
 import { getOAuthOrgBadge } from '@/utils/oauthIdentity'
 import { getOAuthRefreshFeedback } from '@/utils/oauthRefreshFeedback'
@@ -2396,8 +2396,7 @@ function getKeyApiFormats(key: EndpointAPIKey, endpoint?: ProviderEndpointWithKe
   } else if (endpoint) {
     formats = [endpoint.api_format]
   }
-  // 使用统一的排序函数
-  return sortApiFormats(formats)
+  return sortApiFormats(normalizeApiFormats(formats))
 }
 
 // 获取密钥在指定 API 格式下的成本倍率

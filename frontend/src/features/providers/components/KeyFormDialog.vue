@@ -350,7 +350,11 @@ import {
   type CapabilityDefinition,
   type ProviderType
 } from '@/api/endpoints'
-import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import {
+  formatApiFormat,
+  normalizeApiFormatKey,
+  normalizeApiFormats,
+} from '@/api/endpoints/types/api-format'
 
 const props = defineProps<{
   open: boolean
@@ -376,7 +380,7 @@ function getVertexAllowedFormatsByAuth(authType: 'api_key' | 'service_account'):
 }
 
 function normalizeApiFormat(format: string): string {
-  return String(format || '').trim().toLowerCase()
+  return normalizeApiFormatKey(format)
 }
 
 function getAvailableApiFormatSet(): Set<string> {
@@ -389,7 +393,7 @@ function filterAvailableApiFormats(formats: string[]): string[] {
     return []
   }
 
-  return formats.filter(format => availableFormatSet.has(normalizeApiFormat(format)))
+  return normalizeApiFormats(formats).filter(format => availableFormatSet.has(format))
 }
 
 function getDefaultApiFormats(): string[] {
