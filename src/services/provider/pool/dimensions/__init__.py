@@ -16,6 +16,7 @@ from . import plus_first  # noqa: F401
 from . import priority_first  # noqa: F401
 from . import quota_balanced  # noqa: F401
 from . import recent_refresh  # noqa: F401
+from . import round_robin  # noqa: F401
 from . import single_account  # noqa: F401
 from . import team_first  # noqa: F401
 from .registry import (

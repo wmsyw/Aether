@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.services.provider.pool.config import PoolConfig, SchedulingPreset, ScoringWeights
+from src.services.provider.pool.config import (
+    PoolConfig,
+    SchedulingPreset,
+    ScoringWeights,
+)
 from src.services.provider.pool.manager import PoolManager
 
 
@@ -15,9 +20,9 @@ def _make_candidate(
     key_id: str,
     *,
     is_skipped: bool = False,
-    upstream_metadata: dict | None = None,
+    upstream_metadata: dict[str, object] | None = None,
     oauth_invalid_reason: str | None = None,
-) -> SimpleNamespace:
+) -> Any:
     return SimpleNamespace(
         key=SimpleNamespace(
             id=key_id,
@@ -142,7 +147,9 @@ async def test_reorder_account_blocked_keys_are_skipped() -> None:
     pool = PoolManager("provider-1", PoolConfig(), provider_type="kiro")
     c1 = _make_candidate(
         "key-1",
-        upstream_metadata={"kiro": {"is_banned": True, "ban_reason": "account suspended"}},
+        upstream_metadata={
+            "kiro": {"is_banned": True, "ban_reason": "account suspended"}
+        },
     )
     c2 = _make_candidate("key-2")
 
@@ -168,8 +175,10 @@ async def test_reorder_account_blocked_keys_are_skipped() -> None:
     assert c1.is_skipped is True
     assert "account blocked" in (c1.skip_reason or "")
     assert result[0].key.id == "key-2"
-    assert c1._pool_extra_data["pool_skip"]["type"] == "account_blocked"
-    assert c1._pool_extra_data["pool_skip"]["account_block_label"] == "账号封禁"
+    extra = getattr(c1, "_pool_extra_data", None)
+    assert extra is not None
+    assert extra["pool_skip"]["type"] == "account_blocked"
+    assert extra["pool_skip"]["account_block_label"] == "账号封禁"
 
 
 @pytest.mark.asyncio
@@ -179,7 +188,9 @@ async def test_reorder_multi_score_uses_composite_score() -> None:
         PoolConfig(
             scheduling_mode="multi_score",
             strategies=("multi_score",),
-            scoring_weights=ScoringWeights(lru=0.0, latency=1.0, health=0.0, cost_remaining=0.0),
+            scoring_weights=ScoringWeights(
+                lru=0.0, latency=1.0, health=0.0, cost_remaining=0.0
+            ),
         ),
     )
     c1 = _make_candidate("key-1")
@@ -210,8 +221,10 @@ async def test_reorder_multi_score_uses_composite_score() -> None:
         result = await pool.reorder_candidates(None, [c1, c2])
 
     assert result[0].key.id == "key-2"
-    assert result[0]._pool_extra_data["pool_selection"]["reason"] == "multi_score"
-    assert result[0]._pool_extra_data["pool_selection"]["scoring_mode"] == "multi_score"
+    extra = getattr(result[0], "_pool_extra_data", None)
+    assert extra is not None
+    assert extra["pool_selection"]["reason"] == "multi_score"
+    assert extra["pool_selection"]["scoring_mode"] == "multi_score"
 
 
 @pytest.mark.asyncio
@@ -254,6 +267,145 @@ async def test_reorder_multi_score_presets_free_team_first() -> None:
         result = await pool.reorder_candidates(None, [c1, c2])
 
     assert result[0].key.id == "key-2"
+
+
+@pytest.mark.asyncio
+async def test_reorder_multi_score_round_robin_uses_redis_cursor() -> None:
+    pool = PoolManager(
+        "provider-1",
+        PoolConfig(
+            scheduling_mode="multi_score",
+            strategies=("multi_score",),
+            scheduling_presets=(SchedulingPreset(preset="round_robin", enabled=True),),
+        ),
+    )
+    c1 = _make_candidate("key-1")
+    c2 = _make_candidate("key-2")
+    c3 = _make_candidate("key-3")
+
+    with (
+        patch(
+            "src.services.provider.pool.redis_ops.get_sticky_binding",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.batch_get_cooldowns",
+            new_callable=AsyncMock,
+            return_value={"key-1": None, "key-2": None, "key-3": None},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.get_lru_scores",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.batch_get_latency_avgs",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.next_round_robin_cursor",
+            new_callable=AsyncMock,
+            return_value=1,
+        ) as mock_cursor,
+    ):
+        result = await pool.reorder_candidates(None, [c1, c2, c3])
+
+    mock_cursor.assert_called_once_with("provider-1")
+    assert [item.key.id for item in result[:3]] == ["key-2", "key-3", "key-1"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_multi_score_round_robin_rotates_over_available_keys_only() -> (
+    None
+):
+    pool = PoolManager(
+        "provider-1",
+        PoolConfig(
+            scheduling_mode="multi_score",
+            strategies=("multi_score",),
+            scheduling_presets=(SchedulingPreset(preset="round_robin", enabled=True),),
+        ),
+    )
+    c1 = _make_candidate("key-1")
+    c2 = _make_candidate("key-2")
+    c3 = _make_candidate("key-3")
+
+    with (
+        patch(
+            "src.services.provider.pool.redis_ops.get_sticky_binding",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.batch_get_cooldowns",
+            new_callable=AsyncMock,
+            return_value={"key-1": None, "key-2": "cooldown", "key-3": None},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.get_lru_scores",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.batch_get_latency_avgs",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.next_round_robin_cursor",
+            new_callable=AsyncMock,
+            return_value=2,
+        ),
+    ):
+        result = await pool.reorder_candidates(None, [c1, c2, c3])
+
+    available = [item.key.id for item in result if not item.is_skipped]
+    assert available == ["key-1", "key-3"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_multi_score_round_robin_supports_legacy_string_preset() -> None:
+    config = PoolConfig(
+        scheduling_mode="multi_score",
+        strategies=("multi_score",),
+    )
+    object.__setattr__(config, "scheduling_presets", ("round_robin",))
+    pool = PoolManager("provider-1", config)
+    c1 = _make_candidate("key-1")
+    c2 = _make_candidate("key-2")
+
+    with (
+        patch(
+            "src.services.provider.pool.redis_ops.get_sticky_binding",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.batch_get_cooldowns",
+            new_callable=AsyncMock,
+            return_value={"key-1": None, "key-2": None},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.get_lru_scores",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.batch_get_latency_avgs",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "src.services.provider.pool.redis_ops.next_round_robin_cursor",
+            new_callable=AsyncMock,
+            return_value=0,
+        ) as mock_cursor,
+    ):
+        await pool.reorder_candidates(None, [c1, c2])
+
+    mock_cursor.assert_called_once_with("provider-1")
 
 
 @pytest.mark.asyncio
@@ -313,7 +465,9 @@ async def test_on_request_success_binds_sticky_and_touches_lru(
             new_callable=AsyncMock,
         ) as mock_cost,
     ):
-        await pool.on_request_success(session_uuid="sess-1", key_id="key-1", tokens_used=0)
+        await pool.on_request_success(
+            session_uuid="sess-1", key_id="key-1", tokens_used=0
+        )
 
     mock_sticky.assert_called_once_with("provider-1", "sess-1", "key-1", 3600)
     mock_lru.assert_called_once_with("provider-1", "key-1")
@@ -340,7 +494,9 @@ async def test_on_request_success_records_cost_when_configured() -> None:
             new_callable=AsyncMock,
         ) as mock_cost,
     ):
-        await pool.on_request_success(session_uuid="sess-1", key_id="key-1", tokens_used=500)
+        await pool.on_request_success(
+            session_uuid="sess-1", key_id="key-1", tokens_used=500
+        )
 
     mock_cost.assert_called_once_with("provider-1", "key-1", 500, 18000)
 

@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeVar
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from src.core.logger import logger
 from src.services.provider.pool import redis_ops
@@ -28,6 +28,12 @@ from src.services.provider.pool.trace import PoolCandidateTrace, PoolSchedulingT
 if TYPE_CHECKING:
     from src.models.database import ProviderAPIKey
     from src.services.scheduling.schemas import ProviderCandidate
+
+
+class PoolCandidateLike(Protocol):
+    key: ProviderAPIKey
+    is_skipped: bool
+    skip_reason: str | None
 
 
 class PoolManager:
@@ -52,8 +58,8 @@ class PoolManager:
     async def reorder_candidates(
         self,
         session_uuid: str | None,
-        candidates: list[ProviderCandidate],
-    ) -> list[ProviderCandidate]:
+        candidates: Sequence[PoolCandidateLike],
+    ) -> list[PoolCandidateLike]:
         """Reorder *candidates* according to pool rules.
 
         The returned list keeps the same elements but in a new order:
@@ -72,7 +78,7 @@ class PoolManager:
         attributes on candidate objects.
         """
         if not candidates:
-            return candidates
+            return list(candidates)
 
         pid = self.provider_id
 
@@ -113,7 +119,9 @@ class PoolManager:
         provider_type = self.provider_type
         if provider_type is None and candidates:
             first_provider = getattr(candidates[0], "provider", None)
-            provider_type = str(getattr(first_provider, "provider_type", "") or "").strip().lower()
+            provider_type = (
+                str(getattr(first_provider, "provider_type", "") or "").strip().lower()
+            )
             if not provider_type:
                 provider_type = None
 
@@ -123,9 +131,13 @@ class PoolManager:
         # Fire independent Redis queries concurrently.
         # Only fetch reason (no TTL) on the scheduling hot path -- TTL is only
         # used for trace display and costs an extra pipeline command per key.
-        _cooldown_coro = redis_ops.batch_get_cooldowns(pid, all_key_ids, include_ttl=False)
+        _cooldown_coro = redis_ops.batch_get_cooldowns(
+            pid, all_key_ids, include_ttl=False
+        )
         _cost_coro = (
-            redis_ops.batch_get_cost_totals(pid, all_key_ids, self.config.cost_window_seconds)
+            redis_ops.batch_get_cost_totals(
+                pid, all_key_ids, self.config.cost_window_seconds
+            )
             if (
                 self.config.cost_limit_per_key_tokens is not None
                 or self.config.scheduling_mode == "multi_score"
@@ -135,12 +147,23 @@ class PoolManager:
         # LRU scores are needed both for plain LRU sorting and for multi_score
         # dimensions (e.g. cache_affinity / single_account) that rely on
         # lru_scores data.
-        _need_lru = self.config.lru_enabled or self.config.scheduling_mode == "multi_score"
+        _need_lru = (
+            self.config.lru_enabled or self.config.scheduling_mode == "multi_score"
+        )
         _lru_coro = redis_ops.get_lru_scores(pid, all_key_ids) if _need_lru else None
         _latency_coro = (
-            redis_ops.batch_get_latency_avgs(pid, all_key_ids, self.config.latency_window_seconds)
+            redis_ops.batch_get_latency_avgs(
+                pid, all_key_ids, self.config.latency_window_seconds
+            )
             if self.config.scheduling_mode == "multi_score"
             else None
+        )
+        round_robin_enabled = (
+            self.config.scheduling_mode == "multi_score"
+            and _has_enabled_preset(self.config, "round_robin")
+        )
+        _round_robin_coro = (
+            redis_ops.next_round_robin_cursor(pid) if round_robin_enabled else None
         )
 
         # Gather all non-None coroutines in parallel.
@@ -148,6 +171,7 @@ class PoolManager:
         _cost_idx = -1
         _lru_idx = -1
         _latency_idx = -1
+        _round_robin_idx = -1
         if _cost_coro is not None:
             _cost_idx = len(coros)
             coros.append(_cost_coro)
@@ -157,6 +181,9 @@ class PoolManager:
         if _latency_coro is not None:
             _latency_idx = len(coros)
             coros.append(_latency_coro)
+        if _round_robin_coro is not None:
+            _round_robin_idx = len(coros)
+            coros.append(_round_robin_coro)
 
         gathered = await asyncio.gather(*coros)
 
@@ -186,10 +213,19 @@ class PoolManager:
         if _latency_idx >= 0:
             latency_avgs = gathered[_latency_idx]
 
+        round_robin_cursor: int | None = None
+        if _round_robin_idx >= 0:
+            try:
+                round_robin_cursor = int(gathered[_round_robin_idx])
+            except (TypeError, ValueError):
+                round_robin_cursor = 0
+
         # Health scores (TTL cached, no Redis round-trip) -- only needed for multi_score
         health_scores: dict[str, float] = {}
         if self.config.scheduling_mode == "multi_score":
             health_scores = get_health_scores(pid, [c.key for c in candidates])
+
+        round_robin_key_ids = _round_robin_key_ids(all_key_ids)
 
         strategy_context.update(
             {
@@ -201,6 +237,10 @@ class PoolManager:
                 "latency_avgs": latency_avgs,
                 "health_scores": health_scores,
                 "keys_by_id": {str(c.key.id): c.key for c in candidates},
+                "round_robin_cursor": round_robin_cursor,
+                "round_robin_positions": {
+                    kid: idx for idx, kid in enumerate(round_robin_key_ids)
+                },
             }
         )
 
@@ -236,12 +276,14 @@ class PoolManager:
                     account_states[kid] = resolve_pool_account_state(
                         provider_type=provider_type,
                         upstream_metadata=getattr(c.key, "upstream_metadata", None),
-                        oauth_invalid_reason=getattr(c.key, "oauth_invalid_reason", None),
+                        oauth_invalid_reason=getattr(
+                            c.key, "oauth_invalid_reason", None
+                        ),
                     )
 
-        sticky_candidate: ProviderCandidate | None = None
-        available: list[ProviderCandidate] = []
-        skipped: list[ProviderCandidate] = []
+        sticky_candidate: PoolCandidateLike | None = None
+        available: list[PoolCandidateLike] = []
+        skipped: list[PoolCandidateLike] = []
 
         for c in candidates:
             kid = str(c.key.id)
@@ -264,7 +306,9 @@ class PoolManager:
             account_state = account_states[kid]
             if account_state.blocked:
                 c.is_skipped = True
-                skip_reason = account_state.reason or account_state.label or "account blocked"
+                skip_reason = (
+                    account_state.reason or account_state.label or "account blocked"
+                )
                 c.skip_reason = f"pool account blocked: {skip_reason}"
                 skipped.append(c)
                 ct.skipped = True
@@ -310,7 +354,10 @@ class PoolManager:
                 trace.sticky_session_used = True
             else:
                 available.append(c)
-                if kid in custom_scores and self.config.scheduling_mode == "multi_score":
+                if (
+                    kid in custom_scores
+                    and self.config.scheduling_mode == "multi_score"
+                ):
                     ct.reason = "multi_score"
                 else:
                     ct.reason = "lru" if lru_scores.get(kid, 0) > 0 else "random"
@@ -323,6 +370,36 @@ class PoolManager:
             _attach_pool_extra(c, ct)
             trace.candidate_traces[kid] = ct
 
+        if round_robin_enabled and available:
+            eligible_key_ids = _round_robin_key_ids(str(c.key.id) for c in available)
+            eligible_context = dict(strategy_context)
+            eligible_context["all_key_ids"] = eligible_key_ids
+            eligible_context["keys_by_id"] = {str(c.key.id): c.key for c in available}
+            eligible_context["round_robin_positions"] = {
+                kid: idx for idx, kid in enumerate(eligible_key_ids)
+            }
+
+            for strategy in strategies:
+                if not hasattr(strategy, "compute_score"):
+                    continue
+                for kid in eligible_key_ids:
+                    try:
+                        custom = strategy.compute_score(
+                            key_id=kid,
+                            config=self.config,
+                            context=eligible_context,
+                        )
+                        if custom is None:
+                            continue
+                        score = float(custom)
+                        custom_scores[kid] = score
+                        lru_scores[kid] = score
+                        candidate_trace = trace.candidate_traces.get(kid)
+                        if candidate_trace is not None:
+                            candidate_trace.composite_score = score
+                    except Exception:
+                        pass
+
         # --- 4. Sort available by LRU ---------------------------------
         if lru_scores and available:
             available.sort(key=lambda c: lru_scores.get(str(c.key.id), 0.0))
@@ -332,7 +409,7 @@ class PoolManager:
             _shuffle_same_score_groups(available, lru_scores)
 
         # --- 5. Assemble final order ----------------------------------
-        result: list[ProviderCandidate] = []
+        result: list[PoolCandidateLike] = []
         if sticky_candidate is not None:
             result.append(sticky_candidate)
         result.extend(available)
@@ -413,7 +490,7 @@ class PoolManager:
                 self.key = key
                 self.is_skipped = False
                 self.skip_reason: str | None = None
-                self._pool_extra_data: dict | None = None
+                self._pool_extra_data: dict[str, object] | None = None
                 self._pool_scheduling_trace: PoolSchedulingTrace | None = None
 
         wrappers = [_KeyCandidate(k) for k in keys]
@@ -441,7 +518,9 @@ class PoolManager:
             setattr(key, "_pool_order_index", order_idx)
             pool_extra = getattr(wrapped, "_pool_extra_data", None)
             setattr(
-                key, "_pool_extra_data", dict(pool_extra) if isinstance(pool_extra, dict) else {}
+                key,
+                "_pool_extra_data",
+                dict(pool_extra) if isinstance(pool_extra, dict) else {},
             )
             ordered_keys.append(key)
 
@@ -458,7 +537,9 @@ class PoolManager:
                     setattr(key, "_pool_skipped", True)
                     setattr(key, "_pool_skip_reason", "deferred")
                     continue
-                is_available, skip_reason_check, mapping_model = availability_checker(key)
+                is_available, skip_reason_check, mapping_model = availability_checker(
+                    key
+                )
                 if not is_available:
                     setattr(key, "_pool_skipped", True)
                     setattr(key, "_pool_skip_reason", skip_reason_check)
@@ -504,7 +585,11 @@ class PoolManager:
             )
 
         # Record latency sample for multi-score scheduling.
-        if self.config.scheduling_mode == "multi_score" and ttfb_ms is not None and ttfb_ms >= 0:
+        if (
+            self.config.scheduling_mode == "multi_score"
+            and ttfb_ms is not None
+            and ttfb_ms >= 0
+        ):
             await redis_ops.record_latency(
                 pid,
                 key_id,
@@ -578,6 +663,24 @@ def _attach_pool_extra(candidate: Any, ct: PoolCandidateTrace) -> None:
     setattr(candidate, "_pool_extra_data", existing)
 
 
+def _has_enabled_preset(config: PoolConfig, preset_name: str) -> bool:
+    normalized = preset_name.strip().lower()
+    for item in getattr(config, "scheduling_presets", ()):
+        if isinstance(item, str):
+            if item.strip().lower() == normalized:
+                return True
+            continue
+        if str(getattr(item, "preset", "")).strip().lower() == normalized and bool(
+            getattr(item, "enabled", True)
+        ):
+            return True
+    return False
+
+
+def _round_robin_key_ids(key_ids: Iterable[str]) -> list[str]:
+    return sorted(dict.fromkeys(kid for kid in key_ids if kid))
+
+
 def _get_active_strategies(config: PoolConfig) -> list[Any]:
     """Get active strategies for the given config (lazy import)."""
     if not config.strategies:
@@ -615,7 +718,7 @@ def _shuffle_same_score(
 
 
 def _shuffle_same_score_groups(
-    candidates: list[ProviderCandidate],
+    candidates: list[PoolCandidateLike],
     lru_scores: dict[str, float],
 ) -> None:
     _shuffle_same_score(candidates, lru_scores, lambda c: str(c.key.id))

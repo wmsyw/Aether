@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from src.services.provider.pool.config import PoolConfig, SchedulingPreset, ScoringWeights
+from src.services.provider.pool.config import (
+    PoolConfig,
+    SchedulingPreset,
+    ScoringWeights,
+)
 from src.services.provider.pool.strategies.multi_score import MultiScoreStrategy
 from src.services.provider.pool.strategy import get_pool_strategy
 
 
-def _context() -> dict:
+def _context() -> dict[str, object]:
     return {
         "all_key_ids": ["k1", "k2", "k3"],
         "lru_scores": {"k1": 100.0, "k2": 200.0, "k3": 300.0},
@@ -19,7 +23,9 @@ def _context() -> dict:
     }
 
 
-def _key_with_metadata(metadata: dict, **kwargs: object) -> SimpleNamespace:
+def _key_with_metadata(
+    metadata: dict[str, object], **kwargs: object
+) -> SimpleNamespace:
     return SimpleNamespace(upstream_metadata=metadata, **kwargs)
 
 
@@ -35,7 +41,9 @@ def test_multi_score_prefers_low_latency_when_latency_weight_is_high() -> None:
     cfg = PoolConfig(
         scheduling_mode="multi_score",
         scheduling_presets=(),
-        scoring_weights=ScoringWeights(lru=0.0, latency=1.0, health=0.0, cost_remaining=0.0),
+        scoring_weights=ScoringWeights(
+            lru=0.0, latency=1.0, health=0.0, cost_remaining=0.0
+        ),
     )
     ctx = _context()
     s1 = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
@@ -50,7 +58,9 @@ def test_multi_score_combines_health_and_cost() -> None:
     cfg = PoolConfig(
         scheduling_mode="multi_score",
         scheduling_presets=(),
-        scoring_weights=ScoringWeights(lru=0.0, latency=0.0, health=0.5, cost_remaining=0.5),
+        scoring_weights=ScoringWeights(
+            lru=0.0, latency=0.0, health=0.5, cost_remaining=0.5
+        ),
         cost_limit_per_key_tokens=1000,
     )
     ctx = _context()
@@ -69,7 +79,9 @@ def test_multi_score_preset_free_team_first_prefers_free_or_team() -> None:
     strategy = MultiScoreStrategy()
     cfg = PoolConfig(
         scheduling_mode="multi_score",
-        scheduling_presets=(SchedulingPreset(preset="free_team_first", enabled=True, mode="both"),),
+        scheduling_presets=(
+            SchedulingPreset(preset="free_team_first", enabled=True, mode="both"),
+        ),
     )
     ctx = {
         "all_key_ids": ["k1", "k2", "k3"],
@@ -240,7 +252,9 @@ def test_multi_score_codex_recent_refresh_can_be_explicitly_disabled() -> None:
     assert s1 < s2
 
 
-def test_multi_score_preset_single_account_prefers_internal_priority_then_reverse_lru() -> None:
+def test_multi_score_preset_single_account_prefers_internal_priority_then_reverse_lru() -> (
+    None
+):
     strategy = MultiScoreStrategy()
     cfg = PoolConfig(
         scheduling_mode="multi_score",
@@ -282,6 +296,46 @@ def test_multi_score_preset_priority_first_prefers_low_internal_priority() -> No
     s3 = strategy.compute_score(key_id="k3", config=cfg, context=ctx)
     assert s1 is not None and s2 is not None and s3 is not None
     assert s2 < s3 < s1
+
+
+def test_multi_score_preset_round_robin_rotates_by_redis_cursor() -> None:
+    strategy = MultiScoreStrategy()
+    cfg = PoolConfig(
+        scheduling_mode="multi_score",
+        scheduling_presets=(SchedulingPreset(preset="round_robin", enabled=True),),
+    )
+    ctx = {
+        "all_key_ids": ["k1", "k2", "k3"],
+        "lru_scores": {},
+        "round_robin_cursor": 1,
+        "round_robin_positions": {"k1": 0, "k2": 1, "k3": 2},
+    }
+    s1 = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
+    s2 = strategy.compute_score(key_id="k2", config=cfg, context=ctx)
+    s3 = strategy.compute_score(key_id="k3", config=cfg, context=ctx)
+    assert s1 is not None and s2 is not None and s3 is not None
+    assert s2 < s3 < s1
+
+
+def test_multi_score_round_robin_cache_signature_tracks_cursor() -> None:
+    strategy = MultiScoreStrategy()
+    cfg = PoolConfig(
+        scheduling_mode="multi_score",
+        scheduling_presets=(SchedulingPreset(preset="round_robin", enabled=True),),
+    )
+    ctx = {
+        "all_key_ids": ["k1", "k2", "k3"],
+        "lru_scores": {},
+        "round_robin_cursor": 0,
+        "round_robin_positions": {"k1": 0, "k2": 1, "k3": 2},
+    }
+
+    first = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
+    ctx["round_robin_cursor"] = 1
+    second = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
+
+    assert first is not None and second is not None
+    assert first < second
 
 
 def test_multi_score_lru_disabled_no_blend() -> None:
@@ -355,9 +409,15 @@ def test_multi_score_preset_hard_priority_overrides_later_presets() -> None:
         "all_key_ids": ["k1", "k2", "k3"],
         "lru_scores": {"k1": 100.0, "k2": 100.0, "k3": 100.0},
         "keys_by_id": {
-            "k1": _key_with_metadata({"codex": {"primary_used_percent": 90}}, internal_priority=1),
-            "k2": _key_with_metadata({"codex": {"primary_used_percent": 10}}, internal_priority=2),
-            "k3": _key_with_metadata({"codex": {"primary_used_percent": 50}}, internal_priority=3),
+            "k1": _key_with_metadata(
+                {"codex": {"primary_used_percent": 90}}, internal_priority=1
+            ),
+            "k2": _key_with_metadata(
+                {"codex": {"primary_used_percent": 10}}, internal_priority=2
+            ),
+            "k3": _key_with_metadata(
+                {"codex": {"primary_used_percent": 50}}, internal_priority=3
+            ),
         },
     }
     s1 = strategy.compute_score(key_id="k1", config=cfg, context=ctx)
@@ -383,9 +443,15 @@ def test_multi_score_mutex_group_selected_member_uses_group_priority_slot() -> N
         "all_key_ids": ["k1", "k2", "k3"],
         "lru_scores": {"k1": 100.0, "k2": 100.0, "k3": 100.0},
         "keys_by_id": {
-            "k1": _key_with_metadata({"codex": {"primary_used_percent": 90}}, internal_priority=1),
-            "k2": _key_with_metadata({"codex": {"primary_used_percent": 10}}, internal_priority=2),
-            "k3": _key_with_metadata({"codex": {"primary_used_percent": 20}}, internal_priority=3),
+            "k1": _key_with_metadata(
+                {"codex": {"primary_used_percent": 90}}, internal_priority=1
+            ),
+            "k2": _key_with_metadata(
+                {"codex": {"primary_used_percent": 10}}, internal_priority=2
+            ),
+            "k3": _key_with_metadata(
+                {"codex": {"primary_used_percent": 20}}, internal_priority=3
+            ),
         },
     }
     s1 = strategy.compute_score(key_id="k1", config=cfg, context=ctx)

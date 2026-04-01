@@ -8,7 +8,9 @@ import src.services.provider.pool.dimensions  # noqa: F401
 from src.services.provider.pool.dimensions import get_preset_dimension, get_preset_names
 
 
-def _key(metadata: dict, *, plan_type: str | None = None) -> SimpleNamespace:
+def _key(
+    metadata: dict[str, object], *, plan_type: str | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(upstream_metadata=metadata, oauth_plan_type=plan_type)
 
 
@@ -18,6 +20,7 @@ def test_registry_discovers_builtin_dimensions() -> None:
         "free_team_first",
         "recent_refresh",
         "quota_balanced",
+        "round_robin",
         "single_account",
         "priority_first",
         "health_first",
@@ -27,7 +30,7 @@ def test_registry_discovers_builtin_dimensions() -> None:
 
 
 def test_universal_dimensions_are_applicable_to_any_provider() -> None:
-    for name in ("quota_balanced", "single_account"):
+    for name in ("quota_balanced", "single_account", "round_robin"):
         dim = get_preset_dimension(name)
         assert dim is not None
         assert dim.is_applicable("openai") is True

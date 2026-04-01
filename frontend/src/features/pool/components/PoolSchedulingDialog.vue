@@ -7,7 +7,7 @@
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="space-y-6">
-      <!-- Section 1: 分配模式 (distribution_mode 互斥组, 四选一) -->
+      <!-- Section 1: 分配模式 (distribution_mode 互斥组, 多选一) -->
       <div class="space-y-3">
         <div class="space-y-1">
           <h3 class="text-sm font-medium border-b pb-2">
@@ -217,6 +217,16 @@ const FALLBACK_PRESET_DEFS: PoolPresetMeta[] = [
     description: '最久未使用的 Key 优先',
     mutex_group: DISTRIBUTION_GROUP,
     evidence_hint: '依据 LRU 时间戳（最近未使用优先）',
+    providers: [],
+    modes: null,
+    default_mode: null,
+  },
+  {
+    name: 'round_robin',
+    label: '轮询调度',
+    description: '基于 Redis 原子游标按固定顺序轮转 Key',
+    mutex_group: DISTRIBUTION_GROUP,
+    evidence_hint: '依据 Redis 原子自增游标，在稳定顺序上做轮转偏移',
     providers: [],
     modes: null,
     default_mode: null,

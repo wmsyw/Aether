@@ -8,6 +8,7 @@ Key schema
 ----------
 ap:{pid}:sticky:{session_uuid}             STRING  -> key_id   (TTL: config)
 ap:{pid}:lru                               ZSET    member=key_id, score=unix_ts
+ap:{pid}:round_robin                       STRING  -> atomic cursor counter
 ap:{pid}:cooldown:{key_id}                 STRING  -> reason   (TTL: error-specific)
 ap:{pid}:cost:{key_id}                     ZSET    member=req_id, score=unix_ts
 ap:{pid}:latency:{key_id}                  ZSET    member=req_id:ttfb_ms, score=unix_ts
@@ -16,6 +17,7 @@ provider_oauth_token_cache:{key_id}        STRING  -> access_token (TTL: expires
 
 from __future__ import annotations
 
+import inspect
 import time
 import uuid
 from typing import TYPE_CHECKING
@@ -44,6 +46,10 @@ def _cooldown_key(provider_id: str, key_id: str) -> str:
 def _cooldown_index_key(provider_id: str) -> str:
     """SET tracking which keys are in cooldown (for O(1) count queries)."""
     return f"{PREFIX}:{provider_id}:cooldown_idx"
+
+
+def _round_robin_key(provider_id: str) -> str:
+    return f"{PREFIX}:{provider_id}:round_robin"
 
 
 def _cost_key(provider_id: str, key_id: str) -> str:
@@ -130,23 +136,33 @@ async def _get_redis() -> "aioredis.Redis | None":
     return await get_redis_client(require_redis=False)
 
 
+async def _resolve_redis_call_result(result: object) -> object:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Sticky session
 # ---------------------------------------------------------------------------
 
 
-async def get_sticky_binding(provider_id: str, session_uuid: str, ttl: int) -> str | None:
+async def get_sticky_binding(
+    provider_id: str, session_uuid: str, ttl: int
+) -> str | None:
     """Get and refresh sticky session binding. Returns key_id or None."""
     redis = await _get_redis()
     if redis is None:
         return None
     try:
-        result = await redis.eval(
-            _STICKY_SELECT_LUA,
-            2,
-            _sticky_key(provider_id, session_uuid),
-            f"{PREFIX}:{provider_id}:cooldown:",
-            str(ttl),
+        result = await _resolve_redis_call_result(
+            redis.eval(
+                _STICKY_SELECT_LUA,
+                2,
+                _sticky_key(provider_id, session_uuid),
+                f"{PREFIX}:{provider_id}:cooldown:",
+                str(ttl),
+            )
         )
         if result:
             return result.decode() if isinstance(result, bytes) else str(result)
@@ -156,7 +172,9 @@ async def get_sticky_binding(provider_id: str, session_uuid: str, ttl: int) -> s
         return None
 
 
-async def set_sticky_binding(provider_id: str, session_uuid: str, key_id: str, ttl: int) -> None:
+async def set_sticky_binding(
+    provider_id: str, session_uuid: str, key_id: str, ttl: int
+) -> None:
     """Create or update sticky session binding."""
     redis = await _get_redis()
     if redis is None:
@@ -208,6 +226,18 @@ async def touch_lru(provider_id: str, key_id: str) -> None:
         await redis.zadd(_lru_key(provider_id), {key_id: time.time()})
     except Exception:
         pass
+
+
+async def next_round_robin_cursor(provider_id: str) -> int:
+    redis = await _get_redis()
+    if redis is None:
+        return 0
+    try:
+        cursor = await redis.incr(_round_robin_key(provider_id))
+        return max(int(cursor) - 1, 0)
+    except Exception:
+        logger.debug("Pool: round-robin INCR failed for provider {}", provider_id[:8])
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +355,9 @@ async def batch_get_cooldowns(
 # ---------------------------------------------------------------------------
 
 
-async def add_cost_entry(provider_id: str, key_id: str, tokens: int, window_seconds: int) -> None:
+async def add_cost_entry(
+    provider_id: str, key_id: str, tokens: int, window_seconds: int
+) -> None:
     """Record a cost entry (tokens used) with automatic window expiry."""
     redis = await _get_redis()
     if redis is None:
@@ -346,7 +378,9 @@ async def add_cost_entry(provider_id: str, key_id: str, tokens: int, window_seco
         logger.debug("Pool: cost ADD failed for key {}", key_id[:8])
 
 
-async def get_cost_window_total(provider_id: str, key_id: str, window_seconds: int) -> int:
+async def get_cost_window_total(
+    provider_id: str, key_id: str, window_seconds: int
+) -> int:
     """Sum tokens used within the rolling window (single key)."""
     redis = await _get_redis()
     if redis is None:
@@ -355,8 +389,16 @@ async def get_cost_window_total(provider_id: str, key_id: str, window_seconds: i
         now = time.time()
         window_start = now - window_seconds
         cost_k = _cost_key(provider_id, key_id)
-        result = await redis.eval(_COST_WINDOW_SUM_LUA, 1, cost_k, str(window_start))
-        return int(result) if result else 0
+        result = await _resolve_redis_call_result(
+            redis.eval(_COST_WINDOW_SUM_LUA, 1, cost_k, str(window_start))
+        )
+        if result is None or result == "":
+            return 0
+        if isinstance(result, bytes):
+            return int(result.decode())
+        if isinstance(result, (int, float, str)):
+            return int(result)
+        return 0
     except Exception:
         logger.debug("Pool: cost SUM failed for key {}", key_id[:8])
         return 0
@@ -428,7 +470,12 @@ async def batch_get_latency_avgs(
         window_start = now - max(int(window_seconds), 1)
         pipe = redis.pipeline()
         for kid in key_ids:
-            pipe.eval(_LATENCY_WINDOW_AVG_LUA, 1, _latency_key(provider_id, kid), str(window_start))
+            pipe.eval(
+                _LATENCY_WINDOW_AVG_LUA,
+                1,
+                _latency_key(provider_id, kid),
+                str(window_start),
+            )
         results = await pipe.execute()
         out: dict[str, float] = {}
         for kid, val in zip(key_ids, results):
@@ -603,7 +650,9 @@ async def get_cooldown_ttl(provider_id: str, key_id: str) -> int | None:
         return None
 
 
-async def batch_get_cooldown_ttls(provider_id: str, key_ids: list[str]) -> dict[str, int | None]:
+async def batch_get_cooldown_ttls(
+    provider_id: str, key_ids: list[str]
+) -> dict[str, int | None]:
     """Batch-fetch cooldown TTLs for multiple keys using pipeline."""
     redis = await _get_redis()
     if redis is None:

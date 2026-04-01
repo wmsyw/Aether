@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import src.services.provider.pool.dimensions  # noqa: F401
 from src.services.provider.pool.dimensions import get_preset_dimension, get_preset_names
 from src.services.provider.pool.dimensions._helpers import rank_ascending, safe_float
 from src.services.provider.pool.strategy import register_pool_strategy
+
+if TYPE_CHECKING:
+    from src.services.provider.pool.config import PoolConfig
+    from src.services.provider.pool.trace import PoolCandidateTrace
 
 
 def _normalize_mutex_group(value: Any) -> str | None:
@@ -104,11 +108,36 @@ def _normalize_presets_from_config(
 
     ordered_enabled.extend(group_enabled.values())
     ordered_enabled.sort(key=lambda item: (item[0], item[1]))
-    return tuple((preset_name, mode) for _anchor, _idx, preset_name, mode in ordered_enabled)
+    return tuple(
+        (preset_name, mode) for _anchor, _idx, preset_name, mode in ordered_enabled
+    )
 
 
 class MultiScoreStrategy:
     name = "multi_score"
+
+    def on_before_select(
+        self,
+        *,
+        provider_id: str,
+        key_ids: list[str],
+        config: PoolConfig,
+        context: dict[str, Any],
+    ) -> list[str] | None:
+        del provider_id, config, context
+        return key_ids
+
+    def on_after_select(
+        self,
+        *,
+        provider_id: str,
+        selected_key_id: str,
+        trace: PoolCandidateTrace,
+        config: PoolConfig,
+        context: dict[str, Any],
+    ) -> None:
+        del provider_id, selected_key_id, trace, config, context
+        return None
 
     def compute_score(
         self,
@@ -196,7 +225,12 @@ class MultiScoreStrategy:
         keys_by_id: dict[str, Any],
         context: dict[str, Any],
     ) -> float:
-        cache_signature = (tuple(all_key_ids), presets, bool(lru_enabled))
+        cache_signature = (
+            tuple(all_key_ids),
+            presets,
+            bool(lru_enabled),
+            context.get("round_robin_cursor"),
+        )
         cache = context.get("_preset_hard_order_cache")
         if (
             isinstance(cache, dict)
@@ -228,7 +262,9 @@ class MultiScoreStrategy:
                     )
                 metric_value = safe_float(metric)
                 vector_parts.append(
-                    max(0.0, min(metric_value, 1.0)) if metric_value is not None else 0.5
+                    max(0.0, min(metric_value, 1.0))
+                    if metric_value is not None
+                    else 0.5
                 )
 
             if lru_enabled:
@@ -237,7 +273,8 @@ class MultiScoreStrategy:
             metric_vectors[kid] = tuple(vector_parts)
 
         decorated = [
-            (metric_vectors.get(kid, (0.5,)), idx, kid) for idx, kid in enumerate(all_key_ids)
+            (metric_vectors.get(kid, (0.5,)), idx, kid)
+            for idx, kid in enumerate(all_key_ids)
         ]
         decorated.sort(key=lambda item: (item[0], item[1]))
 
