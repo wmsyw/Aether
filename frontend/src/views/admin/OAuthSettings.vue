@@ -28,13 +28,13 @@
           @click="handleTabClick(t.provider_type)"
         >
           <div class="flex flex-col items-center leading-none">
-            <span>{{ t.display_name }}</span>
-            <span class="text-[10px] text-muted-foreground">
-              {{ configs[t.provider_type]
-                ? (configs[t.provider_type]?.is_enabled ? '点击禁用' : '点击启用')
+              <span>{{ t.display_name }}</span>
+              <span class="text-[10px] text-muted-foreground">
+                {{ configs[t.provider_type]
+                ? (configs[t.provider_type]?.is_enabled ? '已启用' : '已保存，未启用')
                 : '未配置' }}
-            </span>
-          </div>
+              </span>
+            </div>
           <span
             class="w-2 h-2 rounded-full"
             :class="configs[t.provider_type]?.is_enabled ? 'bg-green-500' : 'bg-gray-300'"
@@ -54,7 +54,9 @@
       <CardSection
         v-if="selectedType"
         :title="selectedTypeMeta?.display_name || selectedType"
-        :description="configs[selectedType]?.is_enabled ? '已启用' : '未配置'"
+        :description="configs[selectedType]
+          ? (configs[selectedType]?.is_enabled ? 'Provider 已启用' : 'Provider 已保存，未启用')
+          : '未配置'"
       >
         <template #actions>
           <div class="flex gap-2">
@@ -89,6 +91,30 @@
               <li>前端回调页建议填写为 <code>/auth/callback</code></li>
               <li>Scopes 推荐使用 <code>read:user user:email</code></li>
             </ul>
+          </div>
+
+          <div class="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
+            <div class="space-y-1">
+              <div class="font-medium text-sm">
+                启用当前 Provider
+              </div>
+              <p class="text-sm text-muted-foreground">
+                只有至少启用一个 OAuth Provider 后，模块管理页面才能启用 OAuth 模块。
+              </p>
+            </div>
+            <div class="flex items-center gap-3 shrink-0 pt-1">
+              <span
+                class="text-sm"
+                :class="form.is_enabled ? 'text-foreground' : 'text-muted-foreground'"
+              >
+                {{ form.is_enabled ? '已启用' : '未启用' }}
+              </span>
+              <Switch
+                :model-value="form.is_enabled"
+                :disabled="saving"
+                @update:model-value="(val: boolean) => { form.is_enabled = val }"
+              />
+            </div>
           </div>
 
           <!-- 凭证配置 -->
@@ -258,6 +284,7 @@ import { PageContainer, PageHeader, CardSection } from '@/components/layout'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
+import Switch from '@/components/ui/switch.vue'
 import Textarea from '@/components/ui/textarea.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -285,6 +312,7 @@ const form = ref({
   scopes_input: '',
   redirect_uri: '',
   frontend_callback_url: '',
+  is_enabled: true,
   attribute_mapping_json: '',
   extra_config_json: '',
 })
@@ -314,12 +342,7 @@ function parseJsonOrNull(input: string): Record<string, unknown> | null {
 }
 
 function handleTabClick(providerType: string) {
-  // 如果点击的是当前选中的 Provider，且已配置，则切换启用状态
-  if (selectedType.value === providerType && configs.value[providerType]) {
-    toggleProviderEnabled(providerType, !configs.value[providerType].is_enabled)
-    return
-  }
-  // 否则切换到该 Provider
+  if (selectedType.value === providerType) return
   selectedType.value = providerType
   syncFormFromSelected()
 }
@@ -337,50 +360,9 @@ function syncFormFromSelected() {
     scopes_input: (cfg?.scopes || []).join(' '),
     redirect_uri: cfg?.redirect_uri || defaultRedirectUri(selectedType.value),
     frontend_callback_url: cfg?.frontend_callback_url || defaultFrontendCallbackUrl(),
+    is_enabled: cfg?.is_enabled ?? true,
     attribute_mapping_json: cfg?.attribute_mapping ? JSON.stringify(cfg.attribute_mapping, null, 2) : '',
     extra_config_json: cfg?.extra_config ? JSON.stringify(cfg.extra_config, null, 2) : '',
-  }
-}
-
-async function toggleProviderEnabled(providerType: string, enabled: boolean, force = false) {
-  const cfg = configs.value[providerType]
-  if (!cfg) {
-    showError('请先保存配置后再启用')
-    return
-  }
-
-  saving.value = true
-  try {
-    const payload = {
-      display_name: cfg.display_name,
-      client_id: cfg.client_id,
-      redirect_uri: cfg.redirect_uri,
-      frontend_callback_url: cfg.frontend_callback_url,
-      is_enabled: enabled,
-      force,
-    }
-    await oauthApi.admin.upsertProviderConfig(providerType, payload)
-    success(enabled ? '已启用' : '已禁用')
-    await loadAll()
-  } catch (err: unknown) {
-    // 检查是否是需要确认的冲突错误
-    if (isApiError(err) && getErrorStatus(err) === 409) {
-      const errorData = err.response?.data?.error
-      if (errorData?.type === 'confirmation_required') {
-        const affectedCount = errorData.details?.affected_count ?? 0
-        const confirmed = await confirmWarning(
-          `禁用该 Provider 会导致 ${affectedCount} 个用户无法登录，是否继续？`,
-          '确认禁用'
-        )
-        if (confirmed) {
-          await toggleProviderEnabled(providerType, enabled, true)
-        }
-        return
-      }
-    }
-    showError(getErrorMessage(err, '操作失败'))
-  } finally {
-    saving.value = false
   }
 }
 
@@ -415,7 +397,6 @@ async function handleSave() {
   lastTestResult.value = null
   try {
     const typeMeta = supportedTypes.value.find((t) => t.provider_type === selectedType.value)
-    const existingConfig = configs.value[selectedType.value]
     const payload = {
       display_name: typeMeta?.display_name || selectedType.value,
       client_id: form.value.client_id.trim(),
@@ -426,15 +407,48 @@ async function handleSave() {
       scopes: parseScopes(form.value.scopes_input),
       redirect_uri: form.value.redirect_uri.trim(),
       frontend_callback_url: form.value.frontend_callback_url.trim(),
+      is_enabled: form.value.is_enabled,
       attribute_mapping: parseJsonOrNull(form.value.attribute_mapping_json),
       extra_config: parseJsonOrNull(form.value.extra_config_json),
-      is_enabled: existingConfig?.is_enabled || false,
     }
 
     await oauthApi.admin.upsertProviderConfig(selectedType.value, payload)
     success('保存成功')
     await loadAll()
   } catch (err: unknown) {
+    if (isApiError(err) && getErrorStatus(err) === 409) {
+      const errorData = err.response?.data?.error
+      if (errorData?.type === 'confirmation_required') {
+        const affectedCount = errorData.details?.affected_count ?? 0
+        const confirmed = await confirmWarning(
+          `禁用该 Provider 会导致 ${affectedCount} 个用户无法登录，是否继续？`,
+          '确认禁用'
+        )
+        if (confirmed) {
+          const typeMeta = supportedTypes.value.find((t) => t.provider_type === selectedType.value)
+          const forcePayload = {
+            display_name: typeMeta?.display_name || selectedType.value,
+            client_id: form.value.client_id.trim(),
+            client_secret: form.value.client_secret.trim() || undefined,
+            authorization_url_override: form.value.authorization_url_override.trim() || null,
+            token_url_override: form.value.token_url_override.trim() || null,
+            userinfo_url_override: form.value.userinfo_url_override.trim() || null,
+            scopes: parseScopes(form.value.scopes_input),
+            redirect_uri: form.value.redirect_uri.trim(),
+            frontend_callback_url: form.value.frontend_callback_url.trim(),
+            is_enabled: form.value.is_enabled,
+            attribute_mapping: parseJsonOrNull(form.value.attribute_mapping_json),
+            extra_config: parseJsonOrNull(form.value.extra_config_json),
+            force: true,
+          }
+          await oauthApi.admin.upsertProviderConfig(selectedType.value, forcePayload)
+          success('保存成功')
+          await loadAll()
+          return
+        }
+        return
+      }
+    }
     showError(getErrorMessage(err, '保存失败'))
   } finally {
     saving.value = false

@@ -600,7 +600,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { meApi, type Profile } from '@/api/me'
@@ -636,11 +636,22 @@ import { formatCurrency } from '@/utils/format'
 import { getApiUrl } from '@/utils/url'
 import { log } from '@/utils/logger'
 import { getErrorMessage, getErrorStatus } from '@/types/api-error'
+import {
+  clearPendingOAuthBindRequestId,
+  createOAuthBindRequestId,
+  clearPendingOAuthBindProviderType,
+  getPendingOAuthBindRequestId,
+  getOAuthErrorMessage,
+  isOAuthBindResultMessage,
+  getPendingOAuthBindProviderType,
+  setPendingOAuthBindRequestId,
+  setPendingOAuthBindProviderType,
+} from '@/utils/oauthFlow'
 
 const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-const { success, error: showError } = useToast()
+const { success, error: showError, warning } = useToast()
 const { setThemeMode } = useDarkMode()
 
 const profile = ref<Profile | null>(null)
@@ -686,6 +697,8 @@ const oauthActionLoading = ref(false)
 const oauthLinks = ref<OAuthLinkInfo[]>([])
 const bindableProviders = ref<OAuthProviderInfo[]>([])
 const emailConfigured = ref(false) // 系统是否配置了邮箱服务
+let oauthBindPollTimer: ReturnType<typeof setInterval> | null = null
+let oauthBindWindow: Window | null = null
 
 // 原始值，用于检测是否有修改
 const originalProfileForm = ref({ email: '', username: '' })
@@ -720,6 +733,81 @@ const hasPasswordChanges = computed(() => {
 
 const otherSessionCount = computed(() => userSessions.value.filter((session) => !session.is_current).length)
 
+function stopOAuthBindPolling() {
+  if (oauthBindPollTimer) {
+    clearInterval(oauthBindPollTimer)
+    oauthBindPollTimer = null
+  }
+}
+
+function resetOAuthBindRuntimeState() {
+  stopOAuthBindPolling()
+  oauthBindWindow = null
+}
+
+function clearPendingOAuthBindState() {
+  sessionStorage.removeItem('redirectPath')
+  clearPendingOAuthBindRequestId()
+  clearPendingOAuthBindProviderType()
+}
+
+function consumePendingOAuthBindState(): { requestId: string | null; providerType: string | null } {
+  const requestId = getPendingOAuthBindRequestId()
+  const providerType = getPendingOAuthBindProviderType()
+  clearPendingOAuthBindState()
+  return { requestId, providerType }
+}
+
+function getProviderDisplayName(providerType: string | null | undefined): string {
+  if (!providerType) {
+    return 'OAuth 账号'
+  }
+
+  const linkedProvider = oauthLinks.value.find((item) => item.provider_type === providerType)
+  if (linkedProvider?.provider_display_name) {
+    return linkedProvider.provider_display_name
+  }
+
+  const bindableProvider = bindableProviders.value.find((item) => item.provider_type === providerType)
+  return bindableProvider?.provider_display_name || providerType
+}
+
+function handleOAuthBindMessage(event: MessageEvent<unknown>) {
+  if (event.origin !== window.location.origin) {
+    return
+  }
+  if (!isOAuthBindResultMessage(event.data)) {
+    return
+  }
+  if (!oauthActionLoading.value) {
+    return
+  }
+
+  const pendingRequestId = getPendingOAuthBindRequestId()
+  const pendingProviderType = getPendingOAuthBindProviderType()
+  if (!pendingRequestId || event.data.requestId !== pendingRequestId) {
+    return
+  }
+  if (oauthBindWindow && event.source !== oauthBindWindow) {
+    return
+  }
+  if (pendingProviderType && event.data.providerType && event.data.providerType !== pendingProviderType) {
+    return
+  }
+
+  resetOAuthBindRuntimeState()
+  clearPendingOAuthBindState()
+  oauthActionLoading.value = false
+
+  if (event.data.status === 'success') {
+    success(`已绑定 ${event.data.providerDisplayName || event.data.providerType || 'OAuth 账号'}`)
+  } else {
+    showError(getOAuthErrorMessage(event.data.errorCode || 'provider_error', event.data.errorDetail))
+  }
+
+  void loadOAuthBindings()
+}
+
 function handleThemeChange(value: string) {
   preferencesForm.value.theme = value
   themeSelectOpen.value = false
@@ -736,6 +824,7 @@ function handleLanguageChange(value: string) {
 }
 
 onMounted(async () => {
+  window.addEventListener('message', handleOAuthBindMessage)
   await loadProfile()
   await Promise.all([
     loadPreferences(),
@@ -744,6 +833,11 @@ onMounted(async () => {
     loadEmailConfigured(),
     loadPasskeySettings(),
   ])
+})
+
+onUnmounted(() => {
+  resetOAuthBindRuntimeState()
+  window.removeEventListener('message', handleOAuthBindMessage)
 })
 
 async function loadPasskeySettings() {
@@ -832,8 +926,13 @@ async function loadOAuthBindings() {
 }
 
 function handleBind(providerType: string) {
+  const requestId = createOAuthBindRequestId()
+  clearPendingOAuthBindState()
+
   // 保存返回路径（OAuth callback 会读取）
   sessionStorage.setItem('redirectPath', route.fullPath)
+  setPendingOAuthBindRequestId(requestId)
+  setPendingOAuthBindProviderType(providerType)
 
   // 先获取一次性绑定令牌，再在新标签页打开（避免在 URL 中暴露 access_token）
   oauthActionLoading.value = true
@@ -852,22 +951,39 @@ function handleBind(providerType: string) {
 
       // 监听标签页关闭，刷新绑定状态
       if (newTab) {
+        resetOAuthBindRuntimeState()
+        oauthBindWindow = newTab
         const MAX_WAIT_MS = 10 * 60 * 1000 // 10 分钟超时
         const startTime = Date.now()
-        const checkClosed = setInterval(() => {
-          if (newTab.closed || Date.now() - startTime > MAX_WAIT_MS) {
-            clearInterval(checkClosed)
+        oauthBindPollTimer = setInterval(() => {
+          const hasTimedOut = Date.now() - startTime > MAX_WAIT_MS
+          if (newTab.closed || hasTimedOut) {
+            const { requestId: pendingRequestId, providerType: pendingProviderType } = consumePendingOAuthBindState()
+            resetOAuthBindRuntimeState()
             oauthActionLoading.value = false
-            loadOAuthBindings()
+
+            if (pendingRequestId === requestId) {
+              const providerDisplayName = getProviderDisplayName(pendingProviderType || providerType)
+              warning(
+                hasTimedOut
+                  ? `${providerDisplayName} 绑定已超时，请重试`
+                  : `${providerDisplayName} 绑定已取消`,
+              )
+            }
+
+            void loadOAuthBindings()
           }
         }, 500)
       } else {
         // 被浏览器阻止，回退到当前页面跳转
+        resetOAuthBindRuntimeState()
         oauthActionLoading.value = false
         window.location.href = bindUrl.toString()
       }
     })
     .catch((err) => {
+      resetOAuthBindRuntimeState()
+      clearPendingOAuthBindState()
       oauthActionLoading.value = false
       showError(getErrorMessage(err, '获取绑定令牌失败'))
     })

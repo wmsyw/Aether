@@ -18,6 +18,15 @@ import Card from '@/components/ui/card.vue'
 import apiClient from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
+import {
+  clearPendingOAuthBindRequestId,
+  clearPendingOAuthBindProviderType,
+  getOAuthErrorMessage,
+  getPendingOAuthBindRequestId,
+  getPendingOAuthBindProviderType,
+  OAUTH_BIND_RESULT_MESSAGE_TYPE,
+  type OAuthBindResultMessage,
+} from '@/utils/oauthFlow'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,6 +34,12 @@ const authStore = useAuthStore()
 const { success, error: showError } = useToast()
 
 const hint = ref('请稍候...')
+
+function clearPendingBindState() {
+  sessionStorage.removeItem('redirectPath')
+  clearPendingOAuthBindRequestId()
+  clearPendingOAuthBindProviderType()
+}
 
 function consumeRedirectPath(): string | null {
   const redirectPath = sessionStorage.getItem('redirectPath')
@@ -42,45 +57,96 @@ function clearUrlState() {
   window.history.replaceState({}, document.title, newUrl)
 }
 
-function errorMessageFromCode(code: string): string {
-  const map: Record<string, string> = {
-    authorization_denied: '你已取消授权',
-    provider_disabled: '该 OAuth Provider 已被禁用',
-    provider_unavailable: 'OAuth Provider 不可用',
-    invalid_callback: '回调参数无效',
-    invalid_state: '登录状态已失效，请重试',
-    token_exchange_failed: '令牌兑换失败',
-    userinfo_fetch_failed: '获取用户信息失败',
-    email_exists_local: '该邮箱已存在，请先登录后再绑定 OAuth',
-    email_is_ldap: '该邮箱属于 LDAP 账号，请使用 LDAP 登录',
-    email_is_oauth: '该邮箱已关联其他 OAuth 账号，请使用原账号登录',
-    registration_disabled: '系统未开放注册，无法创建新账号',
-    oauth_already_bound: '该第三方账号已被其他用户绑定',
-    already_bound_provider: '你已绑定该 Provider',
-    last_oauth_binding: '解绑失败：至少需要保留一个 OAuth 绑定',
-    last_login_method: '解绑失败：解绑后将无法登录',
-    ldap_no_oauth: 'LDAP 用户不支持 OAuth 绑定',
+function postBindResult(message: OAuthBindResultMessage): boolean {
+  if (!window.opener || window.opener === window) {
+    return false
   }
-  return map[code] || '认证失败，请重试'
+
+  try {
+    window.opener.postMessage(message, window.location.origin)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function finalizeBindFlow(
+  message: OAuthBindResultMessage,
+  fallbackPath: string,
+  fallbackToast: () => void,
+) {
+  const redirectPath = consumeRedirectPath()
+  clearUrlState()
+  clearPendingBindState()
+
+  if (postBindResult(message)) {
+    hint.value = message.status === 'success'
+      ? '绑定成功，正在返回原页面...'
+      : '绑定失败，正在返回原页面...'
+    window.close()
+    window.setTimeout(() => {
+      void router.replace(redirectPath || fallbackPath)
+    }, 250)
+    return
+  }
+
+  fallbackToast()
+  await router.replace(redirectPath || fallbackPath)
 }
 
 onMounted(async () => {
   // 1) 绑定成功提示
   const oauthBound = route.query.oauth_bound
+  const bindProviderType = getPendingOAuthBindProviderType()
+  const bindRequestId = getPendingOAuthBindRequestId()
   if (typeof oauthBound === 'string' && oauthBound) {
+    if (bindProviderType && bindRequestId) {
+      await finalizeBindFlow(
+        {
+          type: OAUTH_BIND_RESULT_MESSAGE_TYPE,
+          status: 'success',
+          requestId: bindRequestId,
+          providerType: bindProviderType,
+          providerDisplayName: oauthBound,
+        },
+        '/dashboard/settings',
+        () => success(`已绑定 ${oauthBound}`),
+      )
+      return
+    }
+
     success(`已绑定 ${oauthBound}`)
     clearUrlState()
     const redirectPath = consumeRedirectPath()
+    clearPendingOAuthBindProviderType()
     await router.replace(redirectPath || '/dashboard/settings')
     return
   }
 
   // 2) 错误提示
   const errorCode = route.query.error_code
+  const errorDetail = typeof route.query.error_detail === 'string' ? route.query.error_detail : undefined
   if (typeof errorCode === 'string' && errorCode) {
-    showError(errorMessageFromCode(errorCode))
+    if (bindProviderType && bindRequestId) {
+      await finalizeBindFlow(
+        {
+          type: OAUTH_BIND_RESULT_MESSAGE_TYPE,
+          status: 'error',
+          requestId: bindRequestId,
+          providerType: bindProviderType,
+          errorCode,
+          errorDetail,
+        },
+        '/dashboard/settings',
+        () => showError(getOAuthErrorMessage(errorCode, errorDetail)),
+      )
+      return
+    }
+
+    showError(getOAuthErrorMessage(errorCode, errorDetail))
     clearUrlState()
     const redirectPath = consumeRedirectPath()
+    clearPendingOAuthBindProviderType()
     await router.replace(redirectPath || '/')
     return
   }
@@ -91,6 +157,7 @@ onMounted(async () => {
   const accessToken = params.get('access_token')
 
   clearUrlState()
+  clearPendingBindState()
 
   if (!accessToken) {
     showError('未获取到访问令牌')
