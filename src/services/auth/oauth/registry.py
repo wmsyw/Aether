@@ -30,10 +30,12 @@ class OAuthProviderRegistry:
             return
         self._discovered = True
 
-        # 1) 内置 providers（v1：至少保证 linuxdo 可用）
+        # 1) 内置 providers
         try:
+            from src.services.auth.oauth.providers.github import GitHubOAuthProvider
             from src.services.auth.oauth.providers.linuxdo import LinuxDoOAuthProvider
 
+            self.register(GitHubOAuthProvider())
             self.register(LinuxDoOAuthProvider())
         except Exception as exc:
             logger.warning("OAuth 内置 provider 加载失败: {}", exc)

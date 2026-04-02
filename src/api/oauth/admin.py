@@ -130,6 +130,7 @@ async def test_provider_config(
 class GetSupportedTypesAdapter(AdminApiAdapter):
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         registry = get_oauth_provider_registry()
+        registry.discover_providers()
         types = registry.get_supported_types()
         return [
             SupportedOAuthType(

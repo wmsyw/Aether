@@ -77,6 +77,20 @@
         </template>
 
         <div class="space-y-6">
+          <div
+            v-if="selectedType === 'github'"
+            class="rounded-lg border border-border bg-muted/30 p-4 text-sm"
+          >
+            <div class="font-medium">
+              GitHub 配置提示
+            </div>
+            <ul class="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+              <li>Redirect URI 建议填写为当前站点的 <code>/api/oauth/github/callback</code></li>
+              <li>前端回调页建议填写为 <code>/auth/callback</code></li>
+              <li>Scopes 推荐使用 <code>read:user user:email</code></li>
+            </ul>
+          </div>
+
           <!-- 凭证配置 -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>

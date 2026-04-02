@@ -115,7 +115,7 @@ import { panelClasses } from './guide-config'
           3. OAuth 登录
         </h3>
         <p class="text-sm text-[#666663] dark:text-[#a3a094] leading-relaxed">
-          支持包括 Linux Do OAuth 等多种第三方授权验证登录，方便统一认证渠道并提升用户体验。
+          支持 GitHub、Linux Do 等第三方授权登录与账号绑定，便于统一认证渠道并降低接入成本。
         </p>
       </section>
 
