@@ -555,7 +555,7 @@ const navigation = computed(() => {
 
   // 添加模块菜单项（按 admin_menu_order 排序，只显示已激活的）
   const moduleMenuItems = Object.values(moduleStore.modules)
-    .filter(m => m.active && m.admin_route && m.admin_menu_group === 'system')
+    .filter(m => m.name !== 'oauth' && m.active && m.admin_route && m.admin_menu_group === 'system')
     .sort((a, b) => a.admin_menu_order - b.admin_menu_order)
     .map(m => ({
       name: m.display_name,

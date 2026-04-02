@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -31,8 +31,10 @@ class SupportedOAuthType(BaseModel):
 
 
 class OAuthProviderUpsertRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     display_name: str = Field(..., min_length=1, max_length=100)
-    client_id: str = Field(..., min_length=1, max_length=255)
+    client_id: str = Field("", max_length=255)
     client_secret: str | None = Field(None, max_length=2048)
 
     authorization_url_override: str | None = Field(None, max_length=500)
@@ -40,14 +42,28 @@ class OAuthProviderUpsertRequest(BaseModel):
     userinfo_url_override: str | None = Field(None, max_length=500)
     scopes: list[str] | None = None
 
-    redirect_uri: str = Field(..., min_length=1, max_length=500)
-    frontend_callback_url: str = Field(..., min_length=1, max_length=500)
+    redirect_uri: str = Field("", max_length=500)
+    frontend_callback_url: str = Field("", max_length=500)
 
     attribute_mapping: dict[str, Any] | None = None
     extra_config: dict[str, Any] | None = None
 
     is_enabled: bool = False
     force: bool = False
+
+    @model_validator(mode="after")
+    def validate_enabled_provider_fields(self) -> "OAuthProviderUpsertRequest":
+        if not self.is_enabled:
+            return self
+
+        if not self.client_id:
+            raise ValueError("启用 Provider 时必须填写 client_id")
+        if not self.redirect_uri:
+            raise ValueError("启用 Provider 时必须填写 redirect_uri")
+        if not self.frontend_callback_url:
+            raise ValueError("启用 Provider 时必须填写 frontend_callback_url")
+
+        return self
 
 
 class OAuthProviderAdminResponse(BaseModel):
@@ -86,13 +102,17 @@ class OAuthProviderTestRequest(BaseModel):
 @router.get("/supported-types", response_model=list[SupportedOAuthType])
 async def get_supported_types(request: Request, db: Session = Depends(get_db)) -> Any:
     adapter = GetSupportedTypesAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/providers", response_model=list[OAuthProviderAdminResponse])
 async def list_provider_configs(request: Request, db: Session = Depends(get_db)) -> Any:
     adapter = ListOAuthProviderConfigsAdapter()
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.get("/providers/{provider_type}", response_model=OAuthProviderAdminResponse)
@@ -100,7 +120,9 @@ async def get_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
     adapter = GetOAuthProviderConfigAdapter(provider_type=provider_type)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.put("/providers/{provider_type}", response_model=OAuthProviderAdminResponse)
@@ -108,7 +130,9 @@ async def upsert_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
     adapter = UpsertOAuthProviderConfigAdapter(provider_type=provider_type)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
 @router.delete("/providers/{provider_type}")
@@ -116,15 +140,39 @@ async def delete_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
     adapter = DeleteOAuthProviderConfigAdapter(provider_type=provider_type)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
 
 
-@router.post("/providers/{provider_type}/test", response_model=OAuthProviderTestResponse)
+@router.post(
+    "/providers/{provider_type}/test", response_model=OAuthProviderTestResponse
+)
 async def test_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
     adapter = TestOAuthProviderConfigAdapter(provider_type=provider_type)
-    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+    return await pipeline.run(
+        adapter=adapter, http_request=request, db=db, mode=adapter.mode
+    )
+
+
+def _serialize_provider(row: OAuthProvider) -> dict[str, Any]:
+    return OAuthProviderAdminResponse(
+        provider_type=str(getattr(row, "provider_type", "") or ""),
+        display_name=str(getattr(row, "display_name", "") or ""),
+        client_id=str(getattr(row, "client_id", "") or ""),
+        has_secret=bool(getattr(row, "client_secret_encrypted", None)),
+        authorization_url_override=getattr(row, "authorization_url_override", None),
+        token_url_override=getattr(row, "token_url_override", None),
+        userinfo_url_override=getattr(row, "userinfo_url_override", None),
+        scopes=getattr(row, "scopes", None),
+        redirect_uri=str(getattr(row, "redirect_uri", "") or ""),
+        frontend_callback_url=str(getattr(row, "frontend_callback_url", "") or ""),
+        attribute_mapping=getattr(row, "attribute_mapping", None),
+        extra_config=getattr(row, "extra_config", None),
+        is_enabled=bool(getattr(row, "is_enabled", False)),
+    ).model_dump()
 
 
 class GetSupportedTypesAdapter(AdminApiAdapter):
@@ -147,25 +195,12 @@ class GetSupportedTypesAdapter(AdminApiAdapter):
 
 class ListOAuthProviderConfigsAdapter(AdminApiAdapter):
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
-        rows = context.db.query(OAuthProvider).order_by(OAuthProvider.provider_type.asc()).all()
-        return [
-            OAuthProviderAdminResponse(
-                provider_type=str(row.provider_type or ""),
-                display_name=str(row.display_name or ""),
-                client_id=str(row.client_id or ""),
-                has_secret=bool(row.client_secret_encrypted),
-                authorization_url_override=row.authorization_url_override,
-                token_url_override=row.token_url_override,
-                userinfo_url_override=row.userinfo_url_override,
-                scopes=row.scopes,
-                redirect_uri=str(row.redirect_uri or ""),
-                frontend_callback_url=str(row.frontend_callback_url or ""),
-                attribute_mapping=row.attribute_mapping,
-                extra_config=row.extra_config,
-                is_enabled=bool(row.is_enabled),
-            ).model_dump()
-            for row in rows
-        ]
+        rows = (
+            context.db.query(OAuthProvider)
+            .order_by(OAuthProvider.provider_type.asc())
+            .all()
+        )
+        return [_serialize_provider(row) for row in rows]
 
 
 class GetOAuthProviderConfigAdapter(AdminApiAdapter):
@@ -180,21 +215,7 @@ class GetOAuthProviderConfigAdapter(AdminApiAdapter):
         )
         if not row:
             raise InvalidRequestException("Provider 配置不存在")
-        return OAuthProviderAdminResponse(
-            provider_type=str(row.provider_type or ""),
-            display_name=str(row.display_name or ""),
-            client_id=str(row.client_id or ""),
-            has_secret=bool(row.client_secret_encrypted),
-            authorization_url_override=row.authorization_url_override,
-            token_url_override=row.token_url_override,
-            userinfo_url_override=row.userinfo_url_override,
-            scopes=row.scopes,
-            redirect_uri=str(row.redirect_uri or ""),
-            frontend_callback_url=str(row.frontend_callback_url or ""),
-            attribute_mapping=row.attribute_mapping,
-            extra_config=row.extra_config,
-            is_enabled=bool(row.is_enabled),
-        ).model_dump()
+        return _serialize_provider(row)
 
 
 class UpsertOAuthProviderConfigAdapter(AdminApiAdapter):
@@ -208,7 +229,7 @@ class UpsertOAuthProviderConfigAdapter(AdminApiAdapter):
         except ValidationError as exc:
             errors = exc.errors()
             if errors:
-                raise InvalidRequestException(translate_pydantic_error(errors[0]))
+                raise InvalidRequestException(translate_pydantic_error(dict(errors[0])))
             raise InvalidRequestException("请求数据验证失败")
 
         row = await OAuthService.upsert_provider_config(
@@ -217,21 +238,7 @@ class UpsertOAuthProviderConfigAdapter(AdminApiAdapter):
             data=req,
         )
 
-        return OAuthProviderAdminResponse(
-            provider_type=str(row.provider_type or ""),
-            display_name=str(row.display_name or ""),
-            client_id=str(row.client_id or ""),
-            has_secret=bool(row.client_secret_encrypted),
-            authorization_url_override=row.authorization_url_override,
-            token_url_override=row.token_url_override,
-            userinfo_url_override=row.userinfo_url_override,
-            scopes=row.scopes,
-            redirect_uri=str(row.redirect_uri or ""),
-            frontend_callback_url=str(row.frontend_callback_url or ""),
-            attribute_mapping=row.attribute_mapping,
-            extra_config=row.extra_config,
-            is_enabled=bool(row.is_enabled),
-        ).model_dump()
+        return _serialize_provider(row)
 
 
 class DeleteOAuthProviderConfigAdapter(AdminApiAdapter):
@@ -254,7 +261,7 @@ class TestOAuthProviderConfigAdapter(AdminApiAdapter):
         except ValidationError as exc:
             errors = exc.errors()
             if errors:
-                raise InvalidRequestException(translate_pydantic_error(errors[0]))
+                raise InvalidRequestException(translate_pydantic_error(dict(errors[0])))
             raise InvalidRequestException("请求数据验证失败")
 
         # 如果没有提供 client_secret，尝试从数据库获取已保存的
@@ -265,7 +272,7 @@ class TestOAuthProviderConfigAdapter(AdminApiAdapter):
                 .filter(OAuthProvider.provider_type == self.provider_type)
                 .first()
             )
-            if existing and existing.client_secret_encrypted:
+            if existing is not None and bool(existing.client_secret_encrypted):
                 client_secret = existing.get_client_secret()
 
         result = await OAuthService.test_provider_config_with_data(

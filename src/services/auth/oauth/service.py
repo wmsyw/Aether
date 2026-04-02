@@ -58,7 +58,9 @@ class OAuthService:
     """OAuth 核心业务服务（v1）。"""
 
     @staticmethod
-    def _handle_login_sync(provider_type: str, oauth_user: OAuthUserInfo) -> OAuthAuthenticatedUser:
+    def _handle_login_sync(
+        provider_type: str, oauth_user: OAuthUserInfo
+    ) -> OAuthAuthenticatedUser:
         now = datetime.now(timezone.utc)
 
         with get_db_context() as db:
@@ -74,8 +76,14 @@ class OAuthService:
                     .first()
                 )
                 if existing_link:
-                    linked_user = db.query(User).filter(User.id == existing_link.user_id).first()
-                    if not linked_user or not linked_user.is_active or linked_user.is_deleted:
+                    linked_user = (
+                        db.query(User).filter(User.id == existing_link.user_id).first()
+                    )
+                    if (
+                        not linked_user
+                        or not linked_user.is_active
+                        or linked_user.is_deleted
+                    ):
                         raise OAuthFlowError("account_disabled", "用户不存在或已禁用")
 
                     linked_user.last_login_at = now
@@ -122,10 +130,14 @@ class OAuthService:
                 last_error: Exception | None = None
                 for _ in range(3):
                     try:
-                        username = OAuthService._generate_unique_username(db, base_username)
+                        username = OAuthService._generate_unique_username(
+                            db, base_username
+                        )
                         user = User(
                             email=email,
-                            email_verified=bool(oauth_user.email_verified) if email else False,
+                            email_verified=bool(oauth_user.email_verified)
+                            if email
+                            else False,
                             username=username,
                             password_hash=None,
                             auth_source=AuthSource.OAUTH,
@@ -188,7 +200,9 @@ class OAuthService:
                         )
                         if existing_link:
                             existing_user = (
-                                db.query(User).filter(User.id == existing_link.user_id).first()
+                                db.query(User)
+                                .filter(User.id == existing_link.user_id)
+                                .first()
                             )
                             if (
                                 existing_user
@@ -278,10 +292,13 @@ class OAuthService:
             if not provider:
                 raise InvalidRequestException("不支持的 provider_type")
 
-            OAuthService._validate_provider_config(provider, data)
+            if data.is_enabled:
+                OAuthService._validate_provider_config(provider, data)
 
             row = (
-                db.query(OAuthProvider).filter(OAuthProvider.provider_type == provider_type).first()
+                db.query(OAuthProvider)
+                .filter(OAuthProvider.provider_type == provider_type)
+                .first()
             )
             creating = row is None
             if not row:
@@ -289,7 +306,9 @@ class OAuthService:
                 db.add(row)
 
             if row.is_enabled and data.is_enabled is False:
-                affected = OAuthService._check_provider_disable_safety(db, provider_type)
+                affected = OAuthService._check_provider_disable_safety(
+                    db, provider_type
+                )
                 if affected and not getattr(data, "force", False):
                     raise ConfirmationRequiredException(
                         message=f"禁用该 Provider 会导致 {len(affected)} 个用户无法登录",
@@ -334,13 +353,17 @@ class OAuthService:
     def _delete_provider_config_sync(provider_type: str) -> None:
         with get_db_context() as db:
             row = (
-                db.query(OAuthProvider).filter(OAuthProvider.provider_type == provider_type).first()
+                db.query(OAuthProvider)
+                .filter(OAuthProvider.provider_type == provider_type)
+                .first()
             )
             if not row:
                 raise InvalidRequestException("Provider 配置不存在")
 
             if row.is_enabled:
-                affected = OAuthService._check_provider_disable_safety(db, provider_type)
+                affected = OAuthService._check_provider_disable_safety(
+                    db, provider_type
+                )
                 if affected:
                     raise InvalidRequestException(
                         f"删除该 Provider 会导致部分用户无法登录（数量: {len(affected)}），已阻止操作"
@@ -362,7 +385,8 @@ class OAuthService:
             link = (
                 db.query(UserOAuthLink)
                 .filter(
-                    UserOAuthLink.user_id == user.id, UserOAuthLink.provider_type == provider_type
+                    UserOAuthLink.user_id == user.id,
+                    UserOAuthLink.provider_type == provider_type,
                 )
                 .first()
             )
@@ -379,19 +403,30 @@ class OAuthService:
             if user.auth_source == AuthSource.OAUTH and total_links <= 1:
                 raise InvalidRequestException("OAUTH 用户必须至少保留一个 OAuth 绑定")
 
-            if user.auth_source == AuthSource.LOCAL and not user.password_hash and total_links <= 1:
+            if (
+                user.auth_source == AuthSource.LOCAL
+                and not user.password_hash
+                and total_links <= 1
+            ):
                 raise InvalidRequestException("请先设置密码后再解绑")
 
-            from src.core.modules.hooks import AUTH_CHECK_EXCLUSIVE_MODE, get_hook_dispatcher
+            from src.core.modules.hooks import (
+                AUTH_CHECK_EXCLUSIVE_MODE,
+                get_hook_dispatcher,
+            )
 
-            is_exclusive = get_hook_dispatcher().dispatch_sync(AUTH_CHECK_EXCLUSIVE_MODE, db=db)
+            is_exclusive = get_hook_dispatcher().dispatch_sync(
+                AUTH_CHECK_EXCLUSIVE_MODE, db=db
+            )
             if (
                 is_exclusive
                 and user.auth_source == AuthSource.LOCAL
                 and user.role != UserRole.ADMIN
             ):
                 if total_links <= 1:
-                    raise InvalidRequestException("当前处于 LDAP 专属模式，解绑后将无法登录")
+                    raise InvalidRequestException(
+                        "当前处于 LDAP 专属模式，解绑后将无法登录"
+                    )
 
             db.delete(link)
 
@@ -400,7 +435,8 @@ class OAuthService:
         registry = get_module_registry()
         if not registry.is_active("oauth", db):
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="OAuth 模块未启用"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="OAuth 模块未启用",
             )
 
     @staticmethod
@@ -412,7 +448,11 @@ class OAuthService:
 
     @staticmethod
     def _get_provider_config(db: Session, provider_type: str) -> OAuthProvider:
-        row = db.query(OAuthProvider).filter(OAuthProvider.provider_type == provider_type).first()
+        row = (
+            db.query(OAuthProvider)
+            .filter(OAuthProvider.provider_type == provider_type)
+            .first()
+        )
         if not row:
             raise InvalidRequestException("Provider 配置不存在")
         return row
@@ -436,7 +476,9 @@ class OAuthService:
         return urlunparse(parsed._replace(query=urlencode(query), fragment=""))
 
     @staticmethod
-    def _build_frontend_bind_success_redirect(frontend_callback_url: str, display_name: str) -> str:
+    def _build_frontend_bind_success_redirect(
+        frontend_callback_url: str, display_name: str
+    ) -> str:
         parsed = urlparse(frontend_callback_url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         query["oauth_bound"] = display_name
@@ -482,7 +524,9 @@ class OAuthService:
             if supported.get_provider(provider_type_str) is None:
                 continue
             display_name = row.display_name or provider_type_str
-            result.append({"provider_type": provider_type_str, "display_name": str(display_name)})
+            result.append(
+                {"provider_type": provider_type_str, "display_name": str(display_name)}
+            )
         return result
 
     @staticmethod
@@ -491,7 +535,9 @@ class OAuthService:
     ) -> str:
         OAuthService._require_module_active(db)
         normalized_device_id = (
-            SessionService._normalize_device_id(client_device_id) if client_device_id else None
+            SessionService._normalize_device_id(client_device_id)
+            if client_device_id
+            else None
         )
         if not normalized_device_id:
             raise HTTPException(status_code=400, detail="缺少或无效的设备标识")
@@ -600,9 +646,13 @@ class OAuthService:
         if mode == "none":
             return True
 
-        suffix_list = SystemConfigService.get_config(db, "email_suffix_list", default=[])
+        suffix_list = SystemConfigService.get_config(
+            db, "email_suffix_list", default=[]
+        )
         if isinstance(suffix_list, str):
-            suffix_list = [s.strip().lower() for s in suffix_list.split(",") if s.strip()]
+            suffix_list = [
+                s.strip().lower() for s in suffix_list.split(",") if s.strip()
+            ]
 
         if not suffix_list:
             return True
@@ -663,7 +713,9 @@ class OAuthService:
 
         # provider 侧 error
         if error:
-            code_map = "authorization_denied" if error == "access_denied" else "provider_error"
+            code_map = (
+                "authorization_denied" if error == "access_denied" else "provider_error"
+            )
             return OAuthCallbackResult(
                 redirect_url=OAuthService._build_frontend_error_redirect(
                     frontend_callback_url,
@@ -697,7 +749,9 @@ class OAuthService:
             )
         normalized_device_id = None
         if state_data.client_device_id:
-            normalized_device_id = SessionService._normalize_device_id(state_data.client_device_id)
+            normalized_device_id = SessionService._normalize_device_id(
+                state_data.client_device_id
+            )
             if not normalized_device_id:
                 return OAuthCallbackResult(
                     redirect_url=OAuthService._build_frontend_error_redirect(
@@ -738,7 +792,9 @@ class OAuthService:
         except OAuthFlowError as exc:
             return OAuthCallbackResult(
                 redirect_url=OAuthService._build_frontend_error_redirect(
-                    frontend_callback_url, error_code=exc.error_code, error_detail=exc.detail
+                    frontend_callback_url,
+                    error_code=exc.error_code,
+                    error_detail=exc.detail,
                 )
             )
         except Exception as exc:
@@ -752,12 +808,17 @@ class OAuthService:
         if state_data.action == "bind":
             try:
                 await OAuthService._handle_bind(
-                    db, user_id=state_data.user_id or "", config=config, oauth_user=oauth_user
+                    db,
+                    user_id=state_data.user_id or "",
+                    config=config,
+                    oauth_user=oauth_user,
                 )
             except OAuthFlowError as exc:
                 return OAuthCallbackResult(
                     redirect_url=OAuthService._build_frontend_error_redirect(
-                        frontend_callback_url, error_code=exc.error_code, error_detail=exc.detail
+                        frontend_callback_url,
+                        error_code=exc.error_code,
+                        error_detail=exc.detail,
                     )
                 )
 
@@ -769,11 +830,15 @@ class OAuthService:
 
         # login
         try:
-            user = await OAuthService._handle_login(db, config=config, oauth_user=oauth_user)
+            user = await OAuthService._handle_login(
+                db, config=config, oauth_user=oauth_user
+            )
         except OAuthFlowError as exc:
             return OAuthCallbackResult(
                 redirect_url=OAuthService._build_frontend_error_redirect(
-                    frontend_callback_url, error_code=exc.error_code, error_detail=exc.detail
+                    frontend_callback_url,
+                    error_code=exc.error_code,
+                    error_detail=exc.detail,
                 )
             )
 
@@ -882,7 +947,9 @@ class OAuthService:
             if supported.get_provider(provider_type_str) is None:
                 continue
             display_name = row.display_name or provider_type_str
-            result.append({"provider_type": provider_type_str, "display_name": str(display_name)})
+            result.append(
+                {"provider_type": provider_type_str, "display_name": str(display_name)}
+            )
         return result
 
     @staticmethod
@@ -891,7 +958,10 @@ class OAuthService:
 
         rows = (
             db.query(UserOAuthLink, OAuthProvider)
-            .join(OAuthProvider, UserOAuthLink.provider_type == OAuthProvider.provider_type)
+            .join(
+                OAuthProvider,
+                UserOAuthLink.provider_type == OAuthProvider.provider_type,
+            )
             .filter(UserOAuthLink.user_id == user.id)
             .order_by(UserOAuthLink.linked_at.desc())
             .all()
@@ -906,7 +976,9 @@ class OAuthService:
                     "provider_username": link.provider_username,
                     "provider_email": link.provider_email,
                     "linked_at": link.linked_at.isoformat() if link.linked_at else None,
-                    "last_login_at": link.last_login_at.isoformat() if link.last_login_at else None,
+                    "last_login_at": link.last_login_at.isoformat()
+                    if link.last_login_at
+                    else None,
                     "provider_enabled": bool(provider.is_enabled),
                 }
             )
@@ -920,9 +992,14 @@ class OAuthService:
         - OAUTH 用户：禁用后必须仍有其它启用的 OAuth provider 绑定
         - LOCAL 用户：ldap_exclusive=true 且非 admin 时，同上
         """
-        from src.core.modules.hooks import AUTH_CHECK_EXCLUSIVE_MODE, get_hook_dispatcher
+        from src.core.modules.hooks import (
+            AUTH_CHECK_EXCLUSIVE_MODE,
+            get_hook_dispatcher,
+        )
 
-        ldap_exclusive = get_hook_dispatcher().dispatch_sync(AUTH_CHECK_EXCLUSIVE_MODE, db=db)
+        ldap_exclusive = get_hook_dispatcher().dispatch_sync(
+            AUTH_CHECK_EXCLUSIVE_MODE, db=db
+        )
 
         users = (
             db.query(User.id, User.auth_source, User.role)
@@ -939,7 +1016,10 @@ class OAuthService:
         for user_id, auth_source, role in users:
             other_enabled_count = (
                 db.query(func.count(UserOAuthLink.id))
-                .join(OAuthProvider, UserOAuthLink.provider_type == OAuthProvider.provider_type)
+                .join(
+                    OAuthProvider,
+                    UserOAuthLink.provider_type == OAuthProvider.provider_type,
+                )
                 .filter(
                     UserOAuthLink.user_id == user_id,
                     UserOAuthLink.provider_type != provider_type,
@@ -964,14 +1044,18 @@ class OAuthService:
         return affected
 
     @staticmethod
-    async def upsert_provider_config(db: Session, provider_type: str, data: Any) -> OAuthProvider:
+    async def upsert_provider_config(
+        db: Session, provider_type: str, data: Any
+    ) -> OAuthProvider:
         return await run_in_threadpool(
             OAuthService._upsert_provider_config_sync, provider_type, data
         )
 
     @staticmethod
     async def delete_provider_config(db: Session, provider_type: str) -> None:
-        await run_in_threadpool(OAuthService._delete_provider_config_sync, provider_type)
+        await run_in_threadpool(
+            OAuthService._delete_provider_config_sync, provider_type
+        )
 
     @staticmethod
     def _validate_provider_config(provider: OAuthProviderBase, data: Any) -> None:
@@ -998,11 +1082,15 @@ class OAuthService:
             raise InvalidRequestException("frontend_callback_url 必须是绝对 URL")
 
         if parsed.scheme not in {"http", "https"}:
-            raise InvalidRequestException("frontend_callback_url scheme 必须是 http/https")
+            raise InvalidRequestException(
+                "frontend_callback_url scheme 必须是 http/https"
+            )
 
         path = (parsed.path or "").rstrip("/")
         if not path.endswith("/auth/callback"):
-            raise InvalidRequestException("frontend_callback_url 路径必须以 /auth/callback 结尾")
+            raise InvalidRequestException(
+                "frontend_callback_url 路径必须以 /auth/callback 结尾"
+            )
 
     @staticmethod
     def _validate_redirect_uri(url: str) -> None:
@@ -1088,7 +1176,9 @@ class OAuthService:
         if has_secret and client_secret:
             # 使用无效 code 做一次 token 请求（仅做粗略判定）
             try:
-                async with httpx.AsyncClient(**_build_oauth_client_kwargs(5.0)) as client:
+                async with httpx.AsyncClient(
+                    **_build_oauth_client_kwargs(5.0)
+                ) as client:
                     resp = await client.post(
                         token_url,
                         data={
@@ -1165,7 +1255,9 @@ class OAuthService:
         if client_secret:
             # 使用无效 code 做一次 token 请求（仅做粗略判定）
             try:
-                async with httpx.AsyncClient(**_build_oauth_client_kwargs(5.0)) as client:
+                async with httpx.AsyncClient(
+                    **_build_oauth_client_kwargs(5.0)
+                ) as client:
                     resp = await client.post(
                         token_url,
                         data={
@@ -1204,6 +1296,8 @@ class OAuthService:
 
     @staticmethod
     async def unbind_provider(db: Session, user: User, provider_type: str) -> None:
-        await run_in_threadpool(OAuthService._unbind_provider_sync, user.id, provider_type)
+        await run_in_threadpool(
+            OAuthService._unbind_provider_sync, user.id, provider_type
+        )
         if user.id is not None:
             await UserCacheService.invalidate_user_cache(user.id, user.email)

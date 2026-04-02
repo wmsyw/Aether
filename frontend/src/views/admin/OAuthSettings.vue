@@ -61,6 +61,15 @@
         <template #actions>
           <div class="flex gap-2">
             <Button
+              v-if="configs[selectedType]"
+              size="sm"
+              variant="outline"
+              :disabled="saving || testing"
+              @click="handleClear"
+            >
+              清除
+            </Button>
+            <Button
               size="sm"
               variant="outline"
               :disabled="saving || testing"
@@ -320,6 +329,24 @@ const form = ref({
 const hasSecret = computed(() => !!configs.value[selectedType.value]?.has_secret)
 const selectedTypeMeta = computed(() => supportedTypes.value.find((t) => t.provider_type === selectedType.value))
 
+function isClearedConfig(config?: OAuthProviderAdminConfig): boolean {
+  if (!config) return false
+
+  return (
+    !config.is_enabled &&
+    !config.has_secret &&
+    !config.client_id.trim() &&
+    !config.redirect_uri.trim() &&
+    !config.frontend_callback_url.trim() &&
+    !(config.authorization_url_override || '').trim() &&
+    !(config.token_url_override || '').trim() &&
+    !(config.userinfo_url_override || '').trim() &&
+    (!config.scopes || config.scopes.length === 0) &&
+    !config.attribute_mapping &&
+    !config.extra_config
+  )
+}
+
 function defaultRedirectUri(providerType: string): string {
   return new URL(`/api/oauth/${providerType}/callback`, window.location.origin).toString()
 }
@@ -374,7 +401,11 @@ async function loadAll() {
       oauthApi.admin.listProviderConfigs(),
     ])
     supportedTypes.value = types
-    configs.value = Object.fromEntries(list.map((c) => [c.provider_type, c]))
+    configs.value = Object.fromEntries(
+      list
+        .filter((config) => !isClearedConfig(config))
+        .map((config) => [config.provider_type, config]),
+    )
 
     if (!selectedType.value && supportedTypes.value.length > 0) {
       selectedType.value = supportedTypes.value[0].provider_type
@@ -450,6 +481,43 @@ async function handleSave() {
       }
     }
     showError(getErrorMessage(err, '保存失败'))
+  } finally {
+    saving.value = false
+    form.value.client_secret = ''
+  }
+}
+
+async function handleClear() {
+  if (!selectedType.value || !configs.value[selectedType.value]) return
+
+  const providerName = selectedTypeMeta.value?.display_name || selectedType.value
+  const confirmed = await confirmWarning(
+    `确定要清除 ${providerName} 的已保存 OAuth 配置吗？此操作会禁用该 Provider 并清空已保存的凭证与回调配置，不会删除现有绑定记录。`,
+    '确认清除',
+  )
+  if (!confirmed) return
+
+  saving.value = true
+  lastTestResult.value = null
+  try {
+    await oauthApi.admin.upsertProviderConfig(selectedType.value, {
+      display_name: providerName,
+      client_id: '',
+      client_secret: '__CLEAR__',
+      authorization_url_override: null,
+      token_url_override: null,
+      userinfo_url_override: null,
+      scopes: null,
+      redirect_uri: '',
+      frontend_callback_url: '',
+      attribute_mapping: null,
+      extra_config: null,
+      is_enabled: false,
+    })
+    success('配置已清除')
+    await loadAll()
+  } catch (err: unknown) {
+    showError(getErrorMessage(err, '清除失败'))
   } finally {
     saving.value = false
     form.value.client_secret = ''

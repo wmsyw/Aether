@@ -15,6 +15,135 @@ from src.services.auth.oauth.service import OAuthService
 from src.services.auth.oauth.state import OAuthStateData
 
 
+def test_upsert_provider_config_skips_validation_when_saving_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[OAuthProvider.__table__])
+    SessionLocal = sessionmaker(bind=engine)
+
+    with SessionLocal() as db:
+        db.add(
+            OAuthProvider(
+                provider_type="github",
+                display_name="GitHub",
+                client_id="client-id",
+                redirect_uri="https://api.example.com/api/oauth/github/callback",
+                frontend_callback_url="https://app.example.com/auth/callback",
+                is_enabled=True,
+            )
+        )
+        db.commit()
+
+    @contextmanager
+    def _fake_get_db_context():
+        db = SessionLocal()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    validate_mock = MagicMock()
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.get_db_context", _fake_get_db_context
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_impl",
+        lambda _provider_type: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._validate_provider_config",
+        validate_mock,
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._check_provider_disable_safety",
+        lambda _db, _provider_type: [],
+    )
+
+    row = OAuthService._upsert_provider_config_sync(
+        "github",
+        SimpleNamespace(
+            display_name="GitHub",
+            client_id="",
+            client_secret=None,
+            authorization_url_override=None,
+            token_url_override=None,
+            userinfo_url_override=None,
+            scopes=None,
+            redirect_uri="",
+            frontend_callback_url="",
+            attribute_mapping=None,
+            extra_config=None,
+            is_enabled=False,
+            force=False,
+        ),
+    )
+
+    validate_mock.assert_not_called()
+    assert row.is_enabled is False
+    engine.dispose()
+
+
+def test_upsert_provider_config_validates_when_saving_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[OAuthProvider.__table__])
+    SessionLocal = sessionmaker(bind=engine)
+
+    @contextmanager
+    def _fake_get_db_context():
+        db = SessionLocal()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    validate_mock = MagicMock()
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.get_db_context", _fake_get_db_context
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_impl",
+        lambda _provider_type: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._validate_provider_config",
+        validate_mock,
+    )
+
+    row = OAuthService._upsert_provider_config_sync(
+        "github",
+        SimpleNamespace(
+            display_name="GitHub",
+            client_id="client-id",
+            client_secret=None,
+            authorization_url_override=None,
+            token_url_override=None,
+            userinfo_url_override=None,
+            scopes=None,
+            redirect_uri="https://api.example.com/api/oauth/github/callback",
+            frontend_callback_url="https://app.example.com/auth/callback",
+            attribute_mapping=None,
+            extra_config=None,
+            is_enabled=True,
+            force=False,
+        ),
+    )
+
+    validate_mock.assert_called_once()
+    assert row.is_enabled is True
+    engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_build_bind_authorize_url_includes_client_device_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -22,7 +151,9 @@ async def test_build_bind_authorize_url_includes_client_device_id(
     db = MagicMock()
     user = SimpleNamespace(id="user-1", auth_source=AuthSource.LOCAL)
     provider = SimpleNamespace(
-        get_authorization_url=MagicMock(return_value="https://provider.example/authorize")
+        get_authorization_url=MagicMock(
+            return_value="https://provider.example/authorize"
+        )
     )
     config = SimpleNamespace()
     create_state = AsyncMock(return_value="state-1")
@@ -65,7 +196,9 @@ async def test_handle_callback_allows_bind_state_without_device_id(
 ) -> None:
     db = MagicMock()
     provider = SimpleNamespace(
-        exchange_code=AsyncMock(return_value=SimpleNamespace(access_token="provider-access")),
+        exchange_code=AsyncMock(
+            return_value=SimpleNamespace(access_token="provider-access")
+        ),
         get_user_info=AsyncMock(
             return_value=SimpleNamespace(
                 id="oauth-user",
@@ -189,7 +322,9 @@ def test_handle_login_sync_returns_user_snapshot_outside_db_session(
         finally:
             db.close()
 
-    monkeypatch.setattr("src.services.auth.oauth.service.get_db_context", _fake_get_db_context)
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.get_db_context", _fake_get_db_context
+    )
 
     snapshot = OAuthService._handle_login_sync(
         "linuxdo",
