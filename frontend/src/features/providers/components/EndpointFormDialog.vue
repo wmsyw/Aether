@@ -139,6 +139,20 @@
                 </div>
               </div>
 
+              <div
+                v-if="isResponsesWebsocketToggleAvailable(endpoint.api_format)"
+                class="flex items-center justify-between rounded-md border bg-muted/20 px-3 py-2"
+              >
+                <div class="space-y-0.5">
+                  <Label class="text-sm">WebSocket 支持</Label>
+                  <p class="text-xs text-muted-foreground">开启后优先使用 WebSocket；关闭后只使用 SSE</p>
+                </div>
+                <Switch
+                  :model-value="getEndpointEditState(endpoint.id)?.responsesWebsocketEnabled ?? getEndpointResponsesWebsocketEnabled(endpoint)"
+                  @update:model-value="(v) => updateEndpointResponsesWebsocketEnabled(endpoint.id, !!v)"
+                />
+              </div>
+
               <!-- 请求规则（合并请求头和请求体规则） -->
               <Collapsible v-model:open="endpointRulesExpanded[endpoint.id]">
                 <div class="flex items-center gap-2">
@@ -734,6 +748,17 @@
               </div>
             </div>
           </div>
+
+          <div
+            v-if="isResponsesWebsocketToggleAvailable(newEndpoint.api_format)"
+            class="mt-3 flex items-center justify-between rounded-md border bg-muted/20 px-3 py-2"
+          >
+            <div class="space-y-0.5">
+              <Label class="text-sm">WebSocket 支持</Label>
+              <p class="text-xs text-muted-foreground">开启后优先使用 WebSocket；关闭后只使用 SSE</p>
+            </div>
+            <Switch v-model="newEndpoint.responses_websocket_enabled" />
+          </div>
         </div>
       </div>
 
@@ -789,6 +814,7 @@ import {
   Popover,
   PopoverTrigger,
   PopoverContent,
+  Switch,
 } from '@/components/ui'
 import { Settings, Trash2, Check, X, Power, ChevronRight, Plus, Shuffle, RotateCcw, Radio, CheckCircle, Save, Filter, HelpCircle, GripVertical } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
@@ -852,6 +878,7 @@ interface EndpointEditState {
   url: string
   path: string
   upstreamStreamPolicy: string
+  responsesWebsocketEnabled: boolean
   rules: EditableRule[]
   bodyRules: EditableBodyRule[]
 }
@@ -1219,6 +1246,7 @@ const newEndpoint = ref({
   api_format: '',
   base_url: '',
   custom_path: '',
+  responses_websocket_enabled: false,
 })
 
 // API 格式列表
@@ -1311,6 +1339,19 @@ function isCodexUrl(baseUrl: string): boolean {
   return url.includes('/backend-api/codex') || url.endsWith('/codex')
 }
 
+function isResponsesWebsocketToggleAvailable(apiFormat: string): boolean {
+  return apiFormat === 'openai:cli' && (props.provider?.provider_type || '').toLowerCase() !== 'codex'
+}
+
+function getEndpointResponsesWebsocketEnabled(endpoint: ProviderEndpoint): boolean {
+  if (!isResponsesWebsocketToggleAvailable(endpoint.api_format)) return false
+  const cfg = endpoint.config || {}
+  const raw = (cfg.responses_websocket_enabled ?? cfg.responsesWebsocketEnabled) as unknown
+  if (typeof raw === 'boolean') return raw
+  if (raw !== null && raw !== undefined) return String(raw).trim().toLowerCase() === 'true'
+  return endpoint.base_url.startsWith('ws://') || endpoint.base_url.startsWith('wss://')
+}
+
 // 读取端点的上游流式策略（endpoint.config.upstream_stream_policy）
 function getEndpointUpstreamStreamPolicy(endpoint: ProviderEndpoint): string {
   const cfg = endpoint.config || {}
@@ -1388,6 +1429,7 @@ function initEndpointEditState(endpoint: ProviderEndpoint): EndpointEditState {
     url: endpoint.base_url,
     path: endpoint.custom_path || '',
     upstreamStreamPolicy: getEndpointUpstreamStreamPolicy(endpoint),
+    responsesWebsocketEnabled: getEndpointResponsesWebsocketEnabled(endpoint),
     rules,
     bodyRules,
   }
@@ -1408,6 +1450,18 @@ function updateEndpointField(endpointId: string, field: 'url' | 'path', value: s
   }
   if (endpointEditStates.value[endpointId]) {
     endpointEditStates.value[endpointId][field] = value
+  }
+}
+
+function updateEndpointResponsesWebsocketEnabled(endpointId: string, value: boolean) {
+  if (!endpointEditStates.value[endpointId]) {
+    const endpoint = localEndpoints.value.find(e => e.id === endpointId)
+    if (endpoint) {
+      endpointEditStates.value[endpointId] = initEndpointEditState(endpoint)
+    }
+  }
+  if (endpointEditStates.value[endpointId]) {
+    endpointEditStates.value[endpointId].responsesWebsocketEnabled = value
   }
 }
 
@@ -2050,6 +2104,7 @@ function hasUrlChanges(endpoint: ProviderEndpoint): boolean {
   if (!state) return false
   if (state.url !== endpoint.base_url) return true
   if (state.path !== (endpoint.custom_path || '')) return true
+  if (isResponsesWebsocketToggleAvailable(endpoint.api_format) && state.responsesWebsocketEnabled !== getEndpointResponsesWebsocketEnabled(endpoint)) return true
   // 注：upstreamStreamPolicy 现在由头部按钮直接保存，无需在此检查
   return false
 }
@@ -2208,7 +2263,7 @@ watch(() => props.modelValue, (open) => {
     void preloadDefaultBodyRules(localEndpoints.value)
   } else {
     // 关闭对话框时完全清空新端点表单
-    newEndpoint.value = { api_format: '', base_url: '', custom_path: '' }
+    newEndpoint.value = { api_format: '', base_url: '', custom_path: '', responses_websocket_enabled: false }
   }
 }, { immediate: true })
 
@@ -2257,6 +2312,13 @@ async function saveEndpoint(endpoint: ProviderEndpoint) {
     if (!isFixedProvider.value) {
       if (state.url !== endpoint.base_url) payload.base_url = state.url
       if (state.path !== (endpoint.custom_path || '')) payload.custom_path = state.path || null
+    }
+
+    if (isResponsesWebsocketToggleAvailable(endpoint.api_format) && state.responsesWebsocketEnabled !== getEndpointResponsesWebsocketEnabled(endpoint)) {
+      const merged: Record<string, unknown> = { ...(endpoint.config || {}) }
+      delete merged.responsesWebsocketEnabled
+      merged.responses_websocket_enabled = state.responsesWebsocketEnabled
+      payload.config = merged
     }
 
     if (hasRulesChanges(endpoint)) payload.header_rules = rulesToHeaderRules(state.rules)
@@ -2396,11 +2458,14 @@ async function handleAddEndpoint() {
       api_format: newEndpoint.value.api_format,
       base_url: baseUrl,
       custom_path: newEndpoint.value.custom_path || undefined,
+      config: isResponsesWebsocketToggleAvailable(newEndpoint.value.api_format)
+        ? { responses_websocket_enabled: newEndpoint.value.responses_websocket_enabled }
+        : undefined,
       is_active: true,
     })
     success(`已添加 ${formatApiFormat(newEndpoint.value.api_format)} 端点`)
     // 重置表单，保留 URL
-    newEndpoint.value = { api_format: '', base_url: baseUrl, custom_path: '' }
+    newEndpoint.value = { api_format: '', base_url: baseUrl, custom_path: '', responses_websocket_enabled: false }
     emit('endpointCreated')
   } catch (error: unknown) {
     showError(parseApiError(error, '添加失败'), '错误')

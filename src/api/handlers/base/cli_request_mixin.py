@@ -14,6 +14,7 @@ from src.core.api_format.headers import set_accept_if_absent
 from src.core.logger import logger
 from src.services.provider.behavior import get_provider_behavior
 from src.services.provider.prompt_cache import maybe_patch_request_with_prompt_cache_key
+from src.services.provider.responses_transport import is_openai_cli_websocket_enabled
 from src.services.provider.stream_policy import (
     enforce_stream_mode_for_upstream,
     get_upstream_stream_policy,
@@ -226,9 +227,16 @@ class CliRequestMixin:
             provider_type=provider_type,
             endpoint_sig=provider_api_format,
         )
-        upstream_is_stream = resolve_upstream_is_stream(
-            client_is_stream=client_is_stream,
-            policy=upstream_policy,
+        use_responses_websocket_transport = is_openai_cli_websocket_enabled(
+            endpoint,
+            endpoint_sig=provider_api_format,
+        )
+        upstream_is_stream = (
+            use_responses_websocket_transport
+            or resolve_upstream_is_stream(
+                client_is_stream=client_is_stream,
+                policy=upstream_policy,
+            )
         )
 
         envelope_tls_profile: str | None = None
@@ -256,7 +264,9 @@ class CliRequestMixin:
         else:
             request_body = self.prepare_provider_request_body(request_body)
             url_model = (
-                self.get_model_for_url(request_body, mapped_model) or mapped_model or fallback_model
+                self.get_model_for_url(request_body, mapped_model)
+                or mapped_model
+                or fallback_model
             )
             if target_variant and provider_api_format:
                 registry = get_format_converter_registry()
@@ -295,7 +305,9 @@ class CliRequestMixin:
                 request_body,
                 model=url_model or fallback_model or "",
                 url_model=url_model,
-                decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+                decrypted_auth_config=auth_info.decrypted_auth_config
+                if auth_info
+                else None,
             )
             if hasattr(envelope, "post_wrap_request"):
                 await envelope.post_wrap_request(request_body)
@@ -309,7 +321,9 @@ class CliRequestMixin:
             endpoint_sig=provider_api_format,
             request_body=request_body,
             original_headers=original_headers,
-            decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+            decrypted_auth_config=auth_info.decrypted_auth_config
+            if auth_info
+            else None,
         )
         if hook_headers:
             extra_headers.update(hook_headers)
@@ -335,7 +349,9 @@ class CliRequestMixin:
             path_params={"model": url_model},
             is_stream=upstream_is_stream,
             key=key,
-            decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
+            decrypted_auth_config=auth_info.decrypted_auth_config
+            if auth_info
+            else None,
         )
         selected_base_url = envelope.capture_selected_base_url() if envelope else None
 
@@ -388,7 +404,9 @@ class CliRequestMixin:
         # 默认：model_in_body=True, stream_in_body=True（如 OpenAI/Claude）
         client_uses_stream = client_meta.stream_in_body if client_meta else True
         provider_model_in_body = provider_meta.model_in_body if provider_meta else True
-        provider_stream_in_body = provider_meta.stream_in_body if provider_meta else True
+        provider_stream_in_body = (
+            provider_meta.stream_in_body if provider_meta else True
+        )
 
         # 设置 model（仅当 Provider 允许且 body 中需要）
         if provider_model_in_body:
@@ -453,7 +471,9 @@ class CliRequestMixin:
 
         # 先计算 URL 模型（在清理 body 中的 model 字段之前）
         url_model = (
-            self.get_model_for_url(converted_body, mapped_model) or mapped_model or fallback_model
+            self.get_model_for_url(converted_body, mapped_model)
+            or mapped_model
+            or fallback_model
         )
 
         # 统一设置并清理 model/stream 字段

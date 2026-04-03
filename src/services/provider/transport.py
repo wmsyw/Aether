@@ -22,6 +22,9 @@ from src.core.logger import logger
 from src.core.provider_types import ProviderType, normalize_provider_type
 from src.services.provider.format import normalize_endpoint_signature
 from src.services.provider.provider_context import resolve_provider_type
+from src.services.provider.responses_transport import (
+    resolve_responses_transport_base_url,
+)
 from src.services.provider.request_context import (
     get_selected_base_url,
     set_selected_base_url,
@@ -196,7 +199,12 @@ def build_provider_url(
     raw_family = getattr(endpoint, "api_family", None)
     raw_kind = getattr(endpoint, "endpoint_kind", None)
     endpoint_sig = ""
-    if isinstance(raw_family, str) and isinstance(raw_kind, str) and raw_family and raw_kind:
+    if (
+        isinstance(raw_family, str)
+        and isinstance(raw_kind, str)
+        and raw_family
+        and raw_kind
+    ):
         endpoint_sig = make_signature_key(raw_family, raw_kind)
     else:
         # 兜底：允许 api_format 已直接存 signature key 的情况
@@ -220,7 +228,9 @@ def build_provider_url(
     # Provider transport hook: 如果有注册的 hook 则委托处理
     from src.services.provider.envelope import ensure_providers_bootstrapped
 
-    ensure_providers_bootstrapped(provider_types=[provider_type] if provider_type else None)
+    ensure_providers_bootstrapped(
+        provider_types=[provider_type] if provider_type else None
+    )
     if provider_type and endpoint_sig:
         hook = _transport_hooks.get((provider_type, endpoint_sig))
         # Codex hook 仅在无 custom_path 时生效
@@ -244,7 +254,10 @@ def build_provider_url(
             kind = EndpointKind(endpoint_sig.split(":", 1)[1])
         except Exception:
             kind = None
-        if kind in {EndpointKind.CHAT, EndpointKind.CLI} and "action" not in effective_path_params:
+        if (
+            kind in {EndpointKind.CHAT, EndpointKind.CLI}
+            and "action" not in effective_path_params
+        ):
             effective_path_params["action"] = (
                 "streamGenerateContent" if is_stream else "generateContent"
             )
@@ -262,9 +275,15 @@ def build_provider_url(
         # 使用 API 格式的默认路径
         path = _resolve_default_path(endpoint_sig)
         # Codex OAuth 端点（chatgpt.com/backend-api/codex）使用 /responses 而非 /v1/responses
-        base_url = getattr(endpoint, "base_url", "") or ""
+        base_url = resolve_responses_transport_base_url(
+            endpoint, endpoint_sig=endpoint_sig
+        )
         if endpoint_sig in {"openai:cli", "openai:compact"} and is_codex_url(base_url):
-            path = "/responses/compact" if endpoint_sig == "openai:compact" else "/responses"
+            path = (
+                "/responses/compact"
+                if endpoint_sig == "openai:compact"
+                else "/responses"
+            )
         if effective_path_params:
             try:
                 path = path.format(**effective_path_params)
@@ -277,7 +296,10 @@ def build_provider_url(
 
     # 先确定 path，再根据 path 规范化 base_url
     # base_url 在数据库中是 NOT NULL，类型标注为 Optional 是 SQLAlchemy 限制
-    base = _normalize_base_url(endpoint.base_url, path)  # type: ignore[arg-type]
+    resolved_base_url = resolve_responses_transport_base_url(
+        endpoint, endpoint_sig=endpoint_sig
+    )
+    base = _normalize_base_url(resolved_base_url, path)
     url = f"{base}{path}"
 
     # Gemini streamGenerateContent 官方支持 `?alt=sse` 返回 SSE（data: {...}）。
@@ -299,5 +321,7 @@ def _resolve_default_path(endpoint_sig: str | None) -> str:
     try:
         return get_default_path_for_endpoint(endpoint_sig or "")
     except Exception:
-        logger.warning(f"Unknown endpoint signature '{endpoint_sig}' for endpoint, fallback to '/'")
+        logger.warning(
+            f"Unknown endpoint signature '{endpoint_sig}' for endpoint, fallback to '/'"
+        )
         return "/"

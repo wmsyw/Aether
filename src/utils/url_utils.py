@@ -34,3 +34,12 @@ def is_codex_url(base_url: str) -> bool:
     """
     url = base_url.rstrip("/")
     return "/backend-api/codex" in url or url.endswith("/codex")
+
+
+def is_websocket_url(url: str | None) -> bool:
+    value = str(url or "").strip()
+    if not value:
+        return False
+
+    parsed = urlparse(value)
+    return str(parsed.scheme or "").strip().lower() in {"ws", "wss"}

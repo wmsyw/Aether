@@ -10,7 +10,14 @@ import httpx
 from fastapi.responses import JSONResponse
 
 from src.api.handlers.base.parsers import get_parser_for_format
-from src.api.handlers.base.stream_context import extract_proxy_timing, is_format_converted
+from src.api.handlers.base.responses_websocket import (
+    ResponsesWebSocketRequestContext,
+    should_use_responses_websocket,
+)
+from src.api.handlers.base.stream_context import (
+    extract_proxy_timing,
+    is_format_converted,
+)
 from src.api.handlers.base.upstream_stream_bridge import (
     aggregate_upstream_stream_to_internal_response,
 )
@@ -108,9 +115,22 @@ class CliSyncMixin:
             key: "ProviderAPIKey",
             candidate: ProviderCandidate,
         ) -> dict[str, Any]:
-            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result, needs_conversion, sync_proxy_info
+            nonlocal \
+                provider_name, \
+                response_json, \
+                status_code, \
+                response_headers, \
+                provider_api_format, \
+                provider_request_headers, \
+                provider_request_body, \
+                mapped_model_result, \
+                response_metadata_result, \
+                needs_conversion, \
+                sync_proxy_info
             provider_name = str(provider.name)
-            provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
+            provider_api_format = (
+                str(endpoint.api_format) if endpoint.api_format else ""
+            )
 
             # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
             mapped_model = candidate.mapping_matched_model if candidate else None
@@ -123,7 +143,9 @@ class CliSyncMixin:
             attempt_body = request_state.build_attempt_body()
             request_body = attempt_body
             if mapped_model:
-                mapped_model_result = mapped_model  # 保存映射后的模型名，用于 Usage 记录
+                mapped_model_result = (
+                    mapped_model  # 保存映射后的模型名，用于 Usage 记录
+                )
                 request_body = self.apply_mapped_model(request_body, mapped_model)
 
             client_api_format = (
@@ -156,6 +178,10 @@ class CliSyncMixin:
             upstream_is_stream = upstream_request.upstream_is_stream
             envelope_tls_profile = upstream_request.tls_profile
             selected_base_url_cached = upstream_request.selected_base_url
+            use_responses_websocket = should_use_responses_websocket(
+                url, provider_api_format
+            )
+            effective_upstream_stream = upstream_is_stream or use_responses_websocket
 
             # 解析有效代理（Key 级别优先于 Provider 级别）
             from src.services.proxy_node.resolver import (
@@ -164,42 +190,51 @@ class CliSyncMixin:
                 resolve_proxy_info_async,
             )
 
-            _effective_proxy = resolve_effective_proxy(provider.proxy, getattr(key, "proxy", None))
+            provider_proxy = (
+                provider.proxy if isinstance(provider.proxy, dict) else None
+            )
+            key_proxy = getattr(key, "proxy", None)
+            key_proxy = key_proxy if isinstance(key_proxy, dict) else None
+            _effective_proxy = resolve_effective_proxy(provider_proxy, key_proxy)
             sync_proxy_info = await resolve_proxy_info_async(_effective_proxy)
             _proxy_label = get_proxy_label(sync_proxy_info)
 
             logger.info(
-                f"  └─ [{self.request_id}] 发送{'上游流式(聚合)' if upstream_is_stream else '非流式'}请求: "
+                f"  └─ [{self.request_id}] 发送{'上游流式(聚合)' if effective_upstream_stream else '非流式'}请求: "
                 f"Provider={provider.name}, Endpoint={endpoint.id[:8] if endpoint.id else 'N/A'}..., "
                 f"Key=***{key.api_key[-4:] if key.api_key else 'N/A'}, "
                 f"原始模型={model}, 映射后={mapped_model or '无映射'}, URL模型={upstream_request.url_model}, "
                 f"代理={_proxy_label}"
             )
 
-            # 获取复用的 HTTP 客户端（支持代理配置，Key 级别优先于 Provider 级别）
-            # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
-            from src.clients.http_client import HTTPClientPool
-            from src.services.proxy_node.resolver import (
-                build_post_kwargs_async,
-                build_stream_kwargs_async,
-                resolve_delegate_config_async,
+            http_client: Any = None
+            delegate_cfg: Any = None
+            raw_request_timeout = provider.request_timeout
+            request_timeout = (
+                float(raw_request_timeout)
+                if isinstance(raw_request_timeout, (int, float))
+                else float(config.http_request_timeout)
             )
 
-            # 非流式请求使用 http_request_timeout 作为整体超时
-            # 优先使用 Provider 配置，否则使用全局配置
-            request_timeout = provider.request_timeout or config.http_request_timeout
+            if not use_responses_websocket:
+                from src.clients.http_client import HTTPClientPool
+                from src.services.proxy_node.resolver import (
+                    resolve_delegate_config_async,
+                )
 
-            delegate_cfg = await resolve_delegate_config_async(_effective_proxy)
-            http_client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg,
-                proxy_config=_effective_proxy,
-                tls_profile=envelope_tls_profile,
-            )
+                delegate_cfg = await resolve_delegate_config_async(_effective_proxy)
+                http_client = await HTTPClientPool.get_upstream_client(
+                    delegate_cfg,
+                    proxy_config=_effective_proxy,
+                    tls_profile=envelope_tls_profile,
+                )
 
             # 注意：不使用 async with，因为复用的客户端不应该被关闭
             # 超时通过 timeout 参数控制
-            resp: httpx.Response | None = None
-            if not upstream_is_stream:
+            resp: Any = None
+            if not effective_upstream_stream:
+                from src.services.proxy_node.resolver import build_post_kwargs_async
+
                 try:
                     _pkw = await build_post_kwargs_async(
                         delegate_cfg,
@@ -210,9 +245,15 @@ class CliSyncMixin:
                         client_content_encoding=effective_client_content_encoding,
                     )
                     resp = await http_client.post(**_pkw)
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                except (
+                    httpx.ConnectError,
+                    httpx.ConnectTimeout,
+                    httpx.TimeoutException,
+                ) as e:
                     if envelope:
-                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
+                        envelope.on_connection_error(
+                            base_url=selected_base_url_cached, exc=e
+                        )
                         if selected_base_url_cached:
                             logger.warning(
                                 f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
@@ -222,47 +263,47 @@ class CliSyncMixin:
                 # Forced upstream streaming: aggregate SSE to a sync JSON response.
                 registry = get_format_converter_registry()
                 provider_parser = (
-                    get_parser_for_format(provider_api_format) if provider_api_format else None
+                    get_parser_for_format(provider_api_format)
+                    if provider_api_format
+                    else None
                 )
 
-                try:
-                    _stream_args = await build_stream_kwargs_async(
-                        delegate_cfg,
-                        url=url,
-                        headers=provider_headers,
-                        payload=provider_payload,
-                        timeout=request_timeout,
-                        client_content_encoding=effective_client_content_encoding,
-                    )
-                    async with http_client.stream(**_stream_args) as stream_resp:
-                        resp = stream_resp
+                async def _aggregate_stream_response(stream_resp: Any) -> None:
+                    nonlocal resp, status_code, response_headers, response_json
 
-                        status_code = stream_resp.status_code
-                        response_headers = dict(stream_resp.headers)
-                        extract_proxy_timing(sync_proxy_info, response_headers)
+                    resp = stream_resp
+                    status_code = stream_resp.status_code
+                    response_headers = dict(stream_resp.headers)
+                    extract_proxy_timing(sync_proxy_info, response_headers)
 
-                        if envelope:
-                            envelope.on_http_status(
-                                base_url=selected_base_url_cached,
-                                status_code=status_code,
-                            )
+                    if envelope:
+                        envelope.on_http_status(
+                            base_url=selected_base_url_cached,
+                            status_code=status_code,
+                        )
 
-                        stream_resp.raise_for_status()
+                    stream_resp.raise_for_status()
 
-                        byte_iter = stream_resp.aiter_bytes()
-                        _provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-                        if (
-                            _provider_type == "kiro"
-                            and envelope
-                            and envelope.force_stream_rewrite()
-                        ):
-                            from src.services.provider.adapters.kiro.eventstream_rewriter import (
-                                apply_kiro_stream_rewrite,
-                            )
+                    byte_iter = stream_resp.aiter_bytes()
+                    _provider_type = str(
+                        getattr(provider, "provider_type", "") or ""
+                    ).lower()
+                    if (
+                        not use_responses_websocket
+                        and _provider_type == "kiro"
+                        and envelope
+                        and envelope.force_stream_rewrite()
+                    ):
+                        from src.services.provider.adapters.kiro.eventstream_rewriter import (
+                            apply_kiro_stream_rewrite,
+                        )
 
-                            byte_iter = apply_kiro_stream_rewrite(byte_iter, model=str(model or ""))
+                        byte_iter = apply_kiro_stream_rewrite(
+                            byte_iter, model=str(model or "")
+                        )
 
-                        internal_resp = await aggregate_upstream_stream_to_internal_response(
+                    internal_resp = (
+                        await aggregate_upstream_stream_to_internal_response(
                             byte_iter,
                             provider_api_format=provider_api_format,
                             provider_name=str(provider.name),
@@ -271,24 +312,63 @@ class CliSyncMixin:
                             envelope=envelope,
                             provider_parser=provider_parser,
                         )
+                    )
 
-                        tgt_norm = (
-                            registry.get_normalizer(client_api_format)
-                            if client_api_format
-                            else None
+                    tgt_norm = (
+                        registry.get_normalizer(client_api_format)
+                        if client_api_format
+                        else None
+                    )
+                    if tgt_norm is None:
+                        raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+                    response_json = tgt_norm.response_from_internal(
+                        internal_resp,
+                        requested_model=model,
+                    )
+                    response_json = (
+                        response_json if isinstance(response_json, dict) else {}
+                    )
+
+                try:
+                    if use_responses_websocket:
+                        async with ResponsesWebSocketRequestContext(
+                            url=url,
+                            headers=provider_headers,
+                            payload=provider_payload,
+                            provider_name=str(provider.name),
+                            proxy_config=_effective_proxy,
+                            tls_profile=envelope_tls_profile,
+                            connect_timeout=request_timeout,
+                            receive_timeout=request_timeout,
+                            total_timeout=request_timeout,
+                        ) as stream_resp:
+                            await _aggregate_stream_response(stream_resp)
+                    else:
+                        from src.services.proxy_node.resolver import (
+                            build_stream_kwargs_async,
                         )
-                        if tgt_norm is None:
-                            raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
 
-                        response_json = tgt_norm.response_from_internal(
-                            internal_resp,
-                            requested_model=model,
+                        _stream_args = await build_stream_kwargs_async(
+                            delegate_cfg,
+                            url=url,
+                            headers=provider_headers,
+                            payload=provider_payload,
+                            timeout=request_timeout,
+                            client_content_encoding=effective_client_content_encoding,
                         )
-                        response_json = response_json if isinstance(response_json, dict) else {}
+                        async with http_client.stream(**_stream_args) as stream_resp:
+                            await _aggregate_stream_response(stream_resp)
 
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                except (
+                    httpx.ConnectError,
+                    httpx.ConnectTimeout,
+                    httpx.TimeoutException,
+                ) as e:
                     if envelope:
-                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
+                        envelope.on_connection_error(
+                            base_url=selected_base_url_cached, exc=e
+                        )
                         if selected_base_url_cached:
                             logger.warning(
                                 f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
@@ -300,11 +380,15 @@ class CliSyncMixin:
             extract_proxy_timing(sync_proxy_info, response_headers)
 
             if envelope:
-                envelope.on_http_status(base_url=selected_base_url_cached, status_code=status_code)
+                envelope.on_http_status(
+                    base_url=selected_base_url_cached, status_code=status_code
+                )
 
             # Forced upstream streaming already built response_json via aggregator.
-            if upstream_is_stream:
-                response_metadata_result = self._extract_response_metadata(response_json or {})
+            if effective_upstream_stream:
+                response_metadata_result = self._extract_response_metadata(
+                    response_json or {}
+                )
                 return response_json if isinstance(response_json, dict) else {}
 
             # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
@@ -334,7 +418,9 @@ class CliSyncMixin:
                     raw_content = resp.text[:500] if resp.text else "(empty)"
                 except Exception:
                     try:
-                        raw_content = repr(resp.content[:500]) if resp.content else "(empty)"
+                        raw_content = (
+                            repr(resp.content[:500]) if resp.content else "(empty)"
+                        )
                     except Exception:
                         raw_content = "(unable to read)"
                 logger.error(
@@ -430,7 +516,9 @@ class CliSyncMixin:
                         requested_model=model,  # 使用用户请求的原始模型名
                     )
                     logger.debug(
-                        "非流式响应格式转换完成: {} -> {}", provider_api_format, api_format
+                        "非流式响应格式转换完成: {} -> {}",
+                        provider_api_format,
+                        api_format,
                     )
                 except Exception as conv_err:
                     logger.warning("非流式响应格式转换失败，使用原始响应: {}", conv_err)
@@ -487,7 +575,9 @@ class CliSyncMixin:
                 endpoint_kind=self.endpoint_kind,
                 # 格式转换追踪
                 endpoint_api_format=provider_api_format or None,
-                has_format_conversion=is_format_converted(provider_api_format, str(api_format)),
+                has_format_conversion=is_format_converted(
+                    provider_api_format, str(api_format)
+                ),
                 # Provider 侧追踪信息（用于记录真实成本）
                 provider_id=provider_id,
                 provider_endpoint_id=endpoint_id,
@@ -495,7 +585,9 @@ class CliSyncMixin:
                 # 模型映射信息
                 target_model=mapped_model_result,
                 # Provider 响应元数据（如 Gemini 的 modelVersion）
-                response_metadata=response_metadata_result if response_metadata_result else None,
+                response_metadata=response_metadata_result
+                if response_metadata_result
+                else None,
                 request_metadata=request_metadata,
             )
 
@@ -580,7 +672,9 @@ class CliSyncMixin:
                 client_response_headers={"content-type": "application/json"},
                 # 格式转换追踪
                 endpoint_api_format=provider_api_format or None,
-                has_format_conversion=is_format_converted(provider_api_format, str(api_format)),
+                has_format_conversion=is_format_converted(
+                    provider_api_format, str(api_format)
+                ),
                 # 模型映射信息
                 target_model=mapped_model_result,
                 request_metadata=request_metadata,
@@ -598,7 +692,10 @@ class CliSyncMixin:
         if envelope and hasattr(envelope, "extract_error_text"):
             return await envelope.extract_error_text(e)
         try:
-            if hasattr(e.response, "is_stream_consumed") and not e.response.is_stream_consumed:
+            if (
+                hasattr(e.response, "is_stream_consumed")
+                and not e.response.is_stream_consumed
+            ):
                 error_bytes = await e.response.aread()
 
                 for encoding in ["utf-8", "gbk", "latin1"]:

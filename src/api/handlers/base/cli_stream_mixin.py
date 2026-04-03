@@ -18,6 +18,10 @@ from src.api.handlers.base.base_handler import (
     wait_for_with_disconnect_detection,
 )
 from src.api.handlers.base.parsers import get_parser_for_format
+from src.api.handlers.base.responses_websocket import (
+    ResponsesWebSocketRequestContext,
+    should_use_responses_websocket,
+)
 from src.api.handlers.base.request_builder import get_provider_auth
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.utils import (
@@ -218,7 +222,9 @@ class CliStreamMixin:
             )
 
             # 创建监控流（传递 http_request 用于断连检测）
-            monitored_stream = self._create_monitored_stream(ctx, stream_generator, http_request)
+            monitored_stream = self._create_monitored_stream(
+                ctx, stream_generator, http_request
+            )
 
             # 透传提供商的响应头给客户端
             # 同时添加必要的 SSE 头以确保流式传输正常工作
@@ -244,7 +250,9 @@ class CliStreamMixin:
                 self._log_request_error("流式请求失败（签名错误）", e)
             else:
                 self._log_request_error("流式请求失败", e)
-            await self._record_stream_failure(ctx, e, original_headers, original_request_body)
+            await self._record_stream_failure(
+                ctx, e, original_headers, original_request_body
+            )
             raise
 
     async def _execute_stream_request(
@@ -285,7 +293,9 @@ class CliStreamMixin:
         ctx.key_id = str(key.id)
 
         # 记录格式转换信息
-        ctx.provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
+        ctx.provider_api_format = (
+            str(endpoint.api_format) if endpoint.api_format else ""
+        )
         ctx.client_api_format = ctx.api_format  # 已在 process_stream 中设置
 
         # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
@@ -335,6 +345,9 @@ class CliStreamMixin:
         envelope = upstream_request.envelope
         upstream_is_stream = upstream_request.upstream_is_stream
         envelope_tls_profile = upstream_request.tls_profile
+        use_responses_websocket = should_use_responses_websocket(
+            url, provider_api_format
+        )
 
         # 保存发送给 Provider 的请求信息（用于调试和统计）
         ctx.provider_request_headers = provider_headers
@@ -344,21 +357,31 @@ class CliStreamMixin:
         # 解析有效代理（Key 级别优先于 Provider 级别）
         from src.services.proxy_node.resolver import get_proxy_label as _gpl
         from src.services.proxy_node.resolver import resolve_effective_proxy as _rep
-        from src.services.proxy_node.resolver import resolve_proxy_info_async as _rpi_async
+        from src.services.proxy_node.resolver import (
+            resolve_proxy_info_async as _rpi_async,
+        )
 
-        effective_proxy = _rep(provider.proxy, getattr(key, "proxy", None))
+        provider_proxy = provider.proxy if isinstance(provider.proxy, dict) else None
+        key_proxy = getattr(key, "proxy", None)
+        key_proxy = key_proxy if isinstance(key_proxy, dict) else None
+        effective_proxy = _rep(provider_proxy, key_proxy)
         ctx.proxy_info = await _rpi_async(effective_proxy)
 
         # If upstream is forced to non-stream mode, we execute a sync request and then
         # simulate streaming to the client (sync -> stream bridge).
-        if not upstream_is_stream:
+        if not upstream_is_stream and not use_responses_websocket:
             from src.clients.http_client import HTTPClientPool
             from src.services.proxy_node.resolver import (
                 build_post_kwargs_async,
                 resolve_delegate_config_async,
             )
 
-            request_timeout_sync = provider.request_timeout or config.http_request_timeout
+            raw_request_timeout_sync = provider.request_timeout
+            request_timeout_sync = (
+                float(raw_request_timeout_sync)
+                if isinstance(raw_request_timeout_sync, (int, float))
+                else float(config.http_request_timeout)
+            )
             delegate_cfg = await resolve_delegate_config_async(effective_proxy)
             http_client = await HTTPClientPool.get_upstream_client(
                 delegate_cfg,
@@ -378,7 +401,11 @@ class CliStreamMixin:
                 _connect_start = time.monotonic()
                 resp = await http_client.post(**_pkw)
                 ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+            except (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.TimeoutException,
+            ) as e:
                 if envelope:
                     envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
                     if ctx.selected_base_url:
@@ -391,7 +418,9 @@ class CliStreamMixin:
             ctx.response_headers = dict(resp.headers)
             ctx.set_proxy_timing(ctx.response_headers)
             if envelope:
-                envelope.on_http_status(base_url=ctx.selected_base_url, status_code=ctx.status_code)
+                envelope.on_http_status(
+                    base_url=ctx.selected_base_url, status_code=ctx.status_code
+                )
 
             # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
             try:
@@ -403,9 +432,13 @@ class CliStreamMixin:
                     resp.status_code == 401
                     and str(getattr(key, "auth_type", "") or "").lower() == "oauth"
                 ):
-                    refreshed_auth = await get_provider_auth(endpoint, key, force_refresh=True)
+                    refreshed_auth = await get_provider_auth(
+                        endpoint, key, force_refresh=True
+                    )
                     if refreshed_auth:
-                        provider_headers[refreshed_auth.auth_header] = refreshed_auth.auth_value
+                        provider_headers[refreshed_auth.auth_header] = (
+                            refreshed_auth.auth_value
+                        )
                         ctx.provider_request_headers = provider_headers
 
                     # retry once
@@ -471,7 +504,9 @@ class CliStreamMixin:
 
             if envelope:
                 response_json = envelope.unwrap_response(response_json)
-                envelope.postprocess_unwrapped_response(model=ctx.model, data=response_json)
+                envelope.postprocess_unwrapped_response(
+                    model=ctx.model, data=response_json
+                )
 
             # Embedded error detection (HTTP 200 but error body).
             if isinstance(response_json, dict) and provider_api_format:
@@ -491,7 +526,11 @@ class CliStreamMixin:
 
             # Convert sync JSON -> InternalResponse, then InternalResponse -> client stream events.
             registry = get_format_converter_registry()
-            src_norm = registry.get_normalizer(provider_api_format) if provider_api_format else None
+            src_norm = (
+                registry.get_normalizer(provider_api_format)
+                if provider_api_format
+                else None
+            )
             if src_norm is None:
                 raise RuntimeError(f"未注册 Normalizer: {provider_api_format}")
 
@@ -506,17 +545,25 @@ class CliStreamMixin:
                 ctx.input_tokens = int(internal_resp.usage.input_tokens or 0)
                 ctx.output_tokens = int(internal_resp.usage.output_tokens or 0)
                 ctx.cached_tokens = int(internal_resp.usage.cache_read_tokens or 0)
-                ctx.cache_creation_tokens = int(internal_resp.usage.cache_write_tokens or 0)
+                ctx.cache_creation_tokens = int(
+                    internal_resp.usage.cache_write_tokens or 0
+                )
 
             from src.core.api_format.conversion.stream_state import StreamState
 
-            tgt_norm = registry.get_normalizer(client_api_format) if client_api_format else None
+            tgt_norm = (
+                registry.get_normalizer(client_api_format)
+                if client_api_format
+                else None
+            )
             if tgt_norm is None:
                 raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
 
             state = StreamState(
                 model=str(ctx.model or ""),
-                message_id=str(ctx.response_id or ctx.request_id or self.request_id or ""),
+                message_id=str(
+                    ctx.response_id or ctx.request_id or self.request_id or ""
+                ),
             )
             output_state = {"first_yield": True, "streaming_updated": False}
 
@@ -546,7 +593,12 @@ class CliStreamMixin:
 
         # 流式请求使用 stream_first_byte_timeout 作为首字节超时
         # 优先使用 Provider 配置，否则使用全局配置
-        request_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
+        raw_request_timeout = provider.stream_first_byte_timeout
+        request_timeout = (
+            float(raw_request_timeout)
+            if isinstance(raw_request_timeout, (int, float))
+            else float(config.stream_first_byte_timeout)
+        )
 
         _proxy_label = _gpl(ctx.proxy_info)
 
@@ -560,18 +612,21 @@ class CliStreamMixin:
 
         # 获取 HTTP 客户端（支持代理配置，Key 级别优先于 Provider 级别）
         # 使用连接池复用客户端，避免每次流式请求都新建 TCP/TLS 连接
-        from src.clients.http_client import HTTPClientPool
-        from src.services.proxy_node.resolver import (
-            build_stream_kwargs_async,
-            resolve_delegate_config_async,
-        )
+        http_client: Any = None
+        delegate_cfg: Any = None
+        if not use_responses_websocket:
+            from src.clients.http_client import HTTPClientPool
+            from src.services.proxy_node.resolver import (
+                build_stream_kwargs_async,
+                resolve_delegate_config_async,
+            )
 
-        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
-        http_client = await HTTPClientPool.get_upstream_client(
-            delegate_cfg,
-            proxy_config=effective_proxy,
-            tls_profile=envelope_tls_profile,
-        )
+            delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+            http_client = await HTTPClientPool.get_upstream_client(
+                delegate_cfg,
+                proxy_config=effective_proxy,
+                tls_profile=envelope_tls_profile,
+            )
 
         # 用于存储内部函数的结果（必须在函数定义前声明，供 nonlocal 使用）
         byte_iterator: Any = None
@@ -581,20 +636,31 @@ class CliStreamMixin:
         async def _connect_and_prefetch() -> None:
             """建立连接并预读首字节（受整体超时控制）"""
             nonlocal byte_iterator, prefetched_chunks, response_ctx
-            _skw = await build_stream_kwargs_async(
-                delegate_cfg,
-                url=url,
-                headers=provider_headers,
-                payload=provider_payload,
-                client_content_encoding=client_content_encoding,
-                # 流式请求不应使用 provider.request_timeout 作为“整条流总时长”超时，
-                # 否则会在长响应中途被硬切断（常见于 request_timeout=15s 的配置）。
-                # 首字节超时由外层 wait_for(stream_first_byte_timeout) 控制；
-                # 后续分块读取由 http client 默认 read timeout（长超时）控制。
-                timeout=None,
-            )
             _connect_start = time.monotonic()
-            response_ctx = http_client.stream(**_skw)
+            if use_responses_websocket:
+                response_ctx = ResponsesWebSocketRequestContext(
+                    url=url,
+                    headers=provider_headers,
+                    payload=provider_payload,
+                    provider_name=str(provider.name),
+                    proxy_config=effective_proxy,
+                    tls_profile=envelope_tls_profile,
+                    connect_timeout=request_timeout,
+                    receive_timeout=None,
+                    total_timeout=None,
+                )
+            else:
+                from src.services.proxy_node.resolver import build_stream_kwargs_async
+
+                _skw = await build_stream_kwargs_async(
+                    delegate_cfg,
+                    url=url,
+                    headers=provider_headers,
+                    payload=provider_payload,
+                    client_content_encoding=client_content_encoding,
+                    timeout=None,
+                )
+                response_ctx = http_client.stream(**_skw)
             stream_response = await response_ctx.__aenter__()
             ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
 
@@ -633,7 +699,9 @@ class CliStreamMixin:
                         request_id=self.request_id,
                     )
                 else:
-                    await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
+                    await asyncio.wait_for(
+                        _connect_and_prefetch(), timeout=request_timeout
+                    )
                 break
 
             except TimeoutError as e:
@@ -666,7 +734,11 @@ class CliStreamMixin:
                 ctx.error_message = "client_disconnected_during_prefetch"
                 raise
 
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+            except (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.TimeoutException,
+            ) as e:
                 if envelope:
                     envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
                     if ctx.selected_base_url:
@@ -690,9 +762,13 @@ class CliStreamMixin:
                     except Exception:
                         pass
 
-                    refreshed_auth = await get_provider_auth(endpoint, key, force_refresh=True)
+                    refreshed_auth = await get_provider_auth(
+                        endpoint, key, force_refresh=True
+                    )
                     if refreshed_auth:
-                        provider_headers[refreshed_auth.auth_header] = refreshed_auth.auth_value
+                        provider_headers[refreshed_auth.auth_header] = (
+                            refreshed_auth.auth_value
+                        )
                         ctx.provider_request_headers = provider_headers
 
                     # Reset state for the next attempt.
@@ -767,7 +843,9 @@ class CliStreamMixin:
             if not pool_cfg:
                 return
 
-            from src.services.provider.pool.health_policy import apply_stream_timeout_policy
+            from src.services.provider.pool.health_policy import (
+                apply_stream_timeout_policy,
+            )
 
             task = asyncio.create_task(
                 apply_stream_timeout_policy(
@@ -776,7 +854,9 @@ class CliStreamMixin:
                     config=pool_cfg,
                 )
             )
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
         except Exception as exc:
             logger.debug("Stream timeout policy trigger failed: {}", exc)
 
@@ -811,7 +891,11 @@ class CliStreamMixin:
 
             # Kiro 特殊处理：AWS Event Stream 二进制流需要重写为 SSE
             ctx_provider_type = str(ctx.provider_type or "").strip().lower()
-            if ctx_provider_type == "kiro" and envelope and envelope.force_stream_rewrite():
+            if (
+                ctx_provider_type == "kiro"
+                and envelope
+                and envelope.force_stream_rewrite()
+            ):
                 from src.services.provider.adapters.kiro.eventstream_rewriter import (
                     apply_kiro_stream_rewrite,
                 )
@@ -869,10 +953,15 @@ class CliStreamMixin:
                         _sample_lines.append(normalized_line[:200])
 
                     # 空流检测：超过阈值且无数据，发送错误事件并结束
-                    if ctx.chunk_count > self.EMPTY_CHUNK_THRESHOLD and ctx.data_count == 0:
+                    if (
+                        ctx.chunk_count > self.EMPTY_CHUNK_THRESHOLD
+                        and ctx.data_count == 0
+                    ):
                         elapsed = time.time() - last_data_time
                         if elapsed > self.DATA_TIMEOUT:
-                            logger.warning("Provider '{}' 流超时且无数据", ctx.provider_name)
+                            logger.warning(
+                                "Provider '{}' 流超时且无数据", ctx.provider_name
+                            )
                             ctx.status_code = 504
                             ctx.error_message = "流式响应超时，未收到有效数据"
                             ctx.upstream_response = (
@@ -928,7 +1017,9 @@ class CliStreamMixin:
 
             # 检查是否收到数据
             if ctx.data_count == 0:
-                sample_info = f", 前几行内容: {_sample_lines!r}" if _sample_lines else ""
+                sample_info = (
+                    f", 前几行内容: {_sample_lines!r}" if _sample_lines else ""
+                )
                 logger.warning(
                     "Provider '{}' 返回空流式响应{}",
                     ctx.provider_name,

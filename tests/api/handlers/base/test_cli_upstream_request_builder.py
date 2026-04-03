@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -31,7 +32,13 @@ class _DummyCliRequestHandler(CliRequestMixin):
     FORMAT_ID = "openai:cli"
 
     def __init__(self) -> None:
+        self.db = None
+        self.user = SimpleNamespace(id=1)
         self.api_key = SimpleNamespace(id="user-key-123")
+        self.request_id = "req-test"
+        self.client_ip = "127.0.0.1"
+        self.user_agent = "pytest"
+        self.start_time = time.time()
         self._request_builder = PassthroughRequestBuilder()
 
 
@@ -57,6 +64,33 @@ def _build_codex_endpoint(*, api_format: str) -> Any:
         header_rules=None,
         provider=provider,
     )
+
+
+def _build_websocket_endpoint(*, api_format: str) -> Any:
+    provider = SimpleNamespace(
+        id="provider-ws",
+        provider_type="custom",
+        config=None,
+        proxy=None,
+    )
+    return SimpleNamespace(
+        id="endpoint-ws",
+        api_family="openai",
+        endpoint_kind="cli",
+        api_format=api_format,
+        base_url="https://upstream.example.com/v1",
+        custom_path=None,
+        body_rules=[],
+        header_rules=None,
+        config={"responses_websocket_enabled": True},
+        provider=provider,
+    )
+
+
+def _build_sse_only_websocket_endpoint(*, api_format: str) -> Any:
+    endpoint = _build_websocket_endpoint(api_format=api_format)
+    endpoint.config = {"responses_websocket_enabled": False}
+    return endpoint
 
 
 def _build_key() -> Any:
@@ -132,7 +166,9 @@ async def test_build_upstream_request_codex_cli_injects_prompt_cache_and_forces_
     assert result.payload["stream"] is True
     assert result.payload["instructions"] == "You are GPT-5."
     assert result.payload["store"] is False
-    assert result.payload["prompt_cache_key"] == build_stable_codex_prompt_cache_key("user-key-123")
+    assert result.payload["prompt_cache_key"] == build_stable_codex_prompt_cache_key(
+        "user-key-123"
+    )
     assert "max_output_tokens" not in result.payload
     assert "temperature" not in result.payload
     assert "top_p" not in result.payload
@@ -173,7 +209,9 @@ async def test_build_upstream_request_codex_compact_drops_stream_and_injects_pro
     assert result.url == "https://chatgpt.com/backend-api/codex/responses/compact"
     assert result.upstream_is_stream is False
     assert "stream" not in result.payload
-    assert result.payload["prompt_cache_key"] == build_stable_codex_prompt_cache_key("user-key-123")
+    assert result.payload["prompt_cache_key"] == build_stable_codex_prompt_cache_key(
+        "user-key-123"
+    )
     assert result.payload["instructions"] == "You are GPT-5."
     assert result.payload["store"] is False
     short_id = _expected_codex_header_id(result.payload["prompt_cache_key"])
@@ -218,7 +256,9 @@ async def test_build_upstream_request_legacy_codex_compact_context_uses_compact_
     assert result.url == "https://chatgpt.com/backend-api/codex/responses/compact"
     assert result.upstream_is_stream is False
     assert "stream" not in result.payload
-    assert result.payload["prompt_cache_key"] == build_stable_codex_prompt_cache_key("user-key-123")
+    assert result.payload["prompt_cache_key"] == build_stable_codex_prompt_cache_key(
+        "user-key-123"
+    )
     assert result.payload["instructions"] == "You are GPT-5."
     short_id = _expected_codex_header_id(result.payload["prompt_cache_key"])
     assert result.headers["session_id"] == short_id
@@ -262,3 +302,69 @@ async def test_build_upstream_request_codex_cli_preserves_explicit_prompt_cache_
     assert result.payload["prompt_cache_key"] == "client-cache-key"
     assert result.payload["stream"] is True
     _assert_common_codex_headers(result.headers)
+
+
+@pytest.mark.asyncio
+async def test_build_upstream_request_websocket_toggle_off_keeps_sse_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_provider_auth(endpoint: Any, key: Any) -> _DummyAuthInfo:
+        return _DummyAuthInfo()
+
+    monkeypatch.setattr(mixmod, "get_provider_auth", _fake_get_provider_auth)
+
+    handler = _DummyCliRequestHandler()
+    endpoint = _build_sse_only_websocket_endpoint(api_format="openai:cli")
+    provider = endpoint.provider
+    key = _build_key()
+
+    result = await handler._build_upstream_request(
+        provider=provider,
+        endpoint=endpoint,
+        key=key,
+        request_body={"model": "gpt-5", "input": [], "stream": False},
+        original_headers=_build_headers(),
+        query_params=None,
+        client_api_format="openai:cli",
+        provider_api_format="openai:cli",
+        fallback_model="gpt-5",
+        mapped_model=None,
+        client_is_stream=False,
+    )
+
+    assert result.url == "https://upstream.example.com/v1/responses"
+    assert result.upstream_is_stream is False
+    assert result.payload["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_build_upstream_request_websocket_cli_forces_stream_before_transport_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_provider_auth(endpoint: Any, key: Any) -> _DummyAuthInfo:
+        return _DummyAuthInfo()
+
+    monkeypatch.setattr(mixmod, "get_provider_auth", _fake_get_provider_auth)
+
+    handler = _DummyCliRequestHandler()
+    endpoint = _build_websocket_endpoint(api_format="openai:cli")
+    provider = endpoint.provider
+    key = _build_key()
+
+    result = await handler._build_upstream_request(
+        provider=provider,
+        endpoint=endpoint,
+        key=key,
+        request_body={"model": "gpt-5", "input": [], "stream": False},
+        original_headers=_build_headers(),
+        query_params=None,
+        client_api_format="openai:cli",
+        provider_api_format="openai:cli",
+        fallback_model="gpt-5",
+        mapped_model=None,
+        client_is_stream=False,
+    )
+
+    assert result.url == "wss://upstream.example.com/v1/responses"
+    assert result.upstream_is_stream is True
+    assert result.payload["stream"] is True
