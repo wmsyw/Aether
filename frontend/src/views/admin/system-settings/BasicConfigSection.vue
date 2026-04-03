@@ -88,8 +88,8 @@
         </p>
       </div>
 
-      <div class="flex items-center h-full">
-        <div class="flex items-center space-x-2">
+      <div class="flex h-full items-start">
+        <div class="flex items-start gap-3">
           <Checkbox
             id="enable-registration"
             :checked="enableRegistration"
@@ -109,8 +109,8 @@
         </div>
       </div>
 
-      <div class="flex items-center h-full">
-        <div class="flex items-center space-x-2">
+      <div class="flex h-full items-start">
+        <div class="flex items-start gap-3">
           <Checkbox
             id="auto-delete-expired-keys"
             :checked="autoDeleteExpiredKeys"
@@ -130,8 +130,8 @@
         </div>
       </div>
 
-      <div class="flex items-center h-full">
-        <div class="flex items-center space-x-2">
+      <div class="flex h-full items-start">
+        <div class="flex items-start gap-3">
           <Checkbox
             id="enable-format-conversion"
             :checked="enableFormatConversion"

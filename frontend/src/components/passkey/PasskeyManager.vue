@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-6">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <h3 class="text-lg font-medium text-foreground">
           通行密钥 (Passkey)
@@ -11,6 +11,7 @@
       </div>
       <Button
         v-if="isSupported()"
+        class="w-full sm:w-auto"
         :disabled="loading"
         @click="handleRegister"
       >
@@ -53,23 +54,23 @@
       <div
         v-for="cred in credentials"
         :key="cred.id"
-        class="flex items-center justify-between p-4 rounded-lg border bg-card"
+        class="flex flex-col gap-4 rounded-lg border bg-card p-4 sm:flex-row sm:items-center sm:justify-between"
       >
-        <div class="flex items-center gap-4">
+        <div class="flex min-w-0 items-start gap-4">
           <div class="p-2 rounded-full bg-primary/10 text-primary">
             <Fingerprint class="w-5 h-5" />
           </div>
-          <div>
-            <div class="flex items-center gap-2">
-              <span class="font-medium text-sm text-foreground">{{ cred.device_name || '未命名设备' }}</span>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="min-w-0 break-all font-medium text-sm text-foreground sm:truncate">{{ cred.device_name || '未命名设备' }}</span>
               <button
-                class="text-muted-foreground hover:text-foreground transition-colors"
+                class="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                 @click="startEdit(cred)"
               >
                 <Edit2 class="w-3.5 h-3.5" />
               </button>
             </div>
-            <div class="text-xs text-muted-foreground mt-1 flex items-center gap-3">
+            <div class="mt-1 flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
               <span>添加于: {{ formatDate(cred.created_at) }}</span>
               <span v-if="cred.last_used_at">最后使用: {{ formatDate(cred.last_used_at) }}</span>
             </div>
@@ -79,7 +80,7 @@
         <Button
           variant="ghost"
           size="icon"
-          class="text-destructive hover:text-destructive hover:bg-destructive/10"
+          class="self-end text-destructive hover:text-destructive hover:bg-destructive/10 sm:self-auto"
           :disabled="loading"
           @click="handleDelete(cred)"
         >

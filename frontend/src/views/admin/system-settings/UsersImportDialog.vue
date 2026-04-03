@@ -68,16 +68,16 @@
 
     <template #footer>
       <Button
-        variant="outline"
-        @click="$emit('update:importUsersDialogOpen', false); $emit('update:usersMergeModeSelectOpen', false)"
-      >
-        取消
-      </Button>
-      <Button
         :disabled="importUsersLoading"
         @click="$emit('confirm')"
       >
         {{ importUsersLoading ? '导入中...' : '确认导入' }}
+      </Button>
+      <Button
+        variant="outline"
+        @click="$emit('update:importUsersDialogOpen', false); $emit('update:usersMergeModeSelectOpen', false)"
+      >
+        取消
       </Button>
     </template>
   </Dialog>
@@ -92,7 +92,7 @@
       v-if="importUsersResult"
       class="space-y-4"
     >
-      <div class="grid grid-cols-2 gap-4 text-sm">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div>
           <p class="font-medium">
             用户
@@ -114,7 +114,7 @@
         </div>
         <div
           v-if="importUsersResult.stats.standalone_keys"
-          class="col-span-2"
+          class="sm:col-span-2"
         >
           <p class="font-medium">
             独立余额 Keys
@@ -133,13 +133,14 @@
         <p class="font-medium text-destructive mb-2">
           警告信息
         </p>
-        <ul class="text-sm text-destructive space-y-1">
-          <li
-            v-for="(err, index) in importUsersResult.stats.errors"
-            :key="index"
-          >
-            {{ err }}
-          </li>
+          <ul class="space-y-1 text-sm text-destructive break-words">
+            <li
+              v-for="(err, index) in importUsersResult.stats.errors"
+              :key="index"
+              class="break-all"
+            >
+              {{ err }}
+            </li>
         </ul>
       </div>
     </div>

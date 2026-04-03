@@ -84,16 +84,16 @@
 
     <template #footer>
       <Button
-        variant="outline"
-        @click="$emit('update:importDialogOpen', false); $emit('update:mergeModeSelectOpen', false)"
-      >
-        取消
-      </Button>
-      <Button
         :disabled="importLoading"
         @click="$emit('confirm')"
       >
         {{ importLoading ? '导入中...' : '确认导入' }}
+      </Button>
+      <Button
+        variant="outline"
+        @click="$emit('update:importDialogOpen', false); $emit('update:mergeModeSelectOpen', false)"
+      >
+        取消
       </Button>
     </template>
   </Dialog>
@@ -108,7 +108,7 @@
       v-if="importResult"
       class="space-y-4"
     >
-      <div class="grid grid-cols-2 gap-4 text-sm">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div>
           <p class="font-medium">
             全局模型
@@ -168,7 +168,7 @@
             跳过: {{ importResult.stats.standalone_api_keys.skipped }}
           </p>
         </div>
-        <div class="col-span-2">
+        <div class="sm:col-span-2">
           <p class="font-medium">
             模型配置
           </p>
@@ -217,13 +217,14 @@
         <p class="font-medium text-destructive mb-2">
           警告信息
         </p>
-        <ul class="text-sm text-destructive space-y-1">
-          <li
-            v-for="(err, index) in importResult.stats.errors"
-            :key="index"
-          >
-            {{ err }}
-          </li>
+          <ul class="space-y-1 text-sm text-destructive break-words">
+            <li
+              v-for="(err, index) in importResult.stats.errors"
+              :key="index"
+              class="break-all"
+            >
+              {{ err }}
+            </li>
         </ul>
       </div>
     </div>

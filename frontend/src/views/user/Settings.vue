@@ -1,5 +1,5 @@
 <template>
-  <div class="container mx-auto px-4 py-8">
+  <div class="container mx-auto px-4 py-6 sm:py-8">
     <h2 class="text-2xl font-bold text-foreground mb-6">
       个人设置
     </h2>
@@ -8,19 +8,19 @@
       <!-- 左侧：个人信息和密码 -->
       <div class="lg:col-span-2 space-y-6">
         <!-- 基本信息 -->
-        <Card class="p-6">
+        <Card class="p-4 sm:p-6">
           <form
             class="space-y-4"
             @submit.prevent="updateProfile"
           >
-            <div class="flex items-center justify-between">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h3 class="text-lg font-medium text-foreground">
                 基本信息
               </h3>
               <Button
                 type="submit"
                 :disabled="savingProfile || !hasProfileChanges"
-                class="shadow-none hover:shadow-none"
+                class="w-full shrink-0 shadow-none hover:shadow-none sm:w-auto"
               >
                 {{ savingProfile ? '保存中...' : '保存' }}
               </Button>
@@ -84,20 +84,20 @@
         <!-- 密码设置（LDAP 用户不显示） -->
         <Card
           v-if="profile?.auth_source !== 'ldap'"
-          class="p-6"
+          class="p-4 sm:p-6"
         >
           <form
             class="space-y-4"
             @submit.prevent="changePassword"
           >
-            <div class="flex items-center justify-between">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h3 class="text-lg font-medium text-foreground">
                 {{ profile?.has_password ? '修改密码' : '设置密码' }}
               </h3>
               <Button
                 type="submit"
                 :disabled="changingPassword || !hasPasswordChanges"
-                class="shadow-none hover:shadow-none"
+                class="w-full shrink-0 shadow-none hover:shadow-none sm:w-auto"
               >
                 {{ changingPassword ? '保存中...' : '保存' }}
               </Button>
@@ -158,13 +158,13 @@
         <!-- Passkey 管理 -->
         <Card
           v-if="passkeyEnabled"
-          class="p-6"
+          class="p-4 sm:p-6"
         >
           <PasskeyManager />
         </Card>
 
-        <Card class="p-6">
-          <div class="flex items-center justify-between mb-4">
+        <Card class="p-4 sm:p-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
             <div>
               <h3 class="text-lg font-medium text-foreground">
                 登录设备
@@ -175,6 +175,7 @@
             </div>
             <Button
               variant="outline"
+              class="w-full sm:w-auto"
               :disabled="sessionsLoading || otherSessionCount === 0 || sessionActionLoading === 'others'"
               @click="handleRevokeOtherSessions"
             >
@@ -201,22 +202,22 @@
             <div
               v-for="session in userSessions"
               :key="session.id"
-              class="flex items-start justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 p-4"
+              class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 p-4"
             >
-              <div class="min-w-0">
+              <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 flex-wrap">
                   <template v-if="editingSessionId === session.id">
                     <Input
                       v-model="sessionLabelDraft"
                       size="sm"
-                      class="h-8 w-56"
+                      class="h-8 w-full sm:w-56"
                       maxlength="120"
                       @keyup.enter="saveSessionLabel(session.id)"
                     />
                   </template>
                   <span
                     v-else
-                    class="font-medium text-foreground"
+                    class="min-w-0 break-all font-medium text-foreground sm:truncate"
                   >{{ session.device_label }}</span>
                   <Badge
                     v-if="session.is_current"
@@ -233,10 +234,11 @@
                   <span v-if="session.ip_address"> · IP {{ session.ip_address }}</span>
                 </p>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto shrink-0">
                 <template v-if="editingSessionId === session.id">
                   <Button
                     size="sm"
+                    class="flex-1 sm:flex-none"
                     :disabled="sessionActionLoading === session.id || !sessionLabelDraft.trim()"
                     @click="saveSessionLabel(session.id)"
                   >
@@ -245,6 +247,7 @@
                   <Button
                     variant="outline"
                     size="sm"
+                    class="flex-1 sm:flex-none"
                     :disabled="sessionActionLoading === session.id"
                     @click="cancelSessionLabelEdit"
                   >
@@ -255,6 +258,7 @@
                   <Button
                     variant="outline"
                     size="sm"
+                    class="flex-1 sm:flex-none"
                     :disabled="sessionActionLoading !== null"
                     @click="startSessionLabelEdit(session)"
                   >
@@ -264,6 +268,7 @@
                     v-if="!session.is_current"
                     variant="outline"
                     size="sm"
+                    class="flex-1 sm:flex-none"
                     :disabled="sessionActionLoading === session.id"
                     @click="handleRevokeSession(session.id)"
                   >
@@ -276,7 +281,7 @@
         </Card>
 
         <!-- OAuth 绑定 -->
-        <Card class="p-6">
+        <Card class="p-4 sm:p-6">
           <h3 class="text-lg font-medium text-foreground mb-4">
             OAuth 绑定
           </h3>
@@ -314,7 +319,7 @@
               <div
                 v-for="link in oauthLinks"
                 :key="link.provider_type"
-                class="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-4"
+                class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-4"
               >
                 <div class="flex items-center gap-3 min-w-0 flex-1">
                   <!-- eslint-disable vue/no-v-html -->
@@ -332,21 +337,24 @@
                     </div>
                   </div>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="oauthActionLoading"
-                  @click="handleUnbind(link.provider_type)"
-                >
-                  解绑
-                </Button>
+                <div class="w-full sm:w-auto flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="w-full sm:w-auto"
+                    :disabled="oauthActionLoading"
+                    @click="handleUnbind(link.provider_type)"
+                  >
+                    解绑
+                  </Button>
+                </div>
               </div>
 
               <!-- 可绑定的 Provider -->
               <div
                 v-for="p in bindableProviders"
                 :key="p.provider_type"
-                class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border p-4 hover:border-primary/50 transition-colors"
+                class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-dashed border-border p-4 hover:border-primary/50 transition-colors"
               >
                 <div class="flex items-center gap-3 min-w-0 flex-1">
                   <!-- eslint-disable vue/no-v-html -->
@@ -364,21 +372,24 @@
                     </div>
                   </div>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="oauthActionLoading"
-                  @click="handleBind(p.provider_type)"
-                >
-                  绑定
-                </Button>
+                <div class="w-full sm:w-auto flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="w-full sm:w-auto"
+                    :disabled="oauthActionLoading"
+                    @click="handleBind(p.provider_type)"
+                  >
+                    绑定
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
         </Card>
 
         <!-- 偏好设置 -->
-        <Card class="p-6">
+        <Card class="p-4 sm:p-6">
           <h3 class="text-lg font-medium text-foreground mb-4">
             偏好设置
           </h3>
@@ -454,58 +465,61 @@
                 <!-- 邮件通知：仅当系统配置了邮箱服务时显示 -->
                 <div
                   v-if="emailConfigured"
-                  class="flex items-center justify-between py-2 border-b border-border/40 last:border-0"
+                  class="flex flex-col gap-3 py-2 border-b border-border/40 last:border-0 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div class="flex-1">
+                  <div class="flex-1 min-w-0">
                     <Label
                       for="email-notifications"
                       class="text-sm font-medium cursor-pointer"
                     >
                       邮件通知
                     </Label>
-                    <p class="text-xs text-muted-foreground mt-1">
+                    <p class="mt-1 text-xs text-muted-foreground">
                       接收系统重要通知
                     </p>
                   </div>
                   <Switch
                     id="email-notifications"
                     v-model="preferencesForm.notifications.email"
+                    class="shrink-0"
                     @update:model-value="updatePreferences"
                   />
                 </div>
-                <div class="flex items-center justify-between py-2 border-b border-border/40 last:border-0">
-                  <div class="flex-1">
+                <div class="flex flex-col gap-3 py-2 border-b border-border/40 last:border-0 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="flex-1 min-w-0">
                     <Label
                       for="usage-alerts"
                       class="text-sm font-medium cursor-pointer"
                     >
                       使用提醒
                     </Label>
-                    <p class="text-xs text-muted-foreground mt-1">
+                    <p class="mt-1 text-xs text-muted-foreground">
                       当余额接近不足时提醒
                     </p>
                   </div>
                   <Switch
                     id="usage-alerts"
                     v-model="preferencesForm.notifications.usage_alerts"
+                    class="shrink-0"
                     @update:model-value="updatePreferences"
                   />
                 </div>
-                <div class="flex items-center justify-between py-2">
-                  <div class="flex-1">
+                <div class="flex flex-col gap-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="flex-1 min-w-0">
                     <Label
                       for="announcement-notifications"
                       class="text-sm font-medium cursor-pointer"
                     >
                       公告通知
                     </Label>
-                    <p class="text-xs text-muted-foreground mt-1">
+                    <p class="mt-1 text-xs text-muted-foreground">
                       接收系统公告
                     </p>
                   </div>
                   <Switch
                     id="announcement-notifications"
                     v-model="preferencesForm.notifications.announcements"
+                    class="shrink-0"
                     @update:model-value="updatePreferences"
                   />
                 </div>
@@ -518,32 +532,32 @@
       <!-- 右侧：账户信息和使用量 -->
       <div class="space-y-6">
         <!-- 账户信息 -->
-        <Card class="p-6">
+        <Card class="p-4 sm:p-6">
           <h3 class="text-lg font-medium text-foreground mb-4">
             账户信息
           </h3>
           <div class="space-y-3">
-            <div class="flex justify-between">
-              <span class="text-muted-foreground">角色</span>
-              <Badge :variant="profile?.role === 'admin' ? 'default' : 'secondary'">
+            <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">角色</span>
+              <Badge :variant="profile?.role === 'admin' ? 'default' : 'secondary'" class="shrink-0">
                 {{ profile?.role === 'admin' ? '管理员' : '普通用户' }}
               </Badge>
             </div>
-            <div class="flex justify-between">
-              <span class="text-muted-foreground">账户状态</span>
-              <span :class="profile?.is_active ? 'text-success' : 'text-destructive'">
+            <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">账户状态</span>
+              <span :class="profile?.is_active ? 'text-success' : 'text-destructive'" class="sm:text-right">
                 {{ profile?.is_active ? '活跃' : '停用' }}
               </span>
             </div>
-            <div class="flex justify-between">
-              <span class="text-muted-foreground">注册时间</span>
-              <span class="text-foreground">
+            <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">注册时间</span>
+              <span class="text-foreground break-words sm:text-right">
                 {{ formatDate(profile?.created_at) }}
               </span>
             </div>
-            <div class="flex justify-between">
-              <span class="text-muted-foreground">最后登录</span>
-              <span class="text-foreground">
+            <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">最后登录</span>
+              <span class="text-foreground break-words sm:text-right">
                 {{ profile?.last_login_at ? formatDate(profile.last_login_at) : '未记录' }}
               </span>
             </div>
@@ -551,14 +565,14 @@
         </Card>
 
         <!-- 钱包状态 -->
-        <Card class="p-6">
+        <Card class="p-4 sm:p-6">
           <h3 class="text-lg font-medium text-foreground mb-4">
             钱包状态
           </h3>
           <div class="space-y-4">
-            <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">总余额</span>
-              <span class="text-foreground">
+            <div class="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">总余额</span>
+              <span class="text-foreground break-all sm:text-right">
                 <template v-if="isUnlimitedBilling()">
                   无限制
                 </template>
@@ -567,21 +581,21 @@
                 </template>
               </span>
             </div>
-            <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">充值余额</span>
-              <span class="text-foreground">{{ formatCurrency(profile?.billing?.recharge_balance || 0) }}</span>
+            <div class="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">充值余额</span>
+              <span class="text-foreground break-all sm:text-right">{{ formatCurrency(profile?.billing?.recharge_balance || 0) }}</span>
             </div>
-            <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">赠款余额</span>
-              <span class="text-foreground">{{ formatCurrency(profile?.billing?.gift_balance || 0) }}</span>
+            <div class="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">赠款余额</span>
+              <span class="text-foreground break-all sm:text-right">{{ formatCurrency(profile?.billing?.gift_balance || 0) }}</span>
             </div>
-            <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">累计消费</span>
-              <span class="text-foreground">{{ formatCurrency(profile?.billing?.total_consumed || 0) }}</span>
+            <div class="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span class="text-muted-foreground shrink-0">累计消费</span>
+              <span class="text-foreground break-all sm:text-right">{{ formatCurrency(profile?.billing?.total_consumed || 0) }}</span>
             </div>
 
             <div v-if="!isUnlimitedBilling()">
-              <div class="flex justify-between text-sm mb-1">
+              <div class="mb-1 flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
                 <span class="text-muted-foreground">累计消费占比</span>
                 <span class="text-foreground">{{ getBillingUsagePercentage().toFixed(1) }}%</span>
               </div>

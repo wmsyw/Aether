@@ -14,40 +14,42 @@
             ? 'border-primary/30 bg-primary/[0.02] shadow-sm shadow-primary/5'
             : 'border-border bg-card hover:border-border/80'"
         >
-          <div class="flex items-center gap-4 p-4">
-            <div class="shrink-0">
-              <Switch
-                :id="`enable-${task.id}`"
-                :model-value="task.enabled"
-                @update:model-value="task.onToggle"
-              />
-            </div>
-
-            <div class="flex items-center gap-3 flex-1 min-w-0">
-              <div
-                class="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors duration-300"
-                :class="task.enabled
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-muted-foreground'"
-              >
-                <component
-                  :is="task.icon"
-                  class="w-4.5 h-4.5"
+          <div class="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
+            <div class="flex min-w-0 flex-1 items-start gap-4 sm:items-center">
+              <div class="shrink-0">
+                <Switch
+                  :id="`enable-${task.id}`"
+                  :model-value="task.enabled"
+                  @update:model-value="task.onToggle"
                 />
               </div>
-              <div class="flex-1 min-w-0">
-                <h4 class="font-medium text-sm">
-                  {{ task.title }}
-                </h4>
-                <p class="text-xs text-muted-foreground mt-0.5 truncate">
-                  {{ task.description }}
-                </p>
+
+              <div class="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+                <div
+                  class="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors duration-300"
+                  :class="task.enabled
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground'"
+                >
+                  <component
+                    :is="task.icon"
+                    class="w-4.5 h-4.5"
+                  />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <h4 class="font-medium text-sm">
+                    {{ task.title }}
+                  </h4>
+                  <p class="mt-0.5 break-words text-xs text-muted-foreground sm:truncate">
+                    {{ task.description }}
+                  </p>
+                </div>
               </div>
             </div>
 
             <div
               v-if="task.enabled && task.hasTimeConfig"
-              class="flex items-center gap-2 shrink-0"
+              class="flex w-full flex-wrap items-center gap-2 pl-14 sm:w-auto sm:justify-end sm:pl-0"
             >
               <Clock class="w-4 h-4 text-muted-foreground" />
               <Select

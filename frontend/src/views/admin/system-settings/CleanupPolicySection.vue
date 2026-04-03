@@ -4,8 +4,8 @@
     description="配置请求记录的分级保留和自动清理"
   >
     <template #actions>
-      <div class="flex items-center gap-4">
-        <div class="flex items-center gap-2">
+      <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:justify-end sm:gap-4">
+        <div class="flex items-start gap-2 sm:items-center">
           <Switch
             id="enable-auto-cleanup"
             :model-value="enableAutoCleanup"
@@ -14,7 +14,7 @@
           <div>
             <Label
               for="enable-auto-cleanup"
-              class="text-sm cursor-pointer"
+              class="text-sm cursor-pointer whitespace-nowrap"
             >
               启用自动清理
             </Label>
@@ -25,6 +25,7 @@
         </div>
         <Button
           size="sm"
+          class="w-full sm:w-auto"
           :disabled="loading || !hasChanges"
           @click="$emit('save')"
         >

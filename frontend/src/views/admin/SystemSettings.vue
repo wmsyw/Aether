@@ -1,6 +1,6 @@
 <template>
   <PageContainer>
-    <div class="relative flex gap-6">
+    <div class="relative flex flex-col gap-6 lg:flex-row">
       <!-- 主内容 -->
       <div class="flex-1 min-w-0">
         <PageHeader
