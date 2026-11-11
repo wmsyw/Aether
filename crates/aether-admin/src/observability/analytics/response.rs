@@ -62,6 +62,12 @@ pub fn metrics_value(metrics: &UsageAnalyticsMetrics) -> Value {
             "sample_count": metrics.latency_sample_count,
         },
         "rated_amount": amount(&metrics.rated_amount, "rated", priced),
+        "provider_cost_amount": amount(
+            &metrics.provider_cost_amount,
+            "provider_cost",
+            metrics.provider_cost_available_count == metrics.request_count,
+        ),
+        "provider_cost_available_count": metrics.provider_cost_available_count,
         "billable_amount": amount(&metrics.billable_amount, "billable", priced),
         "quota_covered_amount": amount(&metrics.quota_covered_amount, "quota_covered", allocated),
         "wallet_consumed_amount": amount(&metrics.wallet_consumed_amount, "wallet_consumed", allocated),
@@ -673,5 +679,38 @@ mod tests {
             "partial"
         );
         assert_eq!(value["supplier_verified_cost"]["status"], "unknown");
+    }
+
+    #[test]
+    fn provider_cost_uses_its_own_basis_and_coverage_status() {
+        let metrics = UsageAnalyticsMetrics {
+            request_count: 3,
+            provider_cost_available_count: 2,
+            provider_cost_amount: Some("24.00000000".into()),
+            rated_amount: Some("17.00000000".into()),
+            billable_amount: Some("26.00000000".into()),
+            ..Default::default()
+        };
+        let value = metrics_value(&metrics);
+        assert_eq!(value["provider_cost_amount"]["basis"], "provider_cost");
+        assert_eq!(value["provider_cost_amount"]["value"], "24.00000000");
+        assert_eq!(value["provider_cost_amount"]["status"], "known_subtotal");
+        assert_eq!(value["provider_cost_available_count"], 2);
+        assert_eq!(value["rated_amount"]["basis"], "rated");
+        assert_eq!(value["billable_amount"]["basis"], "billable");
+        let mut known = metrics;
+        known.provider_cost_available_count = 3;
+        assert_eq!(
+            metrics_value(&known)["provider_cost_amount"]["status"],
+            "known"
+        );
+        let unknown = UsageAnalyticsMetrics {
+            request_count: 3,
+            ..Default::default()
+        };
+        let value = metrics_value(&unknown);
+        assert!(value["provider_cost_amount"]["value"].is_null());
+        assert_eq!(value["provider_cost_amount"]["status"], "unknown");
+        assert_eq!(value["provider_cost_available_count"], 0);
     }
 }

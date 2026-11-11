@@ -15,8 +15,13 @@ pub(super) fn analytics_metrics_sql(slow_threshold_ms: u64) -> String {
     )
 }
 
+// Actual procurement cost is raw-only until the versioned overview projection
+// knows how to carry it: grouped reads and the summary diagnostics query compute
+// it directly from the canonical facts view exactly once.
 const ANALYTICS_NON_ADDITIVE_METRICS_SQL: &str = r#"
 count(DISTINCT actor_user_id)::bigint AS usage_active_users,
+count(provider_cost_amount)::bigint AS provider_cost_available_count,
+sum(provider_cost_amount)::text AS provider_cost_amount,
 percentile_cont(0.5) WITHIN GROUP (ORDER BY response_time_ms) AS latency_p50_ms,
 percentile_cont(0.90) WITHIN GROUP (ORDER BY response_time_ms) AS latency_p90_ms,
 percentile_cont(0.95) WITHIN GROUP (ORDER BY response_time_ms) AS latency_p95_ms,
@@ -294,6 +299,10 @@ pub(super) async fn read_analytics_metrics(
     let mut summary: UsageAnalyticsMetrics = decode(row.try_get("metrics").map_postgres_err()?)?;
     if projected {
         let mut additive = super::projection_reader::read_additive_summary(tx, query).await?;
+        // Provider cost is not part of overview-v2 buckets yet: keep the raw
+        // summary aggregate computed above instead of dropping it to zero.
+        additive.provider_cost_available_count = summary.provider_cost_available_count;
+        additive.provider_cost_amount = summary.provider_cost_amount.take();
         additive.usage_active_users = summary.usage_active_users;
         additive.latency_p50_ms = summary.latency_p50_ms;
         additive.latency_p90_ms = summary.latency_p90_ms;
@@ -432,6 +441,9 @@ impl SqlxUsageReadRepository {
                         builder
                             .push(match query.sort {
                                 UsageAnalyticsSort::BillableAmount => "billable_amount::numeric",
+                                UsageAnalyticsSort::ProviderCostAmount => {
+                                    "provider_cost_amount::numeric"
+                                }
                                 UsageAnalyticsSort::Tokens => "total_tokens",
                                 _ => "request_count",
                             })
@@ -481,7 +493,7 @@ impl SqlxUsageReadRepository {
                     builder.push(")");
                     push_user_finance_ctes(&mut builder, query);
                     builder.push(", page AS (SELECT * FROM enriched ORDER BY ")
-                        .push(match query.sort { UsageAnalyticsSort::Requests => "requests", UsageAnalyticsSort::BillableAmount => "billable", UsageAnalyticsSort::LastUsed | UsageAnalyticsSort::StartedAt => "last_used_at", UsageAnalyticsSort::Username => "username", UsageAnalyticsSort::Tokens => "(metrics->>'total_tokens')::bigint", UsageAnalyticsSort::ActiveDays => "active_days" })
+                        .push(match query.sort { UsageAnalyticsSort::Requests => "requests", UsageAnalyticsSort::BillableAmount => "billable", UsageAnalyticsSort::ProviderCostAmount => "(metrics->>'provider_cost_amount')::numeric", UsageAnalyticsSort::LastUsed | UsageAnalyticsSort::StartedAt => "last_used_at", UsageAnalyticsSort::Username => "username", UsageAnalyticsSort::Tokens => "(metrics->>'total_tokens')::bigint", UsageAnalyticsSort::ActiveDays => "active_days" })
                         .push(order).push(", user_id ASC LIMIT ").push_bind(i64::from(query.limit)).push(" OFFSET ").push_bind(query.offset as i64)
                         .push(") SELECT (SELECT count(*) FROM roster) AS total, (SELECT count(*) FROM roster WHERE requests > 0) AS active_user_count, (SELECT count(*) FROM roster WHERE is_active) AS enabled_user_count, ")
                         .push("(SELECT to_jsonb(m) FROM (SELECT ").push(&metrics_sql)

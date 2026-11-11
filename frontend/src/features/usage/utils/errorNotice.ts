@@ -1,4 +1,5 @@
 import type { RequestDetail, RequestErrorDomain, RequestSchedulingFailure } from '@/api/dashboard'
+import { sanitizeDiagnostic } from './diagnosticExport'
 
 export interface RequestFailureNotice {
   title: string
@@ -9,7 +10,9 @@ export interface RequestFailureNotice {
 
 function nonEmptyString(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
-  return trimmed ? trimmed : null
+  if (!trimmed) return null
+  const safe = sanitizeDiagnostic(trimmed)
+  return typeof safe === 'string' ? safe : null
 }
 
 function normalizeErrorDomain(domain: RequestErrorDomain | null | undefined): RequestErrorDomain | null {
@@ -40,7 +43,7 @@ function schedulingFailureMessage(
 }
 
 export function resolveRequestFailureNotice(detail: RequestDetail | null | undefined): RequestFailureNotice | null {
-  if (!detail) return null
+  if (!detail || detail.status === 'completed' || detail.status === 'cancelled') return null
 
   const fallbackDomain = normalizeErrorDomain(detail.failure_summary)
     ?? normalizeErrorDomain(detail.client_error)

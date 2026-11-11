@@ -75,8 +75,20 @@ fn resolves_mapping_matched_model_from_key_allowed_models() {
     let resolved = resolve_provider_model_name(&row, "gpt-4.1", "openai:chat")
         .expect("candidate should resolve");
 
-    assert_eq!(resolved.0, "gpt-4.1-canary");
+    assert_eq!(resolved.0, "gpt-4.1-upstream");
     assert_eq!(resolved.1, Some("gpt-4.1-upstream".to_string()));
+}
+
+#[test]
+fn mapping_rejects_keys_without_any_authorized_provider_model() {
+    let mut row = sample_row();
+    row.key_allowed_models = Some(vec!["unrelated-model".to_string()]);
+    row.global_model_mappings = None;
+
+    assert_eq!(
+        resolve_provider_model_name(&row, "gpt-4.1", "openai:chat"),
+        None,
+    );
 }
 
 #[test]

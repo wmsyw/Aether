@@ -7,7 +7,9 @@ use aether_ai_formats::formats::conversion::response::{
     convert_openai_chat_response_to_openai_responses,
     convert_openai_responses_response_to_openai_chat,
 };
-use aether_ai_formats::formats::openai::responses::response::ensure_modern_openai_responses_response_fields;
+use aether_ai_formats::formats::openai::responses::response::{
+    ensure_modern_openai_responses_response_fields, openai_responses_current_timestamp,
+};
 use aether_ai_formats::formats::openai::responses::{
     openai_responses_message_item_id, openai_responses_reasoning_text_parts,
     openai_responses_synthetic_reasoning_item_id,
@@ -2318,9 +2320,9 @@ pub fn aggregate_openai_chat_stream_sync_response(body: &[u8]) -> Option<Value> 
         "object".to_string(),
         Value::String("chat.completion".to_string()),
     );
-    if let Some(created) = created {
-        response_object.insert("created".to_string(), Value::Number(created.into()));
-    }
+    let created = created
+        .unwrap_or_else(|| u64::try_from(openai_responses_current_timestamp()).unwrap_or_default());
+    response_object.insert("created".to_string(), Value::Number(created.into()));
     if let Some(model) = model {
         response_object.insert("model".to_string(), Value::String(model));
     }
@@ -4385,6 +4387,30 @@ mod tests {
         assert_eq!(result["usage"]["prompt_tokens"], 1);
         assert_eq!(result["usage"]["completion_tokens"], 2);
         assert_eq!(result["usage"]["total_tokens"], 3);
+    }
+
+    #[test]
+    fn aggregates_openai_chat_stream_created_with_fallback() {
+        let with_upstream = concat!(
+            "data: {\"id\":\"chatcmpl_created\",\"object\":\"chat.completion.chunk\",\"created\":1776971267,\"model\":\"gpt-5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_created\",\"object\":\"chat.completion.chunk\",\"created\":1776971267,\"model\":\"gpt-5\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        let result = aggregate_openai_chat_stream_sync_response(with_upstream.as_bytes())
+            .expect("chat stream should aggregate");
+        assert_eq!(result["created"], 1776971267);
+
+        let without_upstream = concat!(
+            "data: {\"id\":\"chatcmpl_no_created\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_no_created\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-5\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        let result = aggregate_openai_chat_stream_sync_response(without_upstream.as_bytes())
+            .expect("chat stream should aggregate");
+        assert!(
+            result["created"]
+                .as_i64()
+                .is_some_and(|created| created > 0),
+            "{result}"
+        );
     }
 
     #[test]

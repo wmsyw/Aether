@@ -113,6 +113,34 @@ function buildFastTierDetail(): RequestDetail {
 }
 
 describe('RequestDetailDrawer settlement pricing', () => {
+  it.each(['failed', 'completed'])('shows a sanitized context overflow cause without captured bodies only for failed detail: %s', async status => {
+    apiMocks.getRequestDetail.mockResolvedValue({
+      ...buildEmbeddingDetail(),
+      status,
+      status_code: status === 'failed' ? 400 : 200,
+      usage_available: false,
+      has_response_body: false,
+      has_request_body: false,
+      upstream_error: { status_code: 400, type: 'context_length_exceeded', message: 'Maximum context length exceeded. Bearer secret-private-token' },
+    } satisfies RequestDetail)
+    const isOpen = ref(false)
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const app = createApp({ setup: () => () => h(RequestDetailDrawer, { isOpen: isOpen.value, requestId: 'usage-embedding-1' }) })
+    app.mount(root)
+    mountedApps.push({ app, root })
+    isOpen.value = true
+    await nextTick()
+    await vi.waitFor(() => expect(document.body.querySelector('[data-request-detail-usage-unavailable]')).not.toBeNull())
+    const notice = document.body.querySelector('[data-request-failure-notice]')
+    if (status === 'completed') expect(notice).toBeNull()
+    else {
+      expect(notice?.textContent).toContain('Maximum context length exceeded')
+      expect(notice?.textContent).toContain('context_length_exceeded')
+      expect(notice?.textContent).not.toContain('secret-private-token')
+    }
+  })
+
   it('emits request redaction facts without promising response restoration for a failed request', async () => {
     apiMocks.getRequestDetail.mockResolvedValue({
       ...buildEmbeddingDetail(),

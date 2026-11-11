@@ -1472,3 +1472,168 @@ async fn live_customer_billing_amount_matches_canonical_and_dashboard_facts() {
     }
     tx.rollback().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires local AETHER_TEST_DATABASE_URL with temporary database creation"]
+async fn live_overview_provider_cost_prefers_settlement_and_survives_projection_reads() {
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+    let options = std::env::var("AETHER_TEST_DATABASE_URL")
+        .unwrap()
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap();
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .unwrap();
+    let database = format!("overview_provider_cost_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE DATABASE {database}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(options.database(&database))
+        .await
+        .unwrap();
+    let outcome = AssertUnwindSafe(async {
+        crate::POSTGRES_MIGRATOR.run(&pool).await.unwrap();
+        let at = Utc.with_ymd_and_hms(2026, 10, 10, 0, 0, 0).unwrap();
+        for user in ["alice", "bob", "carol", "dave"] {
+            sqlx::query("INSERT INTO users(id,username,email_verified,is_active,is_deleted) VALUES($1,$1,false,true,false)")
+                .bind(user)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (id, user, status, priced, total, actual, multiplier) in [
+            ("alice", "alice", "settled", true, 7.0, 5.0, Some(2.0)),
+            ("bob", "bob", "settled", true, 9.0, 2.0, None),
+            ("carol", "carol", "settled", true, 1.0, 10.0, None),
+            ("dave", "dave", "pending", false, 99.0, 99.0, None),
+        ] {
+            let mut metadata = serde_json::json!({
+                "analytics_attribution": {"is_standalone": false},
+                "usage_pricing_available": priced,
+            });
+            if let Some(multiplier) = multiplier {
+                // The frozen snapshot validates the multiplier against the factor
+                // product, so the factors must agree with it.
+                metadata["billing_multiplier_snapshot"] =
+                    serde_json::json!({"version": 1, "factors": {"markup": multiplier}, "multiplier": multiplier});
+            }
+            sqlx::query("INSERT INTO usage(id,request_id,user_id,model,provider_id,provider_name,status,billing_status,total_tokens,total_cost_usd,actual_total_cost_usd,created_at,request_metadata) VALUES($1,$1,$2,'model','provider-1','provider',$3,$4,100,$5,$6,$7,$8)")
+                .bind(id)
+                .bind(user)
+                .bind(if status == "settled" { "completed" } else { "pending" })
+                .bind(status)
+                .bind(total)
+                .bind(actual)
+                .bind(at)
+                .bind(metadata)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // The immutable settlement snapshot wins over the deprecated float mirror.
+        sqlx::query("INSERT INTO usage_settlement_snapshots(request_id,billing_status,billing_total_cost_usd,billing_actual_total_cost_usd) VALUES('alice','settled',7,12)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let repo = SqlxUsageReadRepository::new(pool.clone()).with_overview_projection_reads(false);
+        let mut query = UsageAnalyticsQuery {
+            from_unix_ms: at.timestamp_millis() as u64,
+            to_unix_ms: (at + chrono::Duration::hours(1)).timestamp_millis() as u64,
+            timezone: "UTC".into(),
+            view: UsageAnalyticsView::Users,
+            sort: UsageAnalyticsSort::ProviderCostAmount,
+            descending: true,
+            limit: 1,
+            ..Default::default()
+        };
+        let first = repo.query_usage_analytics(&query).await.unwrap();
+        assert_eq!(first.total, 4);
+        assert_eq!(first.users[0].user_id, "alice");
+        assert_eq!(
+            first.users[0].metrics.provider_cost_amount.as_deref(),
+            Some("12.00000000")
+        );
+        assert_eq!(first.summary.request_count, 4);
+        assert_eq!(first.summary.provider_cost_available_count, 3);
+        assert_eq!(
+            first.summary.provider_cost_amount.as_deref(),
+            Some("24.00000000")
+        );
+        // Catalog-rated and customer-billable amounts keep their own meaning.
+        assert_eq!(first.summary.rated_amount.as_deref(), Some("17.00000000"));
+        assert_eq!(
+            first.summary.billable_amount.as_deref(),
+            Some("26.00000000")
+        );
+        query.offset = 1;
+        let next = repo.query_usage_analytics(&query).await.unwrap();
+        assert_eq!(next.users[0].user_id, "carol");
+        assert_eq!(next.summary, first.summary);
+        query.offset = 2;
+        let third = repo.query_usage_analytics(&query).await.unwrap();
+        assert_eq!(third.users[0].user_id, "bob");
+        query.offset = 3;
+        let unknown = repo.query_usage_analytics(&query).await.unwrap();
+        assert_eq!(unknown.users[0].user_id, "dave");
+        assert_eq!(unknown.users[0].metrics.provider_cost_available_count, 0);
+        assert_eq!(unknown.users[0].metrics.provider_cost_amount, None);
+        assert_eq!(unknown.summary, first.summary);
+
+        // A clean overview-v2 bucket predates this metric. Projection reads still
+        // retain the raw summary aggregate instead of silently reporting zero.
+        let projected = SqlxUsageReadRepository::new(pool.clone())
+            .with_overview_projection_reads(true);
+        assert!(projected.rebuild_overview_bucket("hour", at).await.unwrap());
+        // The hourly table is already the granularity; it has no granularity
+        // column. Check every dimension row of the rebuilt bucket so the
+        // absence is proven non-vacuously.
+        let (bucket_rows, bucket_provider_cost_rows): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(*) FILTER (WHERE metrics ? 'provider_cost_amount') FROM stats_overview_hourly WHERE projection_version='overview-v2' AND bucket_start=$1",
+        )
+        .bind(at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(bucket_rows > 0);
+        assert_eq!(bucket_provider_cost_rows, 0);
+        let summary = projected
+            .query_usage_analytics(&UsageAnalyticsQuery {
+                view: UsageAnalyticsView::Summary,
+                ..query.clone()
+            })
+            .await
+            .unwrap();
+        assert!(summary.coverage.read_enabled);
+        assert_eq!(summary.summary.request_count, 4);
+        assert_eq!(summary.summary.provider_cost_available_count, 3);
+        assert_eq!(
+            summary.summary.provider_cost_amount.as_deref(),
+            Some("24.00000000")
+        );
+        assert_eq!(
+            summary.summary.rated_amount.as_deref(),
+            Some("17.00000000")
+        );
+        assert_eq!(
+            summary.summary.billable_amount.as_deref(),
+            Some("26.00000000")
+        );
+    })
+    .catch_unwind()
+    .await;
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {database} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+    if let Err(error) = outcome {
+        std::panic::resume_unwind(error);
+    }
+}

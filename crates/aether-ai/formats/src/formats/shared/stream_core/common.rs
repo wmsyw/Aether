@@ -487,6 +487,18 @@ pub fn parse_json_arguments_value(arguments: &str) -> Option<Value> {
     serde_json::from_str(trimmed).ok()
 }
 
+/// Stamps an OpenAI Chat `chat.completion`/`chat.completion.chunk` object with
+/// the Unix-seconds `created` value required by strict clients, keeping a value
+/// already present on the object.
+pub fn with_openai_chat_created(mut chunk: Value, created: i64) -> Value {
+    if let Some(object) = chunk.as_object_mut() {
+        object
+            .entry("created".to_string())
+            .or_insert(Value::from(created));
+    }
+    chunk
+}
+
 pub fn build_openai_chat_chunk(
     id: &str,
     model: &str,

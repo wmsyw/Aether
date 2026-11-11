@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CostAnalysis from '@/views/admin/CostAnalysis.vue'
 import { setI18nLocale } from '@/i18n'
 
-const overview = vi.hoisted(() => ({ costs: vi.fn(), breakdown: vi.fn(), exportCsv: vi.fn() }))
+const overview = vi.hoisted(() => ({ costs: vi.fn(), breakdown: vi.fn(), users: vi.fn(), summary: vi.fn(), exportCsv: vi.fn() }))
 const finance = vi.hoisted(() => ({ accounts: vi.fn(), expenses: vi.fn(), record: vi.fn(), void: vi.fn(), exportExpenses: vi.fn() }))
 vi.mock('@/api/overview', () => ({ overviewApi: overview }))
 vi.mock('@/api/providerFinance', () => ({ providerFinanceApi: finance }))
@@ -57,6 +57,8 @@ beforeEach(() => {
   setI18nLocale('zh-CN')
   overview.costs.mockResolvedValue({ data: { summary: metric, timeseries: [{ ...metric, bucket_start: range.from }] } })
   overview.breakdown.mockImplementation(async query => ({ data: { items: [{ ...metric, id: 'provider-1', label: 'Provider One' }], total: 40, limit: query.limit, offset: query.offset } }))
+  overview.users.mockImplementation(async query => ({ data: { items: [{ ...metric, user_id: 'user-1', username: 'Ada', is_active: true, provider_cost_amount: { value: '2', currency: 'USD', basis: 'provider_cost', status: 'known' } }], total: 40, limit: query.limit, offset: query.offset } }))
+  overview.summary.mockResolvedValue({ data: { ...metric, provider_cost_amount: { value: '10', currency: 'USD', basis: 'provider_cost', status: 'known' } } })
   finance.accounts.mockResolvedValue({ observed_at: range.to, items: [account] })
   finance.expenses.mockImplementation(async query => ({ items: [expense], total: 40, limit: query.limit, offset: query.offset, totals, providers: [{ provider_id: 'provider-1', provider_name: 'Provider One', currency: 'USD', amount: '432.10', entry_count: 20 }] }))
   finance.record.mockResolvedValue({ item: expense })
@@ -65,6 +67,46 @@ beforeEach(() => {
 afterEach(() => { mounted.splice(0).forEach(({ app, root }) => { app.unmount(); root.remove() }); setI18nLocale('zh-CN') })
 
 describe('provider expense analysis', () => {
+  it('loads provider attribution for the exact range and pages the selected metric without changing financial totals', async () => {
+    const { root } = await mount()
+    expect(overview.users).not.toHaveBeenCalled()
+    button(root, '归因').click()
+    await settle()
+    const panel = section(root, '[data-provider-user-attribution]')
+    expect(overview.users.mock.lastCall?.[0]).toMatchObject({ ...range, provider_id: 'provider-1', sort: 'provider_cost_amount', order: 'desc', offset: 0, limit: 25 })
+    expect(overview.summary.mock.lastCall?.[0]).toEqual({ ...range, provider_id: 'provider-1' })
+    expect(panel.textContent).toContain('Ada')
+    expect(panel.textContent).toContain('20.00%')
+    panel.querySelector<HTMLButtonElement>('[aria-label="下一页"]')?.click()
+    await settle()
+    expect(overview.users.mock.lastCall?.[0]).toMatchObject({ offset: 25 })
+    const select = panel.querySelector('select')!
+    select.value = 'total_cost'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(overview.users.mock.lastCall?.[0]).toMatchObject({ sort: 'billable_amount', offset: 0 })
+    expect(section(root, '[data-cost-summary]').textContent).toContain('432.10 USD')
+    expect(overview.summary).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears attribution on a range change and ignores a late response from the old range', async () => {
+    let resolveOld!: (value: unknown) => void
+    const oldRequest = new Promise<unknown>(resolve => { resolveOld = resolve })
+    overview.users.mockImplementationOnce(() => oldRequest)
+    const { root, router } = await mount()
+    button(root, '归因').click()
+    await settle()
+    const oldSignal = overview.users.mock.lastCall?.[1] as AbortSignal
+    await router.replace({ query: { from: '2026-08-01T00:00:00Z', to: '2026-08-02T00:00:00Z', timezone: 'UTC' } })
+    await settle()
+    expect(oldSignal.aborted).toBe(true)
+    expect(overview.users.mock.lastCall?.[0]).toMatchObject({ from: '2026-08-01T00:00:00.000Z', offset: 0 })
+    resolveOld({ data: { items: [{ ...metric, user_id: 'old', username: 'Stale user' }], total: 1 } })
+    await settle()
+    expect(section(root, '[data-provider-user-attribution]').textContent).toContain('Ada')
+    expect(section(root, '[data-provider-user-attribution]').textContent).not.toContain('Stale user')
+  })
+
   it('uses complete expense totals and keeps currencies separate from customer consumption', async () => {
     const { root } = await mount('ignored-provider')
     const summary = section(root, '[data-cost-summary]').textContent

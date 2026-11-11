@@ -329,7 +329,17 @@ SELECT u.request_id, COALESCE(u.id, u.request_id) AS id, u.created_at,
   CASE WHEN COALESCE(metadata.value->'usage_available','true'::jsonb) <> 'false'::jsonb
     AND COALESCE(metadata.value->'usage_pricing_available','true'::jsonb) <> 'false'::jsonb
     AND s.input_price_per_1m IS NOT NULL AND s.billing_cache_creation_cost_usd IS NOT NULL
-    THEN round(s.billing_cache_creation_cost_usd::numeric,8) END AS cache_creation_cost_amount
+    THEN round(s.billing_cache_creation_cost_usd::numeric,8) END AS cache_creation_cost_amount,
+  CASE WHEN COALESCE(metadata.value->'usage_pricing_available','true'::jsonb) <> 'false'::jsonb
+    AND (s.billing_actual_total_cost_usd IS NOT NULL OR COALESCE(s.billing_status, u.billing_status) = 'settled')
+    THEN CASE
+      WHEN s.billing_actual_total_cost_usd IS NOT NULL THEN
+        CASE WHEN s.billing_actual_total_cost_usd
+          NOT IN ('NaN'::numeric,'Infinity'::numeric,'-Infinity'::numeric)
+          THEN round(s.billing_actual_total_cost_usd,8) END
+      WHEN u.actual_total_cost_usd NOT IN ('NaN'::numeric,'Infinity'::numeric,'-Infinity'::numeric)
+        THEN round(u.actual_total_cost_usd::numeric,8)
+    END END AS provider_cost_amount
 FROM public.usage u
 -- OFFSET 0 keeps this projection from being flattened: large metadata is
 -- detoasted and parsed once per request, rather than once per metric expression.

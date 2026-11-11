@@ -1360,6 +1360,27 @@ fn openai_responses_hosted_tool_call_item_type(
     openai_responses_hosted_tool_name(item_type).map(|_| item_type)
 }
 
+/// Chat represents a Responses hosted tool call as a function call whose name
+/// is the hosted tool's fixed Chat-side name. The canonical call arguments
+/// carry every hosted call field, so `item_type` is recoverable from the Chat
+/// function name rather than being an unmapped provider extension.
+pub(crate) fn openai_responses_hosted_tool_call_item_type_is_encoded_by_chat_name(
+    name: &str,
+    item_type: &str,
+) -> bool {
+    openai_responses_hosted_tool_name(item_type) == Some(name)
+}
+
+/// Hosted tool results pair with their call by `tool_use_id`; the canonical
+/// block name still records the hosted tool identity, so a matching
+/// `item_type` is recoverable from that name for a Chat target.
+pub(crate) fn openai_responses_hosted_tool_result_item_type_is_encoded_by_chat_name(
+    name: Option<&str>,
+    item_type: &str,
+) -> bool {
+    name.is_some() && openai_responses_hosted_tool_result_name(item_type) == name
+}
+
 fn openai_responses_hosted_tool_input_fields(item_type: &str) -> &'static [&'static str] {
     match item_type {
         "local_shell_call" | "shell_call" => &[
@@ -2646,6 +2667,26 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                             pending_tool_signature.take(),
                         );
                     }
+                    "local_shell_call" | "shell_call" | "apply_patch_call" | "computer_call" => {
+                        let Some(tool_use) = openai_responses_hosted_tool_call_to_block(
+                            item_object,
+                            item_type.as_str(),
+                            next_generated_tool_call_index,
+                        ) else {
+                            messages
+                                .push(openai_responses_opaque_input_item_message(item, item_type));
+                            pending_reasoning = None;
+                            pending_tool_signature = None;
+                            continue;
+                        };
+                        next_generated_tool_call_index += 1;
+                        append_openai_responses_tool_use(
+                            &mut messages,
+                            tool_use,
+                            &mut pending_reasoning,
+                            pending_tool_signature.take(),
+                        );
+                    }
                     "function_call_output" => {
                         let id = item_object
                             .get("call_id")
@@ -3915,10 +3956,28 @@ fn canonical_tool_result_to_openai_chat(block: &CanonicalContentBlock) -> Value 
             result_output.as_ref(),
             content_text.as_deref(),
         )
-    } else {
+    } else if is_openai_chat_tool_result(extensions) {
+        // Same-format Chat payloads may carry multimodal content arrays, so
+        // they must stay byte-for-byte identical instead of being stringified.
         result_output
             .clone()
             .unwrap_or_else(|| Value::String(content_text.clone().unwrap_or_default()))
+    } else {
+        // Gemini functionResponse.response is a protobuf Struct, so the
+        // canonical output can be an object or array. OpenAI Chat requires a
+        // string for tool message content, so structured output becomes JSON
+        // text that parses back to the original value.
+        match result_output.as_ref() {
+            Some(value @ (Value::Object(_) | Value::Array(_))) => Value::String(
+                content_text
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| value.to_string()),
+            ),
+            Some(value) => value.clone(),
+            None => Value::String(content_text.clone().unwrap_or_default()),
+        }
     };
     output.insert("content".to_string(), content);
     Value::Object(output)

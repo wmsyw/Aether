@@ -88,6 +88,7 @@ pub fn parse_overview_query(
     let sort = match params.remove("sort").as_deref() {
         None | Some("requests") | Some("request_count") => UsageAnalyticsSort::Requests,
         Some("billable_amount") => UsageAnalyticsSort::BillableAmount,
+        Some("provider_cost_amount") => UsageAnalyticsSort::ProviderCostAmount,
         Some("total_tokens") => UsageAnalyticsSort::Tokens,
         Some("active_days") => UsageAnalyticsSort::ActiveDays,
         Some("started_at") => UsageAnalyticsSort::StartedAt,
@@ -122,7 +123,12 @@ pub fn parse_overview_query(
         .unwrap_or_else(|| "billable".into());
     if !matches!(
         amount_basis.as_str(),
-        "rated" | "billable" | "quota_covered" | "wallet_consumed" | "wallet_debit"
+        "rated"
+            | "provider_cost"
+            | "billable"
+            | "quota_covered"
+            | "wallet_consumed"
+            | "wallet_debit"
     ) {
         return Err("unsupported amount_basis".into());
     }
@@ -314,5 +320,23 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn provider_cost_sort_and_money_basis_replace_the_orphan_rated_sort() {
+        let parsed = parse_overview_query(
+            Some(&format!(
+                "{RANGE}&sort=provider_cost_amount&amount_basis=provider_cost"
+            )),
+            UsageAnalyticsView::Breakdown,
+        )
+        .unwrap();
+        assert_eq!(parsed.query.sort, UsageAnalyticsSort::ProviderCostAmount);
+        assert_eq!(parsed.amount_basis, "provider_cost");
+        assert!(parse_overview_query(
+            Some(&format!("{RANGE}&sort=rated_amount")),
+            UsageAnalyticsView::Breakdown
+        )
+        .is_err());
     }
 }

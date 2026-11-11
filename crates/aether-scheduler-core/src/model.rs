@@ -296,7 +296,7 @@ pub fn resolve_provider_model_name_with_model_directives_and_request_operation(
     for &allowed_model in &sorted_allowed_models {
         if row_has_candidate_model_name(row, api_format, request_operation, allowed_model) {
             let allowed_model = allowed_model.to_owned();
-            return Some((selected_provider_model_name.clone(), Some(allowed_model)));
+            return Some((allowed_model.clone(), Some(allowed_model)));
         }
     }
 

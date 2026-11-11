@@ -27,7 +27,7 @@ use crate::cache::{
     record_candidate_row_page_cache_miss, record_candidate_row_page_cache_none, CacheLoadObserver,
     CandidatePageCacheKey, CandidatePageSnapshot, CandidateRowPageCacheKey,
 };
-use crate::clock::request_distribution_seed;
+use crate::clock::{current_unix_secs, request_distribution_seed};
 use crate::data::candidate_selection::{
     read_api_format_rows_fallback_page, read_requested_model_rows_fast_path_page,
     requested_model_candidate_names, MinimalCandidateSelectionRowSource,
@@ -171,6 +171,7 @@ impl AiCandidatePreselectionPort for GatewayLocalCandidatePreselectionPort<'_> {
                     .is_none()
                     .then_some(self.client_session_affinity)
                     .flatten(),
+                current_unix_secs(),
                 self.ranking_seed,
                 false,
                 self.request_operation,
@@ -1322,6 +1323,7 @@ impl<'a> LocalCandidatePreselectionPageCursor<'a> {
                     .is_none()
                     .then_some(self.client_session_affinity.as_ref())
                     .flatten(),
+                current_unix_secs(),
                 self.ranking_seed,
                 self.ordering_config,
             )
@@ -1508,13 +1510,18 @@ mod tests {
     use crate::AppState;
     use aether_crypto::DEVELOPMENT_ENCRYPTION_KEY;
     use aether_data::repository::candidate_selection::InMemoryMinimalCandidateSelectionReadRepository;
+    use aether_data::repository::candidates::InMemoryRequestCandidateRepository;
     use aether_data::repository::global_models::InMemoryGlobalModelReadRepository;
     use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
+    use aether_data::repository::quota::InMemoryProviderQuotaRepository;
     use aether_data::DataLayerError;
     use aether_data_contracts::repository::candidate_selection::{
         MinimalCandidateSelectionReadRepository, StoredApiFormatCandidateRowsQuery,
         StoredPoolKeyCandidateRowsByKeyIdsQuery, StoredPoolKeyCandidateRowsQuery,
         StoredProviderModelMapping, StoredRequestedModelCandidateRowsQuery,
+    };
+    use aether_data_contracts::repository::candidates::{
+        RequestCandidateStatus, StoredRequestCandidate,
     };
     use aether_data_contracts::repository::global_models::{
         GlobalModelReadRepository, StoredPublicGlobalModel,
@@ -1731,6 +1738,208 @@ mod tests {
             api_key_ip_rules: None,
             currently_usable: true,
         }
+    }
+
+    fn candidate_selection_state_with_catalog(
+        row: StoredMinimalCandidateSelectionRow,
+        key_circuit: Option<serde_json::Value>,
+        request_candidates: Vec<StoredRequestCandidate>,
+    ) -> AppState {
+        let (provider, endpoint, mut key) = provider_catalog_for_standard_row(&row, false);
+        if let Some(circuit) = key_circuit {
+            key = key.with_health_fields(None, Some(circuit));
+        }
+        let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed([row]));
+        let catalog = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+            vec![provider],
+            vec![endpoint],
+            vec![key],
+        ));
+        let quotas = Arc::new(InMemoryProviderQuotaRepository::seed(vec![]));
+        let request_candidates =
+            Arc::new(InMemoryRequestCandidateRepository::seed(request_candidates));
+        AppState::new()
+            .expect("gateway state should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_candidate_selection_provider_catalog_quota_and_request_candidates_for_tests(
+                    candidates,
+                    catalog,
+                    quotas,
+                    request_candidates,
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+    }
+
+    fn future_open_circuit() -> serde_json::Value {
+        serde_json::json!({
+            "openai:chat": {
+                "open": true,
+                "next_probe_at_unix_secs": current_unix_secs().saturating_add(3_600),
+            }
+        })
+    }
+
+    fn assert_circuit_open_skipped(
+        outcome: &AiCandidatePreselectionOutcome<
+            SchedulerMinimalCandidateSelectionCandidate,
+            SkippedLocalExecutionCandidate,
+        >,
+    ) {
+        assert!(
+            outcome.candidates.is_empty(),
+            "an open key circuit must not yield selectable candidates"
+        );
+        assert!(
+            outcome
+                .skipped_candidates
+                .iter()
+                .any(|skipped| skipped.skip_reason == "key_circuit_open"),
+            "an open key circuit must be surfaced as key_circuit_open: {:?}",
+            outcome
+                .skipped_candidates
+                .iter()
+                .map(|skipped| skipped.skip_reason)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn first_page_preselection_uses_real_clock_for_future_open_circuit() {
+        let row = standard_candidate_row("circuit-provider", "openai:chat", 1);
+        let app =
+            candidate_selection_state_with_catalog(row, Some(future_open_circuit()), Vec::new());
+        let auth_snapshot = unrestricted_auth_snapshot();
+        let model_directive_policy =
+            crate::system_features::ModelDirectivePolicySnapshot::load(&app).await;
+
+        let outcome = preselect_local_execution_candidates_with_serving(
+            PlannerAppState::new(&app),
+            &model_directive_policy,
+            "openai:chat",
+            "gpt-5",
+            None,
+            false,
+            None,
+            &auth_snapshot,
+            None,
+            None,
+            true,
+            LocalCandidatePreselectionKeyMode::ProviderEndpointKeyModelAndApiFormat,
+        )
+        .await
+        .expect("preselection should succeed");
+
+        assert_circuit_open_skipped(&outcome);
+    }
+
+    #[tokio::test]
+    async fn paged_preselection_uses_real_clock_for_future_open_circuit() {
+        let row = standard_candidate_row("circuit-provider", "openai:chat", 1);
+        let app =
+            candidate_selection_state_with_catalog(row, Some(future_open_circuit()), Vec::new());
+        let auth_snapshot = unrestricted_auth_snapshot();
+        let model_directive_policy =
+            crate::system_features::ModelDirectivePolicySnapshot::load(&app).await;
+
+        let mut cursor = LocalCandidatePreselectionPageCursor::new(
+            PlannerAppState::new(&app),
+            &model_directive_policy,
+            "openai:chat",
+            "gpt-5",
+            None,
+            false,
+            None,
+            &auth_snapshot,
+            None,
+            None,
+            None,
+            true,
+            LocalCandidatePreselectionKeyMode::ProviderEndpointKeyModelAndApiFormat,
+            false,
+            None,
+        )
+        .await;
+
+        let page = cursor
+            .next_page()
+            .await
+            .expect("paged preselection should succeed")
+            .expect("an open circuit should still surface a skipped page");
+
+        assert_circuit_open_skipped(&page);
+    }
+
+    #[tokio::test]
+    async fn first_page_preselection_counts_recent_requests_with_real_clock() {
+        let row = standard_candidate_row("busy-provider", "openai:chat", 1);
+        let now_ms = i64::try_from(crate::clock::current_unix_ms()).expect("clock should fit");
+        let request_candidate = StoredRequestCandidate::new(
+            "cand-recent".to_string(),
+            "req-recent".to_string(),
+            Some("user-1".to_string()),
+            Some("api-key-1".to_string()),
+            None,
+            None,
+            0,
+            0,
+            Some("busy-provider".to_string()),
+            Some("endpoint-busy-provider".to_string()),
+            Some("key-busy-provider".to_string()),
+            RequestCandidateStatus::Streaming,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            now_ms,
+            Some(now_ms),
+            None,
+        )
+        .expect("request candidate should build");
+        let app = candidate_selection_state_with_catalog(row, None, vec![request_candidate]);
+        let mut auth_snapshot = unrestricted_auth_snapshot();
+        auth_snapshot.api_key_concurrent_limit = Some(1);
+        let model_directive_policy =
+            crate::system_features::ModelDirectivePolicySnapshot::load(&app).await;
+
+        let outcome = preselect_local_execution_candidates_with_serving(
+            PlannerAppState::new(&app),
+            &model_directive_policy,
+            "openai:chat",
+            "gpt-5",
+            None,
+            false,
+            None,
+            &auth_snapshot,
+            None,
+            None,
+            true,
+            LocalCandidatePreselectionKeyMode::ProviderEndpointKeyModelAndApiFormat,
+        )
+        .await
+        .expect("preselection should succeed");
+
+        assert!(
+            outcome.candidates.is_empty(),
+            "a recent in-flight request must count against the api key concurrency window"
+        );
+        assert!(
+            outcome
+                .skipped_candidates
+                .iter()
+                .any(|skipped| { skipped.skip_reason == "auth_api_key_concurrency_limit_reached" }),
+            "the concurrency skip must be surfaced: {:?}",
+            outcome
+                .skipped_candidates
+                .iter()
+                .map(|skipped| skipped.skip_reason)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

@@ -445,21 +445,59 @@ pub(super) async fn build_admin_provider_ops_saved_config_value(
         return Err("connector.auth_type 必须是合法的认证类型".to_string());
     }
 
-    let merged = admin_provider_ops_merge_credentials(
-        state,
-        normalized_architecture_id,
-        provider,
-        payload.connector.credentials,
-    )
-    .await?;
-    let canonical_base_url = payload
+    let explicit_base_url = payload
         .base_url
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| merged.saved_binding.destination.base_url());
+        .map(ToOwned::to_owned);
+    // A provider without `config.provider_ops` has nothing saved to decrypt or
+    // migrate. Mirror the verify handler: treat the request credentials as
+    // authoritative instead of trying to snapshot a connector that does not
+    // exist yet.
+    let (merged_provider, mut merged_credentials, saved_binding, reused_saved_secret) =
+        if admin_provider_ops_config_object(provider).is_some() {
+            let merged = admin_provider_ops_merge_credentials(
+                state,
+                normalized_architecture_id,
+                provider,
+                payload.connector.credentials,
+            )
+            .await?;
+            (
+                merged.provider,
+                merged.credentials,
+                Some(merged.saved_binding),
+                merged.reused_saved_secret,
+            )
+        } else {
+            (provider.clone(), payload.connector.credentials, None, false)
+        };
+    let fallback_base_url = match saved_binding.as_ref() {
+        Some(saved_binding) => Some(saved_binding.destination.base_url().to_string()),
+        None => {
+            let endpoints = if explicit_base_url.is_some() {
+                Vec::new()
+            } else {
+                state
+                    .list_provider_catalog_endpoints_by_provider_ids(std::slice::from_ref(
+                        &merged_provider.id,
+                    ))
+                    .await
+                    .map_err(|_| "读取 Provider Ops 端点失败".to_string())?
+            };
+            resolve_admin_provider_ops_base_url(
+                &merged_provider,
+                &endpoints,
+                admin_provider_ops_config_object(&merged_provider),
+            )
+        }
+    };
+    let canonical_base_url = explicit_base_url
+        .or(fallback_base_url)
+        .ok_or_else(|| "请提供 API 地址".to_string())?;
     let canonical_destination =
-        canonicalize_provider_ops_base_url(canonical_base_url).map_err(ToString::to_string)?;
+        canonicalize_provider_ops_base_url(&canonical_base_url).map_err(ToString::to_string)?;
 
     let actions = payload
         .actions
@@ -488,21 +526,22 @@ pub(super) async fn build_admin_provider_ops_saved_config_value(
         "quota_alert": quota_alert,
     });
     let new_binding = admin_provider_ops_binding_from_config(
-        &merged.provider.id,
+        &merged_provider.id,
         provider_ops_config
             .as_object()
             .ok_or_else(|| "Provider Ops 配置格式无效".to_string())?,
         canonical_destination.base_url(),
     )?;
-    let same_secret_destination = merged.saved_binding.provider_id == new_binding.provider_id
-        && merged.saved_binding.architecture_id == new_binding.architecture_id
-        && merged.saved_binding.auth_type == new_binding.auth_type
-        && merged.saved_binding.destination == new_binding.destination;
-    if merged.reused_saved_secret && !same_secret_destination {
+    let same_secret_destination = saved_binding.as_ref().is_some_and(|saved_binding| {
+        saved_binding.provider_id == new_binding.provider_id
+            && saved_binding.architecture_id == new_binding.architecture_id
+            && saved_binding.auth_type == new_binding.auth_type
+            && saved_binding.destination == new_binding.destination
+    });
+    if reused_saved_secret && !same_secret_destination {
         return Err("修改 Provider Ops 架构、认证类型或目标地址时必须重新填写凭据".to_string());
     }
-    let mut merged_credentials = merged.credentials;
-    if merged.saved_binding != new_binding {
+    if saved_binding.as_ref() != Some(&new_binding) {
         for field in PROVIDER_OPS_TRANSIENT_METADATA_FIELDS {
             merged_credentials.remove(*field);
         }
@@ -514,7 +553,7 @@ pub(super) async fn build_admin_provider_ops_saved_config_value(
         serde_json::Value::Object(encrypted_credentials);
 
     Ok(AdminProviderOpsSavedConfigSnapshot {
-        provider: merged.provider,
+        provider: merged_provider,
         provider_ops_config,
     })
 }

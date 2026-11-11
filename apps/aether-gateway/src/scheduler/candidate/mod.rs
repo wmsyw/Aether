@@ -126,6 +126,7 @@ pub(crate) async fn list_selectable_candidates_with_skip_reasons(
         auth_snapshot,
         client_session_affinity,
         now_unix_secs,
+        now_unix_secs,
         enable_model_directives,
         None,
         ordering_config,
@@ -144,6 +145,7 @@ pub(crate) async fn list_selectable_candidates_with_skip_reasons_for_request_ope
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     client_session_affinity: Option<&ClientSessionAffinity>,
     now_unix_secs: u64,
+    load_balance_seed: u64,
     enable_model_directives: bool,
     request_operation: Option<&str>,
     ordering_config: SchedulerOrderingConfig,
@@ -164,6 +166,7 @@ pub(crate) async fn list_selectable_candidates_with_skip_reasons_for_request_ope
         auth_snapshot,
         client_session_affinity,
         now_unix_secs,
+        load_balance_seed,
         enable_model_directives,
         request_operation,
         ordering_config,
@@ -181,6 +184,7 @@ pub(crate) async fn list_selectable_enumerated_candidates_with_skip_reasons(
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     client_session_affinity: Option<&ClientSessionAffinity>,
     now_unix_secs: u64,
+    load_balance_seed: u64,
     ordering_config: SchedulerOrderingConfig,
 ) -> Result<
     (
@@ -203,6 +207,7 @@ pub(crate) async fn list_selectable_enumerated_candidates_with_skip_reasons(
         auth_snapshot,
         client_session_affinity,
         now_unix_secs,
+        load_balance_seed,
         ordering_config,
         priority_affinity_key,
     )
@@ -292,6 +297,7 @@ pub(crate) async fn list_selectable_candidates_for_required_capability_without_r
                 required_capabilities.as_ref(),
                 auth_snapshot,
                 client_session_affinity,
+                now_unix_secs,
                 now_unix_secs,
                 false,
                 None,

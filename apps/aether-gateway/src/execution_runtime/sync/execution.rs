@@ -3084,7 +3084,10 @@ async fn execute_execution_runtime_sync_impl(
     let candidate_id = candidate_id_owned
         .as_deref()
         .or(plan_candidate_id.as_deref());
-    let report_context = report_context;
+    // Carry the gateway-authored error flow into the terminal usage report so a
+    // trusted StopContextOverflow classification can persist its safe category
+    // even when debug body capture is disabled.
+    let report_context = error_flow_report_context.or(report_context);
     let body_json = body_json;
     let telemetry = result.telemetry;
 

@@ -24,6 +24,9 @@ use url::form_urlencoded;
 
 pub const ADMIN_USAGE_DATA_UNAVAILABLE_DETAIL: &str = "Admin usage data unavailable";
 
+const ADMIN_USAGE_CONTEXT_LENGTH_EXCEEDED_CAUSE: &str =
+    "请求内容超过模型上下文长度上限，请缩短输入或清理对话历史后重试";
+
 fn admin_usage_safe_error_message(item: &StoredRequestUsageAudit) -> Option<String> {
     if item
         .error_message
@@ -696,6 +699,13 @@ fn admin_usage_error_domain_source(domain: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn admin_usage_safe_category_failure_message(error_category: Option<&str>) -> Option<String> {
+    let category = error_category?.trim();
+    category
+        .eq_ignore_ascii_case("context_length_exceeded")
+        .then(|| ADMIN_USAGE_CONTEXT_LENGTH_EXCEEDED_CAUSE.to_string())
+}
+
 fn admin_usage_failure_summary_json(
     item: &StoredRequestUsageAudit,
     request_error: &Value,
@@ -707,6 +717,7 @@ fn admin_usage_failure_summary_json(
         .find(|domain| !domain.is_null() && admin_usage_error_domain_message(domain).is_some());
     let message = selected
         .and_then(admin_usage_error_domain_message)
+        .or_else(|| admin_usage_safe_category_failure_message(item.error_category.as_deref()))
         .or_else(|| {
             item.error_message
                 .as_deref()
@@ -2757,7 +2768,7 @@ mod tests {
         admin_usage_matches_search, admin_usage_matches_status, admin_usage_matches_username,
         admin_usage_record_json, admin_usage_resolve_request_capture_body,
         admin_usage_safe_metadata_value, admin_usage_total_tokens, admin_usage_upstream_is_stream,
-        build_admin_usage_detail_payload,
+        build_admin_usage_detail_payload, ADMIN_USAGE_CONTEXT_LENGTH_EXCEEDED_CAUSE,
     };
     use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UsageBodyField};
 
@@ -4423,5 +4434,86 @@ mod tests {
             None,
         );
         assert_eq!(record["chat_pii_redaction"], false);
+    }
+
+    #[test]
+    fn detail_payload_uses_fixed_cause_for_uncaptured_context_overflow() {
+        let item = StoredRequestUsageAudit {
+            error_category: Some("context_length_exceeded".to_string()),
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            request_metadata: Some(json!({"usage_available": false})),
+            ..sample_usage("failed", Some(400), None)
+        };
+
+        let payload = build_admin_usage_detail_payload(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+            false,
+            None,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(payload["status"], "failed");
+        assert_eq!(payload["status_code"], 400);
+        assert_eq!(payload["usage_available"], false);
+        assert_eq!(payload["input_tokens"], 0);
+        assert_eq!(payload["output_tokens"], 0);
+        assert_eq!(payload["error_category"], "context_length_exceeded");
+        assert_eq!(payload["error_message"], "context_length_exceeded");
+        assert_eq!(payload["failure_summary"]["source"], "usage_summary");
+        assert_eq!(payload["failure_summary"]["status_code"], 400);
+        assert_eq!(
+            payload["failure_summary"]["type"],
+            "context_length_exceeded"
+        );
+        assert_eq!(
+            payload["failure_summary"]["category"],
+            "context_length_exceeded"
+        );
+        assert_eq!(
+            payload["failure_summary"]["message"],
+            ADMIN_USAGE_CONTEXT_LENGTH_EXCEEDED_CAUSE
+        );
+        assert!(!payload["failure_summary"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty());
+    }
+
+    #[test]
+    fn detail_payload_keeps_reported_zero_usage_and_does_not_expand_other_categories() {
+        let mut item = sample_usage("failed", Some(400), None);
+        item.error_category = Some("client_error".to_string());
+        item.input_tokens = 0;
+        item.output_tokens = 0;
+        item.total_tokens = 0;
+        item.request_metadata = Some(json!({
+            "usage_available": true,
+            "usage_token_source": "reported",
+        }));
+
+        let payload = build_admin_usage_detail_payload(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+            false,
+            None,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(payload["usage_available"], true);
+        assert_eq!(payload["input_tokens"], 0);
+        assert_eq!(payload["output_tokens"], 0);
+        assert_eq!(payload["total_tokens"], 0);
+        assert!(payload["failure_summary"].is_null());
     }
 }

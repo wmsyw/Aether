@@ -408,11 +408,10 @@ async fn reserve_plan_usage_policy_cost_with_policy(
     let estimated_cost_usd =
         crate::control::estimate_execution_plan_cost_upper_bound_usd(state, plan, report_context)
             .await?
-            .ok_or_else(|| {
-                GatewayError::Internal(
-            "a hard plan cost limit is active, but this request cost cannot be estimated safely"
-                .to_string(),
-        )
+            .ok_or_else(|| GatewayError::Client {
+                status: http::StatusCode::BAD_REQUEST,
+                message: "A hard plan cost limit requires a safely bounded request cost. Supply an output token limit (max_output_tokens for Responses; max_tokens or max_completion_tokens where supported) and self-contained input. If the request is already bounded, ask the administrator to configure compatible model pricing."
+                    .to_string(),
             })?;
     let reserved_cost_units = nonnegative_usd_to_usage_policy_cost_units(estimated_cost_usd)
         .ok_or_else(|| {
@@ -1748,6 +1747,150 @@ mod tests {
             !fallback,
             "paid fallback must release the long plan request window"
         );
+    }
+
+    #[tokio::test]
+    async fn hard_cost_limit_rejects_unbounded_responses_as_client_error_without_reserving() {
+        use aether_data::repository::billing::InMemoryBillingReadRepository;
+        use aether_data::repository::settlement::InMemorySettlementRepository;
+        use aether_data_contracts::repository::billing::StoredBillingModelContext;
+        use axum::response::IntoResponse;
+
+        let billing = StoredBillingModelContext::new(
+            "provider-1".into(),
+            None,
+            Some("key-1".into()),
+            None,
+            None,
+            "global-model-1".into(),
+            "gpt-5".into(),
+            None,
+            None,
+            Some(json!({"tiers":[{
+                "up_to": null,
+                "input_price_per_1m": 0.0,
+                "output_price_per_1m": 1_000_000.0
+            }]})),
+            Some("model-1".into()),
+            Some("gpt-5".into()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let data = crate::data::GatewayDataState::with_billing_reader_for_tests(Arc::new(
+            InMemoryBillingReadRepository::seed([billing]),
+        ))
+        .with_settlement_writer_for_tests(Arc::new(InMemorySettlementRepository::default()));
+        let state = AppState::new()
+            .unwrap()
+            .with_data_state_for_tests(data)
+            .with_usage_runtime_for_tests(crate::usage::UsageRuntimeConfig {
+                enabled: true,
+                ..Default::default()
+            });
+        let mut decision = GatewayControlDecision::synthetic(
+            "/v1/responses",
+            Some("ai_public".into()),
+            Some("openai".into()),
+            Some("responses".into()),
+            Some("openai:responses".into()),
+        );
+        decision.auth_context = Some(fallback_test_auth());
+        let policy = compile_effective_policy(
+            &[entitlement(
+                "ent-cost",
+                json!([{
+                    "type":"usage_policy",
+                    "rules":[{
+                        "metric":"actual_cost_usd",
+                        "window":{"kind":"calendar_day","timezone":"UTC"},
+                        "limit":1.0
+                    }]
+                }]),
+            )],
+            2_000,
+        )
+        .unwrap();
+        let mut plan = aether_contracts::ExecutionPlan {
+            request_id: "unbounded-responses".into(),
+            candidate_id: None,
+            provider_name: None,
+            provider_id: "provider-1".into(),
+            endpoint_id: "endpoint-1".into(),
+            key_id: "key-1".into(),
+            method: "POST".into(),
+            url: "https://example.com/v1/responses".into(),
+            headers: Default::default(),
+            content_type: Some("application/json".into()),
+            content_encoding: None,
+            body: aether_contracts::RequestBody::from_json(
+                json!({"model":"gpt-5","input":"Hello"}),
+            ),
+            stream: true,
+            client_api_format: "openai:responses".into(),
+            provider_api_format: "openai:responses".into(),
+            model_name: Some("gpt-5".into()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        };
+        let context = json!({"model_id":"model-1","global_model_name":"gpt-5"});
+        let token = uuid::Uuid::new_v4().to_string();
+        let error = reserve_plan_usage_policy_cost_with_policy(
+            &state,
+            &decision,
+            &plan,
+            Some(&context),
+            &policy,
+            2_000,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.into_response().status(),
+            http::StatusCode::BAD_REQUEST
+        );
+
+        // Adding a finite bound can reserve the same identity: the rejected
+        // request neither consumed quota nor left a terminal reservation.
+        plan.body = aether_contracts::RequestBody::from_json(
+            json!({"model":"gpt-5","input":"Hello","max_output_tokens":1}),
+        );
+        assert_eq!(
+            reserve_plan_usage_policy_cost_with_policy(
+                &state,
+                &decision,
+                &plan,
+                Some(&context),
+                &policy,
+                2_000,
+                &token,
+            )
+            .await
+            .unwrap(),
+            PlanUsageCostReservationOutcome::Reserved,
+        );
+        plan.request_id = "next-responses".into();
+        let next_token = uuid::Uuid::new_v4().to_string();
+        assert!(matches!(
+            reserve_plan_usage_policy_cost_with_policy(
+                &state,
+                &decision,
+                &plan,
+                Some(&context),
+                &policy,
+                2_000,
+                &next_token,
+            )
+            .await
+            .unwrap(),
+            PlanUsageCostReservationOutcome::Rejected(PlanUsagePolicyRejection {
+                metric: "actual_cost_usd",
+                ..
+            }),
+        ));
     }
 
     fn entitlement(id: &str, snapshot: serde_json::Value) -> UserPlanEntitlementRecord {

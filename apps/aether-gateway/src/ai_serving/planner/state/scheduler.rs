@@ -68,6 +68,7 @@ impl<'a> PlannerAppState<'a> {
             auth_snapshot,
             client_session_affinity,
             now_unix_secs,
+            now_unix_secs,
             enable_model_directives,
             None,
             ordering_config,
@@ -85,6 +86,7 @@ impl<'a> PlannerAppState<'a> {
         auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
         client_session_affinity: Option<&ClientSessionAffinity>,
         now_unix_secs: u64,
+        load_balance_seed: u64,
         enable_model_directives: bool,
         request_operation: Option<&str>,
         ordering_config: SchedulerOrderingConfig,
@@ -112,6 +114,7 @@ impl<'a> PlannerAppState<'a> {
                 auth_snapshot,
                 client_session_affinity,
                 attempt_now_unix_secs,
+                load_balance_seed,
                 enable_model_directives,
                 request_operation,
                 ordering_config,
@@ -137,6 +140,7 @@ impl<'a> PlannerAppState<'a> {
         auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
         client_session_affinity: Option<&ClientSessionAffinity>,
         now_unix_secs: u64,
+        load_balance_seed: u64,
         ordering_config: SchedulerOrderingConfig,
     ) -> Result<
         (
@@ -154,6 +158,7 @@ impl<'a> PlannerAppState<'a> {
             auth_snapshot,
             client_session_affinity,
             now_unix_secs,
+            load_balance_seed,
             ordering_config,
         )
         .await

@@ -155,30 +155,38 @@ fn apply_allocations(
         .filter(|allocation| allocation.cache_estimated_full_cost_amount.is_some())
         .count() as u64;
 }
-fn decimal_sum(
+fn settled_amount_units(
     rows: &[&StoredRequestUsageAudit],
     value: impl Fn(&StoredRequestUsageAudit) -> Option<f64>,
-) -> Option<String> {
-    let amounts = rows
-        .iter()
+) -> Vec<i128> {
+    rows.iter()
         .filter(|row| {
             available(row, USAGE_PRICING_AVAILABLE_METADATA_KEY) && row.billing_status == "settled"
         })
         .filter_map(|row| value(row))
         .filter(|amount| amount.is_finite())
         .map(|amount| (amount * 100_000_000.0).round() as i128)
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn amount_string(amounts: &[i128]) -> Option<String> {
     if amounts.is_empty() {
-        None
-    } else {
-        let sum: i128 = amounts.iter().sum();
-        Some(format!(
-            "{}{}.{:08}",
-            if sum < 0 { "-" } else { "" },
-            sum.abs() / 100_000_000,
-            sum.abs() % 100_000_000
-        ))
+        return None;
     }
+    let sum: i128 = amounts.iter().sum();
+    Some(format!(
+        "{}{}.{:08}",
+        if sum < 0 { "-" } else { "" },
+        sum.abs() / 100_000_000,
+        sum.abs() % 100_000_000
+    ))
+}
+
+fn decimal_sum(
+    rows: &[&StoredRequestUsageAudit],
+    value: impl Fn(&StoredRequestUsageAudit) -> Option<f64>,
+) -> Option<String> {
+    amount_string(&settled_amount_units(rows, value))
 }
 fn metrics(
     rows: &[&StoredRequestUsageAudit],
@@ -294,6 +302,9 @@ fn metrics(
     metrics.first_byte_p99_ms = first_percentile(0.99);
     metrics.usage_active_users = users.len() as u64;
     metrics.rated_amount = decimal_sum(rows, |row| Some(row.total_cost_usd));
+    let provider_costs = settled_amount_units(rows, |row| Some(row.actual_total_cost_usd));
+    metrics.provider_cost_available_count = provider_costs.len() as u64;
+    metrics.provider_cost_amount = amount_string(&provider_costs);
     metrics.billable_amount = decimal_sum(rows, |row| row.billing_cost());
     metrics
 }
@@ -607,6 +618,10 @@ impl InMemoryUsageReadRepository {
                             amount_units(&a.metrics.billable_amount)
                                 .cmp(&amount_units(&b.metrics.billable_amount))
                         }
+                        UsageAnalyticsSort::ProviderCostAmount => {
+                            amount_units(&a.metrics.provider_cost_amount)
+                                .cmp(&amount_units(&b.metrics.provider_cost_amount))
+                        }
                     };
                     (if query.descending {
                         order.reverse()
@@ -737,6 +752,10 @@ impl InMemoryUsageReadRepository {
                             UsageAnalyticsSort::BillableAmount => {
                                 amount_units(&a.metrics.billable_amount)
                                     .cmp(&amount_units(&b.metrics.billable_amount))
+                            }
+                            UsageAnalyticsSort::ProviderCostAmount => {
+                                amount_units(&a.metrics.provider_cost_amount)
+                                    .cmp(&amount_units(&b.metrics.provider_cost_amount))
                             }
                             UsageAnalyticsSort::Tokens => {
                                 a.metrics.total_tokens.cmp(&b.metrics.total_tokens)

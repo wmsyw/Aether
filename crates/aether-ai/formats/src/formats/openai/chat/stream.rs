@@ -41,6 +41,7 @@ pub struct OpenAIChatProviderState {
     response_id: Option<String>,
     model: Option<String>,
     actual_service_tier: Option<String>,
+    created_at: Option<i64>,
     started: bool,
     finished: bool,
     pending_finish_reason: Option<String>,
@@ -69,6 +70,7 @@ pub struct OpenAIResponsesProviderState {
     response_id: Option<String>,
     model: Option<String>,
     actual_service_tier: Option<String>,
+    created_at: Option<i64>,
     started: bool,
     finished: bool,
     text_parts: BTreeMap<String, String>,
@@ -100,6 +102,10 @@ impl OpenAIChatProviderState {
 
     pub(crate) fn actual_service_tier(&self) -> Option<&str> {
         self.actual_service_tier.as_deref()
+    }
+
+    pub(crate) fn created_at(&self) -> Option<i64> {
+        self.created_at
     }
 
     fn finish_usage(value: Option<&Value>) -> Option<CanonicalUsage> {
@@ -175,6 +181,17 @@ impl OpenAIChatProviderState {
             normalize_openai_service_tier(chunk_object.get("service_tier").and_then(Value::as_str))
         {
             self.actual_service_tier = Some(service_tier);
+        }
+        if self.created_at.is_none() {
+            self.created_at = chunk_object
+                .get("created")
+                .and_then(Value::as_i64)
+                .or_else(|| {
+                    chunk_object
+                        .get("created")
+                        .and_then(Value::as_u64)
+                        .and_then(|value| i64::try_from(value).ok())
+                });
         }
 
         let mut out = Vec::new();
@@ -444,6 +461,10 @@ impl OpenAIResponsesProviderState {
 
     pub(crate) fn actual_service_tier(&self) -> Option<&str> {
         self.actual_service_tier.as_deref()
+    }
+
+    pub(crate) fn created_at(&self) -> Option<i64> {
+        self.created_at
     }
 
     fn identity(&self, report_context: &Value) -> (String, String) {
@@ -1583,6 +1604,18 @@ impl OpenAIResponsesProviderState {
             {
                 self.actual_service_tier = Some(service_tier);
             }
+            if self.created_at.is_none() {
+                self.created_at =
+                    response
+                        .get("created_at")
+                        .and_then(Value::as_i64)
+                        .or_else(|| {
+                            response
+                                .get("created_at")
+                                .and_then(Value::as_u64)
+                                .and_then(|value| i64::try_from(value).ok())
+                        });
+            }
         }
 
         match value
@@ -2174,6 +2207,7 @@ pub struct OpenAIChatClientEmitter {
     response_id: Option<String>,
     model: Option<String>,
     actual_service_tier: Option<String>,
+    created_at: Option<i64>,
     started: bool,
     finished: bool,
     next_tool_call_index: usize,
@@ -2262,16 +2296,32 @@ impl OpenAIChatClientEmitter {
         }
     }
 
-    fn encode_chunk(&self, mut chunk: Value) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
-        if let (Some(service_tier), Some(object)) =
-            (self.actual_service_tier.as_ref(), chunk.as_object_mut())
-        {
-            object.insert(
-                "service_tier".to_string(),
-                Value::String(service_tier.clone()),
-            );
+    fn encode_chunk(&mut self, mut chunk: Value) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
+        let created = self.ensure_created_at();
+        if let Some(object) = chunk.as_object_mut() {
+            object
+                .entry("created".to_string())
+                .or_insert(Value::from(created));
+            if let Some(service_tier) = self.actual_service_tier.as_ref() {
+                object.insert(
+                    "service_tier".to_string(),
+                    Value::String(service_tier.clone()),
+                );
+            }
         }
         encode_json_sse(None, &chunk)
+    }
+
+    fn ensure_created_at(&mut self) -> i64 {
+        *self
+            .created_at
+            .get_or_insert_with(openai_responses_current_timestamp)
+    }
+
+    pub(crate) fn set_created_at(&mut self, created_at: Option<i64>) {
+        if self.created_at.is_none() {
+            self.created_at = created_at;
+        }
     }
 
     fn update_identity(&mut self, frame: &CanonicalStreamFrame) {
@@ -2570,6 +2620,12 @@ impl OpenAIResponsesClientEmitter {
         Self {
             namespace_tool_aliases: NamespaceToolAliases::from_report_context(report_context),
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn set_created_at(&mut self, created_at: Option<i64>) {
+        if self.created_at.is_none() {
+            self.created_at = created_at;
         }
     }
 
@@ -4389,6 +4445,23 @@ mod tests {
             }
         }
         indices
+    }
+
+    fn openai_chat_created_values(sse: &str) -> Vec<i64> {
+        sse.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|payload| *payload != "[DONE]")
+            .filter_map(|payload| serde_json::from_str::<Value>(payload).ok())
+            .filter(|value| {
+                value.get("object").and_then(Value::as_str) == Some("chat.completion.chunk")
+            })
+            .map(|value| {
+                value
+                    .get("created")
+                    .and_then(Value::as_i64)
+                    .expect("chat completion chunk should carry an integer created")
+            })
+            .collect()
     }
 
     #[test]
@@ -6595,6 +6668,87 @@ mod tests {
 
         let sse = String::from_utf8(bytes).expect("sse should be utf8");
         assert!(sse.contains("\"reasoning_content\":\"because\""));
+    }
+
+    #[test]
+    fn openai_chat_client_emitter_stamps_one_created_on_every_chunk() {
+        let mut emitter = OpenAIChatClientEmitter::default();
+        let mut bytes = Vec::new();
+        for event in [
+            CanonicalStreamEvent::Start,
+            CanonicalStreamEvent::TextDelta("Hello".to_string()),
+            CanonicalStreamEvent::ToolCallStart {
+                index: 0,
+                call_id: "call_created".to_string(),
+                name: "lookup".to_string(),
+            },
+            CanonicalStreamEvent::ToolCallArgumentsDelta {
+                index: 0,
+                arguments: "{\"q\":\"rust\"}".to_string(),
+            },
+            CanonicalStreamEvent::ToolResultDelta {
+                index: 0,
+                tool_use_id: "call_created".to_string(),
+                name: Some("lookup".to_string()),
+                content: "{\"ok\":true}".to_string(),
+            },
+            CanonicalStreamEvent::Finish {
+                finish_reason: Some("stop".to_string()),
+                usage: Some(CanonicalUsage {
+                    input_tokens: 1,
+                    output_tokens: 2,
+                    total_tokens: 3,
+                    ..CanonicalUsage::default()
+                }),
+            },
+        ] {
+            bytes.extend(
+                emitter
+                    .emit(CanonicalStreamFrame {
+                        id: "chatcmpl_created".to_string(),
+                        model: "gpt-5.4".to_string(),
+                        event,
+                    })
+                    .expect("stream event should encode"),
+            );
+        }
+
+        let sse = String::from_utf8(bytes).expect("sse should be utf8");
+        let created = openai_chat_created_values(&sse);
+        assert_eq!(
+            created.len(),
+            7,
+            "role, text, tool call, arguments, tool result, finish and usage chunks: {sse}"
+        );
+        assert!(created.iter().all(|value| *value > 0));
+        assert!(created.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn openai_chat_client_emitter_preserves_seeded_upstream_created() {
+        let mut emitter = OpenAIChatClientEmitter::default();
+        emitter.set_created_at(Some(1776971267));
+        let mut bytes = emitter
+            .emit(CanonicalStreamFrame {
+                id: "chatcmpl_seeded".to_string(),
+                model: "gpt-5.4".to_string(),
+                event: CanonicalStreamEvent::Start,
+            })
+            .expect("start should encode");
+        bytes.extend(
+            emitter
+                .emit(CanonicalStreamFrame {
+                    id: "chatcmpl_seeded".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    event: CanonicalStreamEvent::TextDelta("Hello".to_string()),
+                })
+                .expect("text should encode"),
+        );
+
+        let sse = String::from_utf8(bytes).expect("sse should be utf8");
+        let created = openai_chat_created_values(&sse);
+        assert!(!created.is_empty());
+        assert!(created.iter().all(|value| *value == 1776971267));
     }
 
     #[test]

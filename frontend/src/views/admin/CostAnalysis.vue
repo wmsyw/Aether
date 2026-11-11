@@ -144,9 +144,19 @@
               <tr
                 v-for="provider in providers?.data.items || []"
                 :key="provider.id || 'unattributed'"
+                :class="provider.id ? 'cursor-pointer hover:bg-muted/50' : undefined"
+                @click="provider.id && selectProvider(provider.id)"
               >
                 <td class="max-w-64 break-words py-4 font-medium">
-                  {{ provider.label || t('未归属提供商', 'Unattributed provider') }}<p class="mt-1 text-xs font-normal text-muted-foreground">
+                  <button
+                    v-if="provider.id"
+                    type="button"
+                    class="text-left font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-pressed="selectedProviderId === provider.id"
+                    @click.stop="selectProvider(provider.id)"
+                  >
+                    {{ provider.label || t('未归属提供商', 'Unattributed provider') }}
+                  </button><span v-else>{{ t('未归属提供商', 'Unattributed provider') }}</span><p class="mt-1 text-xs font-normal text-muted-foreground">
                     {{ providerType(provider.id) }}
                   </p>
                 </td>
@@ -169,13 +179,26 @@
                   </p>
                 </td>
                 <td class="py-4 text-right">
-                  <RouterLink
+                  <div
                     v-if="provider.id"
-                    :to="link('/admin/usage', { provider_id: provider.id })"
-                    class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                    class="flex justify-end gap-2"
                   >
-                    {{ t('查看', 'View') }}<ArrowUpRight class="h-3.5 w-3.5" />
-                  </RouterLink><span v-else>-</span>
+                    <button
+                      type="button"
+                      class="text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      :aria-pressed="selectedProviderId === provider.id"
+                      @click.stop="selectProvider(provider.id)"
+                    >
+                      {{ t('归因', 'Attribute') }}
+                    </button>
+                    <RouterLink
+                      :to="link('/admin/usage', { provider_id: provider.id })"
+                      class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                      @click.stop
+                    >
+                      {{ t('查看', 'View') }}<ArrowUpRight class="h-3.5 w-3.5" />
+                    </RouterLink>
+                  </div><span v-else>-</span>
                 </td>
               </tr>
               <tr v-if="!providers?.data.items.length">
@@ -204,6 +227,14 @@
         </div>
       </Card>
     </section>
+    <ProviderUserAttribution
+      v-if="selectedProviderId"
+      :key="selectedProviderId"
+      :provider-id="selectedProviderId"
+      :provider-name="selectedProviderLabel"
+      :range="range"
+      :revision="revision"
+    />
 
     <OverviewStatus
       :loading="accountLoading && !accounts"
@@ -302,6 +333,7 @@ import OverviewPagination from '@/features/overview/components/OverviewPaginatio
 import ExpenseDialog from '@/features/overview/costs/ExpenseDialog.vue'
 import ExpenseLedger from '@/features/overview/costs/ExpenseLedger.vue'
 import ProviderAccounts from '@/features/overview/costs/ProviderAccounts.vue'
+import ProviderUserAttribution from '@/features/overview/costs/ProviderUserAttribution.vue'
 import { useOverviewQuery } from '@/features/overview/query'
 import { useOverviewAutoRefresh } from '@/features/overview/useOverviewAutoRefresh'
 import { useOverviewRequest } from '@/features/overview/useOverviewRequest'
@@ -316,6 +348,12 @@ const providerOffset = ref(0)
 const expenseOffset = ref(0)
 const providerLimit = ref(25)
 const expenseLimit = ref(25)
+const selectedProviderId = ref<string | null>(null)
+const selectedProviderLabel = ref('')
+function selectProvider(id: string) {
+  selectedProviderLabel.value = providers.value?.data.items.find(provider => provider.id === id)?.label || id
+  selectedProviderId.value = id
+}
 const selectedScope = computed(() => JSON.stringify(relativePreset.value ? { preset: relativePreset.value, timezone: range.value.timezone } : range.value))
 watch(selectedScope, () => { providerOffset.value = 0; expenseOffset.value = 0 })
 const costQuery = computed(() => ({ ...range.value, granularity: 'day' as const }))

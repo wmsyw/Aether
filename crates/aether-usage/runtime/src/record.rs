@@ -44,6 +44,34 @@ pub fn build_upsert_usage_record_from_event(
         }
     };
     let mut data = event.data.clone();
+    // An upstream failure without metering is unknown usage, not a zero-token
+    // completion. Explicit availability and reported zeroes remain authoritative.
+    if event.event_type == UsageEventType::Failed
+        && data.input_tokens.is_none()
+        && data.output_tokens.is_none()
+        && data.total_tokens.is_none()
+        && data.cache_creation_input_tokens.is_none()
+        && data.cache_creation_ephemeral_5m_input_tokens.is_none()
+        && data.cache_creation_ephemeral_1h_input_tokens.is_none()
+        && data.cache_read_input_tokens.is_none()
+        && data.total_cost_usd.is_none()
+        && data.actual_total_cost_usd.is_none()
+        && data.cache_creation_cost_usd.is_none()
+        && data.cache_read_cost_usd.is_none()
+        && data
+            .request_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(USAGE_AVAILABLE_METADATA_KEY))
+            .and_then(serde_json::Value::as_bool)
+            .is_none()
+    {
+        let metadata = data
+            .request_metadata
+            .get_or_insert_with(|| serde_json::json!({}));
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata.insert(USAGE_AVAILABLE_METADATA_KEY.to_string(), false.into());
+        }
+    }
     if usage_is_explicitly_unavailable(data.request_metadata.as_ref()) {
         clear_unavailable_usage_fields(&mut data);
     } else if usage_pricing_is_explicitly_unavailable(data.request_metadata.as_ref()) {
@@ -656,6 +684,77 @@ mod tests {
                 .and_then(|metadata| metadata.get("usage_available"))
                 .and_then(serde_json::Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn failed_unmetered_requests_do_not_fabricate_zero_usage() {
+        let mut event = UsageEvent::new(
+            UsageEventType::Failed,
+            "context-overflow",
+            UsageEventData {
+                status_code: Some(400),
+                error_message: Some("maximum context length exceeded".to_owned()),
+                ..Default::default()
+            },
+        );
+        let record = build_upsert_usage_record_from_event(&event).unwrap();
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.request_metadata.unwrap()["usage_available"], false);
+        assert_eq!(record.total_tokens, None);
+        assert_eq!(record.error_message, event.data.error_message);
+
+        event.data.input_tokens = Some(0);
+        event.data.output_tokens = Some(0);
+        event.data.total_tokens = Some(0);
+        let metered = build_upsert_usage_record_from_event(&event).unwrap();
+        assert_eq!(metered.total_tokens, Some(0));
+        assert_ne!(
+            metered
+                .request_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("usage_available")),
+            Some(&serde_json::Value::Bool(false)),
+        );
+
+        event.data.input_tokens = Some(10);
+        event.data.output_tokens = Some(20);
+        event.data.total_tokens = Some(30);
+        let reported = build_upsert_usage_record_from_event(&event).unwrap();
+        assert_eq!(reported.total_tokens, Some(30));
+
+        event.data.input_tokens = None;
+        event.data.output_tokens = None;
+        event.data.total_tokens = None;
+        event.data.total_cost_usd = Some(0.25);
+        let priced = build_upsert_usage_record_from_event(&event).unwrap();
+        assert_eq!(priced.total_cost_usd, Some(0.25));
+        event.data.total_cost_usd = None;
+
+        event.data.input_tokens = None;
+        event.data.output_tokens = None;
+        event.data.total_tokens = None;
+        event.data.request_metadata = Some(serde_json::json!({"usage_available":true}));
+        let authoritative = build_upsert_usage_record_from_event(&event).unwrap();
+        assert_eq!(
+            authoritative.request_metadata.unwrap()["usage_available"],
+            true
+        );
+
+        event.event_type = UsageEventType::Completed;
+        event.data.request_metadata = None;
+        event.data.input_tokens = Some(0);
+        event.data.output_tokens = Some(0);
+        event.data.total_tokens = Some(0);
+        let completed = build_upsert_usage_record_from_event(&event).unwrap();
+        assert_eq!(completed.status, "completed");
+        assert_eq!(completed.total_tokens, Some(0));
+        assert_ne!(
+            completed
+                .request_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("usage_available")),
+            Some(&serde_json::Value::Bool(false)),
         );
     }
 

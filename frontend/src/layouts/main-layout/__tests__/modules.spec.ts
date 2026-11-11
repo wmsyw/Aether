@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, ref, type App, type Ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { useModuleStore } from '@/stores/modules'
+import { useAuthStore } from '@/stores/auth'
 import { buildNavigation } from '@/layouts/main-layout/navigation'
 import { useNavigationModules } from '@/layouts/main-layout/modules'
 
@@ -59,12 +60,21 @@ describe('user referral navigation module loading', () => {
     expect(getAllStatus).not.toHaveBeenCalled()
   })
 
-  it('keeps the referral entry hidden when status loading fails', async () => {
+  it('keeps the referral entry hidden when status retries still fail', async () => {
     getUserStatus.mockRejectedValue(new Error('unavailable'))
     mount(false)
     await settle()
     expect(container.querySelector('a[href="/dashboard/referral"]')).toBeNull()
     expect(useModuleStore().userLoaded).toBe(false)
+  })
+
+  it('recovers a first load after one transient failure without a manual reload', async () => {
+    getUserStatus.mockRejectedValueOnce(new Error('temporary unavailable'))
+    getUserStatus.mockResolvedValueOnce({ referral: { name: 'referral', available: true, enabled: true, active: true } })
+    mount(false)
+    await settle()
+    expect(getUserStatus).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('a[href="/dashboard/referral"]')).not.toBeNull()
   })
 
   it('refreshes user status on remount after the administrator disables referrals', async () => {
@@ -132,17 +142,34 @@ describe('user referral navigation module loading', () => {
     expect(store.userLoaded).toBe(true)
   })
 
-  it('clears a previously active entry on failure and can recover on retry', async () => {
+  it('keeps the last active referral entry through a transient status failure', async () => {
     getUserStatus.mockResolvedValueOnce({ referral: { name: 'referral', available: true, enabled: true, active: true } })
     const store = useModuleStore()
     await store.fetchUserModules()
     expect(store.isUserActive('referral')).toBe(true)
-    getUserStatus.mockRejectedValueOnce(new Error('unavailable'))
-    await expect(store.fetchUserModules()).rejects.toThrow('unavailable')
-    expect(store.isUserActive('referral')).toBe(false)
-    expect(store.userLoaded).toBe(false)
+    getUserStatus.mockRejectedValueOnce(new Error('temporary unavailable'))
     getUserStatus.mockResolvedValueOnce({ referral: { name: 'referral', available: true, enabled: true, active: true } })
     await store.fetchUserModules()
     expect(store.isUserActive('referral')).toBe(true)
+    expect(store.userLoaded).toBe(true)
+  })
+
+  it('clears state on identity changes and ignores prior account responses', async () => {
+    const auth = useAuthStore()
+    auth.token = 'first-account'
+    let completeOld!: (value: Record<string, never>) => void
+    getUserStatus.mockImplementationOnce(() => new Promise(resolve => { completeOld = resolve }))
+    const store = useModuleStore()
+    const oldRequest = store.fetchUserModules()
+    auth.token = 'second-account'
+    getUserStatus.mockResolvedValueOnce({ referral: { name: 'referral', available: true, enabled: false, active: false } })
+    await store.fetchUserModules()
+    completeOld({})
+    await oldRequest
+    expect(store.userLoaded).toBe(true)
+    expect(store.isUserActive('referral')).toBe(false)
+    auth.token = null
+    expect(store.userModules).toEqual({})
+    expect(store.userLoaded).toBe(false)
   })
 })

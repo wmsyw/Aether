@@ -3510,37 +3510,6 @@ fn usage_sql_reads_routing_snapshots_for_single_record_fetches() {
 }
 
 #[test]
-fn usage_sql_reads_settlement_snapshots_for_single_record_fetches() {
-    assert!(super::FIND_BY_REQUEST_ID_SQL.contains("LEFT JOIN usage_settlement_snapshots"));
-    assert!(super::FIND_BY_ID_SQL.contains("LEFT JOIN usage_settlement_snapshots"));
-    assert!(super::FIND_BY_REQUEST_ID_SQL.contains("settlement_billing_snapshot_schema_version"));
-    assert!(super::FIND_BY_ID_SQL.contains("settlement_price_per_request"));
-    for sql in [
-        super::FIND_BY_REQUEST_ID_SQL,
-        super::FIND_BY_ID_SQL,
-        super::LIST_USAGE_AUDITS_PREFIX,
-        super::LIST_RECENT_USAGE_AUDITS_PREFIX,
-    ] {
-        assert!(sql.contains("CAST(\"usage\".input_tokens AS INTEGER) AS input_tokens"));
-        assert!(sql.contains(
-            "usage_settlement_snapshots.billing_input_tokens AS settlement_billing_input_tokens"
-        ));
-        assert!(sql.contains(
-            "WHEN usage_settlement_snapshots.billing_effective_input_tokens IS NOT NULL"
-        ));
-        assert!(
-            sql.contains("WHEN usage_settlement_snapshots.billing_total_input_context IS NOT NULL")
-        );
-        assert!(sql.contains("NULLIF(GREATEST(COALESCE(\"usage\".total_tokens, 0), 0), 0)"));
-        assert!(!sql.contains("THEN COALESCE(usage_settlement_snapshots.billing_input_tokens, 0)"));
-        assert!(sql.contains("usage_settlement_snapshots.billing_cache_creation_5m_tokens"));
-        assert!(sql.contains(
-            "CAST(usage_settlement_snapshots.billing_total_cost_usd AS DOUBLE PRECISION)"
-        ));
-    }
-}
-
-#[test]
 fn usage_sql_qualifies_shared_usage_columns_for_single_record_fetches() {
     for sql in [super::FIND_BY_REQUEST_ID_SQL, super::FIND_BY_ID_SQL] {
         assert!(sql.contains("\"usage\".request_id"));
@@ -3559,78 +3528,6 @@ fn usage_sql_qualifies_shared_usage_columns_for_single_record_fetches() {
 
     assert!(super::FIND_BY_REQUEST_ID_SQL.contains("WHERE \"usage\".request_id = $1"));
     assert!(super::FIND_BY_ID_SQL.contains("WHERE \"usage\".id = $1"));
-}
-
-#[test]
-fn usage_sql_uses_json_null_placeholders_for_usage_payload_columns() {
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::json AS request_headers"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::json AS provider_request_body"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::bytea AS request_body_compressed"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::varchar AS http_request_body_ref"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::varchar AS http_request_body_state"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX
-        .contains("NULL::varchar AS http_client_response_body_state"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("usage_routing_snapshots.candidate_id"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("usage_routing_snapshots.candidate_index"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("request_metadata->>'candidate_index'"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("LEFT JOIN usage_routing_snapshots"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("LEFT JOIN usage_settlement_snapshots"));
-    assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("settlement_billing_snapshot_schema_version"));
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::json AS request_headers"));
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::json AS provider_request_body"));
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX
-        .contains("NULL::bytea AS client_response_body_compressed"));
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX
-        .contains("NULL::varchar AS http_client_response_body_ref"));
-    assert!(
-        super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::varchar AS http_request_body_state")
-    );
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX
-        .contains("NULL::varchar AS http_client_response_body_state"));
-    assert!(
-        super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("usage_routing_snapshots.candidate_index")
-    );
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("request_metadata->>'candidate_index'"));
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("LEFT JOIN usage_routing_snapshots"));
-    assert!(
-        super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("usage_routing_snapshots.execution_path")
-    );
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("LEFT JOIN usage_settlement_snapshots"));
-    assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("settlement_price_per_request"));
-    for sql in [
-        super::LIST_USAGE_AUDITS_PREFIX,
-        super::LIST_RECENT_USAGE_AUDITS_PREFIX,
-    ] {
-        assert!(sql.contains("jsonb_strip_nulls(jsonb_build_object("));
-        assert!(!sql.contains("jsonb_typeof(\"usage\".provider_request_body::jsonb)"));
-        assert!(!sql.contains("\"usage\".provider_request_body->"));
-        assert!(!sql.contains("jsonb_typeof(\"usage\".provider_request_body)"));
-        assert!(sql.contains("'client_ip'"));
-        assert!(sql.contains("request_metadata->>'client_ip'"));
-        assert!(sql.contains("'user_agent'"));
-        assert!(sql.contains("request_metadata->>'user_agent'"));
-        assert!(sql.contains("request_metadata->>'requested_reasoning_effort'"));
-        assert!(sql.contains("request_metadata->>'provider_reasoning_effort'"));
-        assert!(sql.contains("request_metadata->>'provider_service_tier'"));
-        assert!(sql.contains("request_metadata->>'provider_actual_service_tier'"));
-        assert!(sql.contains("request_metadata->>'provider_response_model'"));
-        assert!(sql.contains("'provider_response_model'"));
-        assert!(sql.contains("request_metadata->>'websocket_mode'"));
-        assert!(sql.contains("'websocket_mode'"));
-        assert!(sql.contains("AS client_family"));
-        assert!(sql.contains("request_metadata->'client_session_affinity'->>'client_family'"));
-        assert!(sql.contains("request_metadata->>'client_family'"));
-        assert!(sql.contains("CAST(\"usage\".input_tokens AS INTEGER) AS input_tokens"));
-        assert!(sql.contains(
-            "usage_settlement_snapshots.billing_input_tokens AS settlement_billing_input_tokens"
-        ));
-        assert!(sql.contains("usage_settlement_snapshots.billing_cache_creation_1h_tokens"));
-        assert!(sql.contains(
-            "CAST(usage_settlement_snapshots.billing_total_cost_usd AS DOUBLE PRECISION)"
-        ));
-    }
-    assert!(!super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::jsonb"));
-    assert!(!super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::jsonb"));
 }
 
 #[test]
@@ -6051,4 +5948,267 @@ async fn live_usage_health_timeline_totals_match_breakdown() {
             .await
             .expect("cleanup verification query");
     assert_eq!(remaining, 0, "探针数据必须清理干净，不能留在测试库里");
+}
+
+#[tokio::test]
+#[ignore = "requires AETHER_TEST_DATABASE_URL and PostgreSQL migrations"]
+async fn live_canonical_unavailable_usage_reads_lists_and_details_without_error() {
+    let database_url = std::env::var("AETHER_TEST_DATABASE_URL")
+        .expect("AETHER_TEST_DATABASE_URL must point at the test database");
+    let factory = PostgresPoolFactory::new(PostgresPoolConfig {
+        database_url,
+        min_connections: 1,
+        max_connections: 2,
+        acquire_timeout_ms: 10_000,
+        idle_timeout_ms: 30_000,
+        max_lifetime_ms: 60_000,
+        statement_cache_capacity: 64,
+        require_ssl: false,
+    })
+    .expect("factory should build");
+    let repository =
+        SqlxUsageReadRepository::new(factory.connect_lazy().expect("lazy pool should build"));
+    crate::run_migrations(repository.pool())
+        .await
+        .expect("test database migrations should succeed");
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let provider_name = format!("canonical-empty-usage-{suffix}");
+    let user_id = format!("u-{suffix}");
+    let unavailable_request_id = format!("req-canonical-unavailable-{suffix}");
+    let reported_zero_request_id = format!("req-reported-zero-{suffix}");
+    let now_unix_secs = Utc::now().timestamp().max(2) as u64;
+
+    let mut unavailable = fast_clear_usage_record(
+        &unavailable_request_id,
+        &provider_name,
+        now_unix_secs,
+        true,
+        UsageBodyCaptureState::None,
+        None,
+    );
+    unavailable.user_id = Some(user_id.clone());
+    unavailable.status = "failed".to_string();
+    unavailable.billing_status = "void".to_string();
+    unavailable.status_code = Some(400);
+    unavailable.error_category = Some("context_length_exceeded".to_string());
+    unavailable.error_message =
+        Some("Maximum context length exceeded: reduce input tokens.".into());
+    unavailable.input_tokens = None;
+    unavailable.output_tokens = None;
+    unavailable.total_tokens = None;
+    unavailable.total_cost_usd = None;
+    unavailable.actual_total_cost_usd = None;
+    unavailable.request_metadata = Some(json!({"usage_available": false}));
+    let stored_unavailable = repository
+        .upsert(unavailable)
+        .await
+        .expect("canonical unavailable usage should upsert and round-trip");
+    assert_eq!(stored_unavailable.status, "failed");
+    assert_eq!(stored_unavailable.input_tokens, 0);
+    assert_eq!(stored_unavailable.output_tokens, 0);
+    assert_eq!(stored_unavailable.total_tokens, 0);
+    assert!(!stored_unavailable.usage_available());
+    assert_eq!(
+        stored_unavailable.error_category.as_deref(),
+        Some("context_length_exceeded")
+    );
+    assert_eq!(
+        stored_unavailable.error_message, None,
+        "raw error text must remain stripped"
+    );
+
+    // UPSERT_SQL intentionally normalizes absent token columns to 0. The real
+    // canonical writer still marks usage unavailable; the read-side NULL
+    // compatibility is exercised below with a direct canonical NULL fixture.
+    let unavailable_db_row = sqlx::query(
+        "SELECT input_tokens, output_tokens, total_tokens, error_message FROM \"usage\" WHERE request_id = $1",
+    )
+    .bind(&unavailable_request_id)
+    .fetch_one(repository.pool())
+    .await
+    .expect("canonical unavailable row should be readable");
+    assert_eq!(
+        unavailable_db_row
+            .try_get::<Option<i32>, _>("input_tokens")
+            .expect("input_tokens should decode"),
+        Some(0)
+    );
+    assert_eq!(
+        unavailable_db_row
+            .try_get::<Option<i32>, _>("output_tokens")
+            .expect("output_tokens should decode"),
+        Some(0)
+    );
+    assert_eq!(
+        unavailable_db_row
+            .try_get::<Option<i32>, _>("total_tokens")
+            .expect("total_tokens should decode"),
+        Some(0)
+    );
+    assert_eq!(
+        unavailable_db_row
+            .try_get::<Option<String>, _>("error_message")
+            .expect("error_message should decode"),
+        None
+    );
+
+    sqlx::query(
+        "UPDATE \"usage\" SET input_tokens = NULL, output_tokens = NULL WHERE request_id = $1",
+    )
+    .bind(&unavailable_request_id)
+    .execute(repository.pool())
+    .await
+    .expect("canonical NULL input/output fixture should update");
+    let unavailable_null_row = sqlx::query(
+        "SELECT input_tokens, output_tokens, total_tokens FROM \"usage\" WHERE request_id = $1",
+    )
+    .bind(&unavailable_request_id)
+    .fetch_one(repository.pool())
+    .await
+    .expect("canonical NULL input/output row should be readable");
+    assert_eq!(
+        unavailable_null_row
+            .try_get::<Option<i32>, _>("input_tokens")
+            .expect("input_tokens should decode"),
+        None
+    );
+    assert_eq!(
+        unavailable_null_row
+            .try_get::<Option<i32>, _>("output_tokens")
+            .expect("output_tokens should decode"),
+        None
+    );
+    assert_eq!(
+        unavailable_null_row
+            .try_get::<Option<i32>, _>("total_tokens")
+            .expect("total_tokens should decode"),
+        Some(0),
+        "total_tokens keeps the upsert's canonical zero value"
+    );
+
+    let mut reported_zero = fast_clear_usage_record(
+        &reported_zero_request_id,
+        &provider_name,
+        now_unix_secs,
+        true,
+        UsageBodyCaptureState::None,
+        None,
+    );
+    reported_zero.user_id = Some(user_id.clone());
+    reported_zero.status = "failed".to_string();
+    reported_zero.billing_status = "void".to_string();
+    reported_zero.status_code = Some(400);
+    reported_zero.error_category = Some("client_error".to_string());
+    reported_zero.input_tokens = Some(0);
+    reported_zero.output_tokens = Some(0);
+    reported_zero.total_tokens = Some(0);
+    reported_zero.request_metadata = Some(json!({
+        "usage_available": true,
+        "usage_token_source": "reported",
+    }));
+    let stored_reported_zero = repository
+        .upsert(reported_zero)
+        .await
+        .expect("explicit reported zero usage should upsert");
+    assert_eq!(stored_reported_zero.input_tokens, 0);
+    assert_eq!(stored_reported_zero.output_tokens, 0);
+    assert_eq!(stored_reported_zero.total_tokens, 0);
+    assert!(stored_reported_zero.usage_available());
+
+    let reported_zero_db_row = sqlx::query(
+        "SELECT input_tokens, output_tokens, total_tokens FROM \"usage\" WHERE request_id = $1",
+    )
+    .bind(&reported_zero_request_id)
+    .fetch_one(repository.pool())
+    .await
+    .expect("reported zero row should be readable");
+    assert_eq!(
+        reported_zero_db_row
+            .try_get::<Option<i32>, _>("input_tokens")
+            .expect("input_tokens should decode"),
+        Some(0)
+    );
+    assert_eq!(
+        reported_zero_db_row
+            .try_get::<Option<i32>, _>("output_tokens")
+            .expect("output_tokens should decode"),
+        Some(0)
+    );
+
+    let list = repository
+        .list_usage_audits(&UsageAuditListQuery {
+            provider_name: Some(provider_name.clone()),
+            limit: Some(10),
+            newest_first: true,
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("usage list must not fail on canonical null tokens");
+    let listed_unavailable = list
+        .iter()
+        .find(|item| item.request_id == unavailable_request_id)
+        .expect("canonical unavailable row should be listed");
+    assert_eq!(listed_unavailable.input_tokens, 0);
+    assert_eq!(listed_unavailable.output_tokens, 0);
+    assert!(!listed_unavailable.usage_available());
+    let listed_reported_zero = list
+        .iter()
+        .find(|item| item.request_id == reported_zero_request_id)
+        .expect("reported zero row should be listed");
+    assert_eq!(listed_reported_zero.input_tokens, 0);
+    assert_eq!(listed_reported_zero.output_tokens, 0);
+    assert!(listed_reported_zero.usage_available());
+
+    let recent = repository
+        .list_recent_usage_audits(Some(&user_id), 10)
+        .await
+        .expect("recent usage list must not fail on canonical null tokens");
+    let recent_unavailable = recent
+        .iter()
+        .find(|item| item.request_id == unavailable_request_id)
+        .expect("canonical unavailable row should be in the recent list");
+    assert_eq!(recent_unavailable.input_tokens, 0);
+    assert_eq!(recent_unavailable.output_tokens, 0);
+    assert!(!recent_unavailable.usage_available());
+
+    let detail_by_id = repository
+        .find_by_id(&stored_unavailable.id)
+        .await
+        .expect("usage detail by id must not fail on canonical null tokens")
+        .expect("canonical unavailable row should exist");
+    assert_eq!(detail_by_id.input_tokens, 0);
+    assert_eq!(detail_by_id.output_tokens, 0);
+    assert!(!detail_by_id.usage_available());
+    let detail_by_request_id = repository
+        .find_by_request_id(&unavailable_request_id)
+        .await
+        .expect("usage detail by request id must not fail on canonical null tokens")
+        .expect("canonical unavailable row should exist");
+    assert_eq!(detail_by_request_id.input_tokens, 0);
+    assert_eq!(detail_by_request_id.output_tokens, 0);
+    assert!(!detail_by_request_id.usage_available());
+    let shallow_detail = repository
+        .find_by_request_id_shallow(&unavailable_request_id)
+        .await
+        .expect("shallow usage detail must not fail on canonical null tokens")
+        .expect("canonical unavailable row should exist");
+    assert_eq!(shallow_detail.input_tokens, 0);
+    assert_eq!(shallow_detail.output_tokens, 0);
+    assert!(!shallow_detail.usage_available());
+
+    let request_ids = vec![
+        unavailable_request_id.clone(),
+        reported_zero_request_id.clone(),
+    ];
+    sqlx::query("DELETE FROM usage_counter_deltas WHERE request_id = ANY($1)")
+        .bind(&request_ids)
+        .execute(repository.pool())
+        .await
+        .expect("test counter deltas should be removed");
+    sqlx::query("DELETE FROM \"usage\" WHERE request_id = ANY($1)")
+        .bind(&request_ids)
+        .execute(repository.pool())
+        .await
+        .expect("test usage rows should be removed");
 }

@@ -656,6 +656,328 @@ async fn gateway_saves_admin_provider_ops_config_locally_with_trusted_admin_prin
 }
 
 #[test]
+fn gateway_saves_first_admin_provider_ops_config_for_sub2api_with_trusted_admin_principal() {
+    run_provider_ops_test(
+        "gateway_saves_first_admin_provider_ops_config_for_sub2api_with_trusted_admin_principal",
+        gateway_saves_first_admin_provider_ops_config_for_sub2api_with_trusted_admin_principal_impl,
+    );
+}
+
+async fn gateway_saves_first_admin_provider_ops_config_for_sub2api_with_trusted_admin_principal_impl(
+) {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/provider-ops/providers/provider-openai/config",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![
+            sample_provider("provider-openai", "openai", 10).with_transport_fields(
+                true,
+                false,
+                true,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(json!({ "feature_flag": true })),
+            ),
+        ],
+        vec![sample_endpoint(
+            "endpoint-openai-chat",
+            "provider-openai",
+            "openai:chat",
+            "https://ops.first-save.example",
+        )],
+        vec![],
+    ));
+
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(Arc::clone(
+                    &provider_catalog_repository,
+                )),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/provider-ops/providers/provider-openai/config"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "architecture_id": "sub2api",
+            "connector": {
+                "auth_type": "api_key",
+                "config": {},
+                "credentials": {
+                    "refresh_token": "first-save-refresh-token",
+                }
+            }
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], true, "payload={payload}");
+
+    let stored_provider = provider_catalog_repository
+        .list_providers_by_ids(&["provider-openai".to_string()])
+        .await
+        .expect("providers should list")
+        .into_iter()
+        .next()
+        .expect("stored provider should exist");
+    let provider_config = stored_provider
+        .config
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .expect("provider config should be object");
+    assert_eq!(provider_config.get("feature_flag"), Some(&json!(true)));
+    let provider_ops = provider_config
+        .get("provider_ops")
+        .and_then(serde_json::Value::as_object)
+        .expect("first save should create provider ops config");
+    assert_eq!(provider_ops.get("architecture_id"), Some(&json!("sub2api")));
+    assert_eq!(
+        provider_ops.get("base_url"),
+        Some(&json!("https://ops.first-save.example"))
+    );
+    let connector = provider_ops
+        .get("connector")
+        .and_then(serde_json::Value::as_object)
+        .expect("connector should be object");
+    assert_eq!(connector.get("auth_type"), Some(&json!("api_key")));
+    let credentials = connector
+        .get("credentials")
+        .and_then(serde_json::Value::as_object)
+        .expect("credentials should be object");
+    let stored_refresh = credentials
+        .get("refresh_token")
+        .and_then(serde_json::Value::as_str)
+        .expect("refresh token should be string");
+    assert_ne!(stored_refresh, "first-save-refresh-token");
+    assert!(stored_refresh.starts_with("aether-provider-ops-credential-v2:"));
+    assert_eq!(
+        open_stored_provider_ops_credential(&stored_provider, "refresh_token", stored_refresh),
+        "first-save-refresh-token"
+    );
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/provider-ops/providers/provider-openai/config"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["is_configured"], true);
+    assert_eq!(payload["architecture_id"], "sub2api");
+    assert_eq!(payload["base_url"], "https://ops.first-save.example");
+    assert_eq!(payload["connector"]["auth_type"], "api_key");
+    assert_eq!(
+        payload["connector"]["credentials"]["refresh_token"],
+        "firs****oken"
+    );
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[test]
+fn gateway_reuses_saved_sub2api_refresh_token_for_same_destination_with_trusted_admin_principal() {
+    run_provider_ops_test(
+        "gateway_reuses_saved_sub2api_refresh_token_for_same_destination_with_trusted_admin_principal",
+        gateway_reuses_saved_sub2api_refresh_token_for_same_destination_with_trusted_admin_principal_impl,
+    );
+}
+
+async fn gateway_reuses_saved_sub2api_refresh_token_for_same_destination_with_trusted_admin_principal_impl(
+) {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/provider-ops/providers/provider-openai/config",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![
+            sample_provider("provider-openai", "openai", 10).with_transport_fields(
+                true,
+                false,
+                true,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(json!({
+                    "provider_ops": {
+                        "architecture_id": "sub2api",
+                        "base_url": "https://ops.existing.example",
+                        "connector": {
+                            "auth_type": "api_key",
+                            "config": {},
+                            "credentials": {
+                                "refresh_token": encrypt_python_fernet_plaintext(
+                                    DEVELOPMENT_ENCRYPTION_KEY,
+                                    "existing-sub2api-refresh-token",
+                                ).expect("refresh token should encrypt"),
+                                "_cached_access_token": "existing-cached-access-token",
+                            }
+                        },
+                        "actions": {},
+                        "schedule": {}
+                    }
+                })),
+            ),
+        ],
+        vec![],
+        vec![],
+    ));
+
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(Arc::clone(
+                    &provider_catalog_repository,
+                )),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/provider-ops/providers/provider-openai/config"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "architecture_id": "sub2api",
+            "base_url": "https://ops.existing.example",
+            "connector": {
+                "auth_type": "api_key",
+                "config": {},
+                "credentials": {
+                    // The UI leaves unchanged sensitive fields empty; the saved
+                    // secret may only be reused while the binding is unchanged.
+                    "refresh_token": "",
+                }
+            }
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], true, "payload={payload}");
+
+    let stored_provider = provider_catalog_repository
+        .list_providers_by_ids(&["provider-openai".to_string()])
+        .await
+        .expect("providers should list")
+        .into_iter()
+        .next()
+        .expect("stored provider should exist");
+    let credentials = stored_provider
+        .config
+        .as_ref()
+        .and_then(|config| config.pointer("/provider_ops/connector/credentials"))
+        .and_then(serde_json::Value::as_object)
+        .expect("credentials should be object");
+    let stored_refresh = credentials
+        .get("refresh_token")
+        .and_then(serde_json::Value::as_str)
+        .expect("refresh token should be string");
+    assert_ne!(stored_refresh, "existing-sub2api-refresh-token");
+    assert!(stored_refresh.starts_with("aether-provider-ops-credential-v2:"));
+    assert_eq!(
+        open_stored_provider_ops_credential(&stored_provider, "refresh_token", stored_refresh),
+        "existing-sub2api-refresh-token"
+    );
+    let stored_cached_access = credentials
+        .get("_cached_access_token")
+        .and_then(serde_json::Value::as_str)
+        .expect("sub2api cached access token should be preserved");
+    assert_ne!(stored_cached_access, "existing-cached-access-token");
+    assert_eq!(
+        open_stored_provider_ops_credential(
+            &stored_provider,
+            "_cached_access_token",
+            stored_cached_access
+        ),
+        "existing-cached-access-token"
+    );
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/provider-ops/providers/provider-openai/config"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["is_configured"], true);
+    assert_eq!(payload["architecture_id"], "sub2api");
+    assert_eq!(payload["base_url"], "https://ops.existing.example");
+    assert_eq!(
+        payload["connector"]["credentials"]["refresh_token"],
+        "exis****oken"
+    );
+    assert!(!payload["connector"]["credentials"]
+        .as_object()
+        .expect("credentials should be object")
+        .contains_key("_cached_access_token"));
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[test]
 fn gateway_deletes_admin_provider_ops_config_locally_with_trusted_admin_principal() {
     run_provider_ops_test(
         "gateway_deletes_admin_provider_ops_config_locally_with_trusted_admin_principal",

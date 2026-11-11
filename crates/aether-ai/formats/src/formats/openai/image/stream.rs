@@ -10,10 +10,11 @@ use crate::formats::openai::image::{
     normalize_openai_image_output_format,
 };
 use crate::formats::openai::responses::codex::CODEX_OPENAI_IMAGE_DEFAULT_OUTPUT_FORMAT;
+use crate::formats::openai::responses::response::openai_responses_current_timestamp;
 use crate::formats::shared::sse::{encode_done_sse, encode_json_sse};
 use crate::formats::shared::stream_core::common::{
     build_openai_chat_chunk, build_openai_chat_finish_chunk,
-    build_openai_chat_usage_chunk_with_cache,
+    build_openai_chat_usage_chunk_with_cache, with_openai_chat_created,
 };
 use crate::formats::shared::{decode_sync_report_body_base64, AiSurfaceFinalizeError};
 
@@ -51,6 +52,7 @@ pub struct OpenAiImageChatStreamState {
     latest_image: Option<OpenAiImageChatFrame>,
     emitted_image_count: u64,
     emitted_image_keys: BTreeSet<String>,
+    created_at: Option<i64>,
     started: bool,
     finished: bool,
     emitted_failure: bool,
@@ -292,6 +294,12 @@ impl OpenAiImageStreamState {
 }
 
 impl OpenAiImageChatStreamState {
+    fn ensure_created_at(&mut self) -> i64 {
+        *self
+            .created_at
+            .get_or_insert_with(openai_responses_current_timestamp)
+    }
+
     pub fn push_chunk(
         &mut self,
         report_context: &Value,
@@ -495,10 +503,14 @@ impl OpenAiImageChatStreamState {
         report_context: &Value,
     ) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
         self.started = true;
+        let created = self.ensure_created_at();
         let (response_id, model) = self.identity(report_context);
         encode_json_sse(
             None,
-            &build_openai_chat_chunk(&response_id, &model, String::new(), None, None),
+            &with_openai_chat_created(
+                build_openai_chat_chunk(&response_id, &model, String::new(), None, None),
+                created,
+            ),
         )
     }
 
@@ -514,20 +526,27 @@ impl OpenAiImageChatStreamState {
             return self.ensure_started(report_context);
         };
         let mut output = self.ensure_started(report_context)?;
+        let created = self.ensure_created_at();
         let (response_id, model) = self.identity(report_context);
         output.extend(encode_json_sse(
             None,
-            &build_openai_chat_chunk(
-                &response_id,
-                &model,
-                image_chat_markdown(&latest_image),
-                None,
-                None,
+            &with_openai_chat_created(
+                build_openai_chat_chunk(
+                    &response_id,
+                    &model,
+                    image_chat_markdown(&latest_image),
+                    None,
+                    None,
+                ),
+                created,
             ),
         )?);
         output.extend(encode_json_sse(
             None,
-            &build_openai_chat_finish_chunk(&response_id, &model, Some("stop")),
+            &with_openai_chat_created(
+                build_openai_chat_finish_chunk(&response_id, &model, Some("stop")),
+                created,
+            ),
         )?);
         if let Some((
             input_tokens,
@@ -540,15 +559,18 @@ impl OpenAiImageChatStreamState {
         {
             output.extend(encode_json_sse(
                 None,
-                &build_openai_chat_usage_chunk_with_cache(
-                    &response_id,
-                    &model,
-                    input_tokens,
-                    output_tokens,
-                    total_tokens,
-                    reasoning_tokens,
-                    cache_creation_tokens,
-                    cache_read_tokens,
+                &with_openai_chat_created(
+                    build_openai_chat_usage_chunk_with_cache(
+                        &response_id,
+                        &model,
+                        input_tokens,
+                        output_tokens,
+                        total_tokens,
+                        reasoning_tokens,
+                        cache_creation_tokens,
+                        cache_read_tokens,
+                    ),
+                    created,
                 ),
             )?);
         }
@@ -573,6 +595,16 @@ impl OpenAiImageChatStreamState {
             .filter(|value| !value.is_empty())
         {
             self.model = Some(model.to_string());
+        }
+        if self.created_at.is_none() {
+            self.created_at = response
+                .get("created_at")
+                .or_else(|| response.get("created"))
+                .and_then(|value| {
+                    value
+                        .as_i64()
+                        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+                });
         }
     }
 

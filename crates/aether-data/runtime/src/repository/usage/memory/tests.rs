@@ -460,6 +460,98 @@ async fn overview_memory_employee_roster_and_allocations_are_global() {
 }
 
 #[tokio::test]
+async fn overview_provider_attribution_ranks_before_paging_and_keeps_full_totals() {
+    use aether_data_contracts::repository::{usage::*, users::StoredUserSummary};
+    let rows = [
+        ("alice", 12.0, 7.0),
+        ("bob", 2.0, 9.0),
+        ("carol", 10.0, 1.0),
+    ]
+    .map(|(id, provider_cost, rated)| {
+        let mut usage = sample_usage(id, 1_700_000_000);
+        usage.user_id = Some(id.into());
+        usage.total_cost_usd = rated;
+        usage.actual_total_cost_usd = provider_cost;
+        usage.request_metadata = Some(json!({
+            "analytics_attribution":{"is_standalone":false},
+            "billing_multiplier_snapshot":{"version":1,"factors":{},"multiplier":1.0}
+        }));
+        usage
+    });
+    let mut unknown = sample_usage("unknown-cost", 1_700_000_000);
+    unknown.user_id = Some("dave".into());
+    unknown.total_cost_usd = 5.0;
+    unknown.actual_total_cost_usd = f64::NAN;
+    unknown.request_metadata = Some(json!({
+        "analytics_attribution":{"is_standalone":false},
+        "billing_multiplier_snapshot":{"version":1,"factors":{},"multiplier":1.0}
+    }));
+    let mut excluded = sample_usage("other-provider", 1_700_000_000);
+    excluded.user_id = Some("bob".into());
+    excluded.provider_id = Some("provider-2".into());
+    excluded.total_cost_usd = 100.0;
+    excluded.actual_total_cost_usd = 100.0;
+    let repo = InMemoryUsageReadRepository::seed(rows.into_iter().chain([unknown, excluded]))
+        .with_analytics_users(["alice", "bob", "carol", "dave"].map(|id| {
+            StoredUserSummary::new(id.into(), id.into(), None, "user".into(), true, false).unwrap()
+        }));
+    let mut query = UsageAnalyticsQuery {
+        from_unix_ms: 1_700_000_000_000,
+        to_unix_ms: 1_700_000_060_000,
+        timezone: "UTC".into(),
+        view: UsageAnalyticsView::Users,
+        provider_id: Some("provider-1".into()),
+        sort: UsageAnalyticsSort::ProviderCostAmount,
+        descending: true,
+        has_usage: Some(true),
+        limit: 1,
+        ..Default::default()
+    };
+    let first = repo.query_usage_analytics(&query).await.unwrap();
+    assert_eq!(first.total, 4);
+    assert_eq!(first.users[0].user_id, "alice");
+    assert_eq!(first.summary.request_count, 4);
+    assert_eq!(first.summary.provider_cost_available_count, 3);
+    assert_eq!(
+        first.summary.provider_cost_amount.as_deref(),
+        Some("24.00000000")
+    );
+    // Catalog-rated and customer-billable amounts keep their own meaning.
+    assert_eq!(first.summary.rated_amount.as_deref(), Some("22.00000000"));
+    assert_eq!(
+        first.summary.billable_amount.as_deref(),
+        Some("22.00000000")
+    );
+    query.offset = 1;
+    let next = repo.query_usage_analytics(&query).await.unwrap();
+    assert_eq!(next.users[0].user_id, "carol");
+    assert_eq!(
+        next.summary.provider_cost_amount,
+        first.summary.provider_cost_amount
+    );
+    query.offset = 2;
+    let third = repo.query_usage_analytics(&query).await.unwrap();
+    assert_eq!(third.users[0].user_id, "bob");
+    query.offset = 3;
+    let unknown = repo.query_usage_analytics(&query).await.unwrap();
+    assert_eq!(unknown.users[0].user_id, "dave");
+    assert_eq!(unknown.users[0].metrics.provider_cost_available_count, 0);
+    assert_eq!(unknown.users[0].metrics.provider_cost_amount, None);
+    query.view = UsageAnalyticsView::Breakdown;
+    query.group_by = UsageAnalyticsGroupBy::ApiKey;
+    query.has_usage = None;
+    query.offset = 0;
+    let keys = repo.query_usage_analytics(&query).await.unwrap();
+    assert_eq!(keys.summary.request_count, 4);
+    assert_eq!(keys.rows[0].metrics.request_count, 4);
+    assert_eq!(keys.rows[0].metrics.provider_cost_available_count, 3);
+    assert_eq!(
+        keys.rows[0].metrics.provider_cost_amount.as_deref(),
+        Some("24.00000000")
+    );
+}
+
+#[tokio::test]
 async fn overview_memory_employee_is_grouped_by_account_owner() {
     use aether_data_contracts::repository::{usage::*, users::StoredUserSummary};
     let mut usage = sample_usage("trusted-request", 1_700_000_000);

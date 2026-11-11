@@ -6732,6 +6732,7 @@ mod tests {
                 client_response: Some(json!({"id": request_id})),
                 client_response_body_state: None,
                 standardized_usage: None,
+                terminal_failure_category: None,
                 capture_metadata: None,
             },
         )
@@ -6889,6 +6890,7 @@ mod tests {
                 provider_actual_service_tier: Some("default".to_string()),
                 observed_stream_finish: Some(true),
                 terminal_error_message: None,
+                terminal_failure_category: None,
                 capture_metadata: None,
             };
             let mut expected = crate::build_terminal_usage_event_from_seed(

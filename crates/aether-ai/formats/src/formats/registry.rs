@@ -11,8 +11,9 @@ use crate::formats::{
     openai::{self, chat as openai_chat, responses as openai_responses},
 };
 use crate::protocol::canonical::{
-    CanonicalContentBlock, CanonicalEmbeddingInput, CanonicalRequest, CanonicalResponse,
-    CanonicalStopReason,
+    openai_responses_hosted_tool_call_item_type_is_encoded_by_chat_name,
+    openai_responses_hosted_tool_result_item_type_is_encoded_by_chat_name, CanonicalContentBlock,
+    CanonicalEmbeddingInput, CanonicalRequest, CanonicalResponse, CanonicalStopReason,
 };
 
 pub use crate::formats::context::{
@@ -637,6 +638,10 @@ fn validate_openai_responses_cross_format_input(
                 | "reasoning"
                 | "function_call"
                 | "custom_tool_call"
+                | "local_shell_call"
+                | "shell_call"
+                | "apply_patch_call"
+                | "computer_call"
                 | "function_call_output"
                 | "custom_tool_call_output"
                 | "local_shell_call_output"
@@ -1412,13 +1417,28 @@ fn validate_cross_format_request_extensions(
                 | CanonicalContentBlock::Image { extensions, .. }
                 | CanonicalContentBlock::File { extensions, .. }
                 | CanonicalContentBlock::Audio { extensions, .. }
-                | CanonicalContentBlock::ToolResult { extensions, .. }
                 | CanonicalContentBlock::Unknown { extensions, .. } => {
                     validate_request_extension_namespace(
                         source,
                         target,
                         "messages[].content[]",
                         extensions,
+                    )?;
+                }
+                CanonicalContentBlock::ToolResult {
+                    name, extensions, ..
+                } => {
+                    let extensions = mapped_namespace_tool_result_extensions(
+                        source,
+                        target,
+                        name.as_deref(),
+                        extensions,
+                    );
+                    validate_request_extension_namespace(
+                        source,
+                        target,
+                        "messages[].content[]",
+                        &extensions,
                     )?;
                 }
                 CanonicalContentBlock::ToolUse {
@@ -1562,9 +1582,65 @@ fn mapped_namespace_tool_use_extensions(
         if provider_fields.get("status").and_then(Value::as_str) == Some("completed") {
             provider_fields.remove("status");
         }
+        if target == FormatId::OpenAiChat
+            && provider_fields
+                .get("item_type")
+                .and_then(Value::as_str)
+                .is_some_and(|item_type| {
+                    openai_responses_hosted_tool_call_item_type_is_encoded_by_chat_name(
+                        name, item_type,
+                    )
+                })
+        {
+            // Hosted Responses calls become Chat function calls whose fixed
+            // name already encodes the hosted item type, and the canonical
+            // arguments carry every hosted field.
+            provider_fields.remove("item_type");
+        }
     }
     mapped.retain(|_, value| value.as_object().is_none_or(|object| !object.is_empty()));
     Ok(mapped)
+}
+
+fn mapped_namespace_tool_result_extensions(
+    source: FormatId,
+    target: FormatId,
+    name: Option<&str>,
+    extensions: &std::collections::BTreeMap<String, Value>,
+) -> std::collections::BTreeMap<String, Value> {
+    if !matches!(
+        source,
+        FormatId::OpenAiResponses | FormatId::OpenAiResponsesCompact
+    ) || target != FormatId::OpenAiChat
+    {
+        return extensions.clone();
+    }
+
+    let mut mapped = extensions.clone();
+    for provider_namespace in ["openai_responses", "openai_cli"] {
+        let Some(provider_fields) = mapped
+            .get_mut(provider_namespace)
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        if provider_fields
+            .get("item_type")
+            .and_then(Value::as_str)
+            .is_some_and(|item_type| {
+                openai_responses_hosted_tool_result_item_type_is_encoded_by_chat_name(
+                    name, item_type,
+                )
+            })
+        {
+            // Hosted Responses results pair with the Chat tool message by
+            // `tool_use_id`; the canonical block name already records the
+            // hosted tool identity, so the item type stays transport-only.
+            provider_fields.remove("item_type");
+        }
+    }
+    mapped.retain(|_, value| value.as_object().is_none_or(|object| !object.is_empty()));
+    mapped
 }
 
 fn validate_request_content_has_no_unknown_blocks(
@@ -4359,6 +4435,186 @@ mod tests {
     }
 
     #[test]
+    fn pure_openai_responses_hosted_calls_to_chat_preserve_call_fields() {
+        let body = json!({
+            "model": "gpt-source",
+            "input": [
+                {
+                    "type": "local_shell_call",
+                    "call_id": "call_local_shell",
+                    "status": "completed",
+                    "action": {"type": "exec", "command": ["ls"]},
+                    "environment": {"type": "local"}
+                },
+                {
+                    "type": "local_shell_call_output",
+                    "call_id": "call_local_shell",
+                    "output": "file.txt"
+                },
+                {
+                    "type": "shell_call",
+                    "call_id": "call_shell",
+                    "status": "in_progress",
+                    "action": {"commands": ["pwd"]},
+                    "environment": {"type": "container", "container_id": "c1"},
+                    "created_by": "user",
+                    "max_output_length": 1024
+                },
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_shell",
+                    "output": "/workspace"
+                },
+                {
+                    "type": "apply_patch_call",
+                    "call_id": "call_patch",
+                    "status": "completed",
+                    "operation": {"type": "update_file", "path": "a.go", "diff": "@@"}
+                },
+                {
+                    "type": "apply_patch_call_output",
+                    "call_id": "call_patch",
+                    "output": "patched"
+                },
+                {
+                    "type": "computer_call",
+                    "call_id": "call_computer",
+                    "status": "completed",
+                    "action": {"type": "click", "x": 1, "y": 2},
+                    "pending_safety_checks": []
+                },
+                {
+                    "type": "computer_call_output",
+                    "call_id": "call_computer",
+                    "output": {"type": "input_image", "image_url": "data:image/png;base64,AA=="}
+                }
+            ]
+        });
+
+        let converted = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect("hosted tool call history should convert to Chat")
+            .value;
+        let messages = converted["messages"]
+            .as_array()
+            .expect("converted Chat messages");
+
+        let mut calls = Vec::new();
+        let mut tool_outputs = Vec::new();
+        for message in messages {
+            if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                for call in tool_calls {
+                    calls.push((
+                        call["id"].as_str().expect("Chat tool call id").to_string(),
+                        call["function"]["name"]
+                            .as_str()
+                            .expect("Chat tool call name")
+                            .to_string(),
+                        serde_json::from_str::<Value>(
+                            call["function"]["arguments"]
+                                .as_str()
+                                .expect("Chat tool call arguments"),
+                        )
+                        .expect("Chat tool call arguments must be JSON text"),
+                    ));
+                }
+            }
+            if let Some(call_id) = message.get("tool_call_id").and_then(Value::as_str) {
+                tool_outputs.push((call_id.to_string(), message["content"].clone()));
+            }
+        }
+
+        let call = |id: &str| {
+            calls
+                .iter()
+                .find(|(call_id, _, _)| call_id == id)
+                .unwrap_or_else(|| panic!("missing converted call {id}: {calls:?}"))
+        };
+        let output = |id: &str| {
+            tool_outputs
+                .iter()
+                .find(|(call_id, _)| call_id == id)
+                .map(|(_, content)| content)
+                .unwrap_or_else(|| panic!("missing converted tool output {id}: {tool_outputs:?}"))
+        };
+
+        let (_, name, arguments) = call("call_local_shell");
+        assert_eq!(name, "local_shell");
+        assert_eq!(arguments["status"], "completed");
+        assert_eq!(arguments["action"]["command"][0], "ls");
+        assert_eq!(arguments["environment"]["type"], "local");
+
+        let (_, name, arguments) = call("call_shell");
+        assert_eq!(name, "shell");
+        assert_eq!(arguments["status"], "in_progress");
+        assert_eq!(arguments["action"]["commands"][0], "pwd");
+        assert_eq!(arguments["environment"]["container_id"], "c1");
+        assert_eq!(arguments["created_by"], "user");
+        assert_eq!(arguments["max_output_length"], 1024);
+
+        let (_, name, arguments) = call("call_patch");
+        assert_eq!(name, "apply_patch");
+        assert_eq!(arguments["status"], "completed");
+        assert_eq!(arguments["operation"]["path"], "a.go");
+
+        let (_, name, arguments) = call("call_computer");
+        assert_eq!(name, "computer");
+        assert_eq!(arguments["status"], "completed");
+        assert_eq!(arguments["action"]["type"], "click");
+        assert_eq!(arguments["pending_safety_checks"], json!([]));
+
+        assert_eq!(output("call_local_shell"), "file.txt");
+        assert_eq!(output("call_shell"), "/workspace");
+        assert_eq!(output("call_patch"), "patched");
+        let computer_output = output("call_computer")
+            .as_str()
+            .expect("structured hosted output must be Chat JSON text");
+        assert_eq!(
+            serde_json::from_str::<Value>(computer_output).expect("hosted output JSON"),
+            json!({"type": "input_image", "image_url": "data:image/png;base64,AA=="})
+        );
+    }
+
+    #[test]
+    fn pure_openai_responses_hosted_calls_to_chat_reject_unmapped_call_fields() {
+        let body = json!({
+            "model": "gpt-source",
+            "input": [{
+                "type": "local_shell_call",
+                "call_id": "call_local_shell",
+                "status": "completed",
+                "action": {"type": "exec", "command": ["ls"]},
+                "environment": {"type": "local"},
+                "future_transport": {"keep": true}
+            }]
+        });
+
+        let error = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect_err("unmapped hosted call metadata must stay fail-closed");
+
+        assert!(matches!(
+            error,
+            super::FormatError::LossyConversionBlocked { ref field, .. }
+                if field == "messages[].content[].openai_responses.future_transport"
+        ));
+    }
+
+    #[test]
+    fn pure_openai_responses_item_reference_to_chat_stays_fail_closed() {
+        let body = json!({
+            "model": "gpt-source",
+            "input": [{"type": "item_reference", "id": "item_123"}]
+        });
+
+        let error = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect_err("item_reference must stay fail-closed");
+
+        assert!(matches!(
+            error,
+            super::FormatError::LossyConversionBlocked { ref field, .. } if field == "input[0]"
+        ));
+    }
+
+    #[test]
     fn pure_gemini_to_openai_chat_maps_function_response_id_to_tool_call_id() {
         let body = json!({
             "contents": [{
@@ -4391,6 +4647,42 @@ mod tests {
             "call_lookup_1"
         );
         assert_eq!(converted["messages"][1]["tool_call_id"], "call_lookup_1");
+    }
+
+    #[test]
+    fn pure_gemini_to_openai_chat_stringifies_structured_function_response() {
+        let body = json!({
+            "contents": [{
+                "role": "model",
+                "parts": [{
+                    "functionCall": {
+                        "id": "call_write",
+                        "name": "write_files",
+                        "args": {"paths": ["a.go", "b.go"]}
+                    }
+                }]
+            }, {
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "id": "call_write",
+                        "name": "write_files",
+                        "response": {"output": "a.go\nb.go"}
+                    }
+                }]
+            }]
+        });
+
+        let converted = convert_request_pure("gemini:generate_content", "openai:chat", &body)
+            .expect("pure conversion should succeed")
+            .value;
+
+        let content = converted["messages"][1]["content"]
+            .as_str()
+            .expect("Chat tool content must be a string");
+        let parsed: Value =
+            serde_json::from_str(content).expect("Chat tool content must be JSON text");
+        assert_eq!(parsed, json!({"output": "a.go\nb.go"}));
     }
 
     #[test]
@@ -6900,6 +7192,53 @@ mod tests {
         assert!(converted.report.fields.iter().any(|field| {
             field.field == "choices" && field.status == super::ConversionFieldStatus::Mapped
         }));
+    }
+
+    #[test]
+    fn pure_gemini_response_to_openai_chat_stamps_created() {
+        let body = json!({
+            "responseId": "resp_created",
+            "modelVersion": "gemini-2.5-pro",
+            "candidates": [{
+                "index": 0,
+                "content": {"role": "model", "parts": [{"text": "hello"}]},
+                "finishReason": "STOP"
+            }]
+        });
+
+        let converted = convert_response_pure("gemini:generate_content", "openai:chat", &body)
+            .expect("Gemini response should convert to Chat")
+            .value;
+
+        assert!(
+            converted["created"]
+                .as_i64()
+                .is_some_and(|created| created > 0),
+            "{converted}"
+        );
+    }
+
+    #[test]
+    fn pure_openai_responses_response_to_chat_preserves_created_at() {
+        let body = json!({
+            "id": "resp_created",
+            "object": "response",
+            "model": "gpt-source",
+            "status": "completed",
+            "created_at": 1776971267,
+            "output": [{
+                "type": "message",
+                "id": "msg_created",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello"}]
+            }]
+        });
+
+        let converted = convert_response_pure("openai:responses", "openai:chat", &body)
+            .expect("Responses response should convert to Chat")
+            .value;
+
+        assert_eq!(converted["created"], 1776971267);
     }
 
     #[test]

@@ -500,6 +500,7 @@ pub(crate) fn sanitize_usage_error_category(value: Option<String>) -> Option<Str
         "auth"
         | "cancelled"
         | "client_error"
+        | "context_length_exceeded"
         | "http_error"
         | "non_success_status"
         | "provider_error"
@@ -749,6 +750,10 @@ mod tests {
         assert_eq!(
             sanitize_usage_error_category(Some(" Server_Error ".to_string())).as_deref(),
             Some("server_error")
+        );
+        assert_eq!(
+            sanitize_usage_error_category(Some(" Context_Length_Exceeded ".to_string())).as_deref(),
+            Some("context_length_exceeded")
         );
         assert_eq!(
             sanitize_usage_error_category(Some("Authorization: Bearer secret".to_string()))

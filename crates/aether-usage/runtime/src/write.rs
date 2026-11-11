@@ -34,6 +34,9 @@ use crate::{
     STREAM_TERMINAL_ERROR_CATEGORY, STREAM_TERMINAL_ERROR_MESSAGE,
 };
 
+const TRUSTED_CONTEXT_OVERFLOW_CLASSIFICATION: &str = "stop_context_overflow";
+const CONTEXT_LENGTH_EXCEEDED_USAGE_CATEGORY: &str = "context_length_exceeded";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UsageLifecycleState {
     Pending,
@@ -195,6 +198,7 @@ pub struct SyncTerminalUsagePayloadSeed {
     pub client_response: Option<Value>,
     pub client_response_body_state: Option<UsageBodyCaptureState>,
     pub standardized_usage: Option<StandardizedUsage>,
+    pub terminal_failure_category: Option<String>,
     pub capture_metadata: Option<Value>,
 }
 
@@ -214,6 +218,7 @@ pub struct StreamTerminalUsagePayloadSeed {
     pub provider_actual_service_tier: Option<String>,
     pub observed_stream_finish: Option<bool>,
     pub terminal_error_message: Option<String>,
+    pub terminal_failure_category: Option<String>,
     pub capture_metadata: Option<Value>,
 }
 
@@ -970,6 +975,32 @@ pub fn build_terminal_usage_context_seed(
     }
 }
 
+/// Only the gateway-authored failover classification may select the context
+/// overflow usage category. The report context observation is bounded to the
+/// classifier's fixed classification, source, status, and exposure flag; no
+/// upstream text or body participates in this decision.
+fn trusted_context_overflow_usage_category(
+    report_context: Option<&Value>,
+    status_code: u16,
+) -> Option<String> {
+    if status_code < 400 {
+        return None;
+    }
+    let flow = report_context?
+        .as_object()?
+        .get("error_flow")?
+        .as_object()?;
+    if flow.get("source").and_then(Value::as_str) != Some("upstream_response")
+        || flow.get("classification").and_then(Value::as_str)
+            != Some(TRUSTED_CONTEXT_OVERFLOW_CLASSIFICATION)
+        || flow.get("safe_to_expose").and_then(Value::as_bool) != Some(true)
+        || flow.get("status_code").and_then(Value::as_u64) != Some(u64::from(status_code))
+    {
+        return None;
+    }
+    Some(CONTEXT_LENGTH_EXCEEDED_USAGE_CATEGORY.to_string())
+}
+
 pub fn build_sync_terminal_usage_payload_seed(
     payload: &GatewaySyncReportRequest,
 ) -> SyncTerminalUsagePayloadSeed {
@@ -1027,6 +1058,10 @@ pub fn build_sync_terminal_usage_payload_seed(
         client_response,
         client_response_body_state,
         standardized_usage,
+        terminal_failure_category: trusted_context_overflow_usage_category(
+            payload.report_context.as_ref(),
+            payload.status_code,
+        ),
         capture_metadata: build_payload_body_capture_metadata(
             payload.body_base64.as_deref(),
             None,
@@ -1083,6 +1118,10 @@ pub fn build_stream_terminal_usage_payload_seed(
             .and_then(|summary| summary.provider_actual_service_tier.clone()),
         observed_stream_finish,
         terminal_error_message,
+        terminal_failure_category: trusted_context_overflow_usage_category(
+            payload.report_context.as_ref(),
+            payload.status_code,
+        ),
         capture_metadata: build_payload_body_capture_metadata(
             payload.provider_body_base64.as_deref(),
             payload.client_body_base64.as_deref(),
@@ -1110,6 +1149,7 @@ pub fn build_sync_terminal_usage_seed(
         client_response,
         client_response_body_state,
         standardized_usage,
+        terminal_failure_category,
         mut capture_metadata,
     } = payload_seed;
     strip_provider_cancelled_usage_authorization(&mut capture_metadata);
@@ -1176,7 +1216,7 @@ pub fn build_sync_terminal_usage_seed(
         is_stream: context_seed.is_stream,
         status_code,
         terminal_error_message: None,
-        terminal_failure_category: None,
+        terminal_failure_category,
         response_time_ms,
         first_byte_time_ms,
         request_headers: context_seed.request_headers,
@@ -1243,6 +1283,7 @@ pub fn build_stream_terminal_usage_seed(
         provider_actual_service_tier,
         observed_stream_finish,
         terminal_error_message,
+        terminal_failure_category: payload_terminal_failure_category,
         mut capture_metadata,
     } = payload_seed;
     strip_provider_cancelled_usage_authorization(&mut capture_metadata);
@@ -1300,7 +1341,7 @@ pub fn build_stream_terminal_usage_seed(
                 .and_then(extract_explicit_error_message_from_json)
         })
         .or_else(|| captured_terminal_failure.then(|| STREAM_TERMINAL_ERROR_MESSAGE.to_string()));
-    let terminal_failure_category = if terminal_error_message.is_some() {
+    let stream_terminal_failure_category = if terminal_error_message.is_some() {
         Some(STREAM_TERMINAL_ERROR_CATEGORY.to_string())
     } else if missing_observed_finish {
         Some(STREAM_MISSING_TERMINAL_EVENT_CATEGORY.to_string())
@@ -1313,7 +1354,7 @@ pub fn build_stream_terminal_usage_seed(
     if client_response.is_none() {
         if let (Some(message), Some(category)) = (
             terminal_error_message.as_deref(),
-            terminal_failure_category.as_deref(),
+            stream_terminal_failure_category.as_deref(),
         ) {
             client_response = Some(build_stream_terminal_error_client_response(
                 category,
@@ -1324,6 +1365,10 @@ pub fn build_stream_terminal_usage_seed(
             client_response_body_state = Some(UsageBodyCaptureState::Inline);
         }
     }
+    // The trusted classifier category wins over the generic stream-terminal
+    // classification so the admin can explain context overflow without a body.
+    let terminal_failure_category =
+        payload_terminal_failure_category.or(stream_terminal_failure_category);
     let terminal_state = infer_stream_terminal_state(
         report_kind.as_str(),
         status_code,
@@ -3012,6 +3057,11 @@ fn resolve_error_category(
 ) -> Option<String> {
     match event_type {
         UsageEventType::Cancelled => Some("cancelled".to_string()),
+        UsageEventType::Failed
+            if terminal_failure_category == Some(CONTEXT_LENGTH_EXCEEDED_USAGE_CATEGORY) =>
+        {
+            Some(CONTEXT_LENGTH_EXCEEDED_USAGE_CATEGORY.to_string())
+        }
         UsageEventType::Failed if status_code >= 500 => Some("server_error".to_string()),
         UsageEventType::Failed if status_code >= 400 => Some("client_error".to_string()),
         UsageEventType::Failed if status_code >= 300 => Some("redirect".to_string()),
@@ -7760,8 +7810,16 @@ mod tests {
 
 #[cfg(test)]
 mod deferred_settlement_tests {
-    use super::{report_kind_defers_settlement, UsageTerminalState};
-    use crate::UsageEventType;
+    use super::{
+        build_stream_terminal_usage_event, build_sync_terminal_usage_event,
+        report_kind_defers_settlement, GatewayStreamReportRequest, GatewaySyncReportRequest,
+        UsageTerminalState,
+    };
+    use crate::{build_upsert_usage_record_from_event, UsageEventType};
+    use aether_contracts::ExecutionPlan;
+    use aether_data_contracts::repository::usage::UsageBodyCaptureState;
+    use serde_json::{json, Value};
+    use std::collections::BTreeMap;
 
     #[test]
     fn video_create_reports_defer_settlement() {
@@ -7834,5 +7892,154 @@ mod deferred_settlement_tests {
             event_type_for(UsageTerminalState::Cancelled, true),
             UsageEventType::Cancelled
         );
+    }
+
+    fn context_overflow_plan() -> ExecutionPlan {
+        serde_json::from_value(json!({
+            "request_id": "req-context-overflow-classifier",
+            "provider_name": "OpenAI",
+            "provider_id": "provider-1",
+            "endpoint_id": "endpoint-1",
+            "key_id": "key-1",
+            "method": "POST",
+            "url": "https://example.com/v1/chat/completions",
+            "body": {"json_body": {"model": "gpt-5", "messages": []}},
+            "stream": false,
+            "client_api_format": "openai:chat",
+            "provider_api_format": "openai:chat",
+            "model_name": "gpt-5"
+        }))
+        .expect("context overflow plan should deserialize")
+    }
+
+    fn trusted_context_overflow_report_context() -> Value {
+        json!({
+            "client_api_format": "openai:chat",
+            "provider_api_format": "openai:chat",
+            "error_flow": {
+                "source": "upstream_response",
+                "status_code": 400,
+                "classification": "stop_context_overflow",
+                "safe_to_expose": true,
+            },
+        })
+    }
+
+    fn context_overflow_sync_report(report_context: Value) -> GatewaySyncReportRequest {
+        GatewaySyncReportRequest {
+            trace_id: "trace-context-overflow-sync".to_string(),
+            report_kind: "openai_chat_sync_error".to_string(),
+            report_context: Some(report_context),
+            status_code: 400,
+            headers: BTreeMap::new(),
+            body_json: None,
+            client_body_json: None,
+            body_base64: None,
+            telemetry: None,
+        }
+    }
+
+    #[test]
+    fn trusted_classifier_context_overflow_persists_safe_usage_category() {
+        let plan = context_overflow_plan();
+        let report_context = trusted_context_overflow_report_context();
+        let payload = context_overflow_sync_report(report_context.clone());
+        let event = build_sync_terminal_usage_event(&plan, Some(&report_context), &payload)
+            .expect("sync context overflow usage should build");
+        assert_eq!(event.event_type, UsageEventType::Failed);
+        assert_eq!(
+            event.data.error_category.as_deref(),
+            Some("context_length_exceeded")
+        );
+        let record = build_upsert_usage_record_from_event(&event)
+            .expect("context overflow usage record should build");
+        assert_eq!(
+            record.error_category.as_deref(),
+            Some("context_length_exceeded"),
+            "the safe classifier category must survive persistence projection"
+        );
+        assert_eq!(
+            record
+                .request_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("usage_available")),
+            Some(&Value::Bool(false)),
+            "unmetered context overflow remains unknown usage"
+        );
+
+        let stream_payload = GatewayStreamReportRequest {
+            trace_id: "trace-context-overflow-stream".to_string(),
+            report_kind: "openai_chat_stream_error".to_string(),
+            report_context: Some(report_context.clone()),
+            status_code: 400,
+            headers: BTreeMap::new(),
+            provider_body_base64: None,
+            provider_body_state: Some(UsageBodyCaptureState::None),
+            client_body_base64: None,
+            client_body_state: Some(UsageBodyCaptureState::None),
+            terminal_summary: None,
+            telemetry: None,
+        };
+        let stream_event =
+            build_stream_terminal_usage_event(&plan, Some(&report_context), &stream_payload)
+                .expect("stream context overflow usage should build");
+        assert_eq!(stream_event.event_type, UsageEventType::Failed);
+        assert_eq!(
+            stream_event.data.error_category.as_deref(),
+            Some("context_length_exceeded"),
+            "sync and stream terminal reports must converge on the same safe category"
+        );
+
+        let completed_payload = GatewaySyncReportRequest {
+            trace_id: "trace-context-overflow-completed".to_string(),
+            report_kind: "openai_chat_sync_success".to_string(),
+            report_context: Some(report_context),
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body_json: Some(json!({"id": "chatcmpl_context_overflow_completed"})),
+            client_body_json: None,
+            body_base64: None,
+            telemetry: None,
+        };
+        let completed_event = build_sync_terminal_usage_event(
+            &plan,
+            completed_payload.report_context.as_ref(),
+            &completed_payload,
+        )
+        .expect("completed usage should build");
+        assert_eq!(completed_event.event_type, UsageEventType::Completed);
+        assert_eq!(completed_event.data.error_category, None);
+    }
+
+    #[test]
+    fn untrusted_or_absent_classifier_keeps_status_derived_category() {
+        let plan = context_overflow_plan();
+        for report_context in [
+            json!({
+                "error_flow": {
+                    "source": "upstream_response",
+                    "status_code": 400,
+                    "classification": "stop_error_pattern",
+                    "safe_to_expose": true,
+                },
+            }),
+            json!({
+                "error_flow": {
+                    "source": "upstream_response",
+                    "status_code": 400,
+                    "classification": "stop_context_overflow",
+                },
+            }),
+            json!({}),
+        ] {
+            let payload = context_overflow_sync_report(report_context.clone());
+            let event = build_sync_terminal_usage_event(&plan, Some(&report_context), &payload)
+                .expect("non-context failure usage should build");
+            assert_eq!(
+                event.data.error_category.as_deref(),
+                Some("client_error"),
+                "only the trusted classifier classification may select context overflow"
+            );
+        }
     }
 }

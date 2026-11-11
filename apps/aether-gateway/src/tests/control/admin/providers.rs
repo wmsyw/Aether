@@ -2137,6 +2137,181 @@ async fn gateway_handles_admin_provider_mapping_preview_locally_with_trusted_adm
 }
 
 #[tokio::test]
+async fn gateway_mapping_preview_matches_unrestricted_key_against_provider_catalog() {
+    let provider_catalog_repository = mapping_preview_provider_repository(sample_key(
+        "key-openai-unrestricted",
+        "provider-openai",
+        "openai:chat",
+        "sk-unrestricted-1234",
+    ));
+    let payload = request_mapping_preview(
+        provider_catalog_repository,
+        mapping_preview_global_models(true),
+    )
+    .await;
+
+    assert_eq!(payload["total_keys"], 1);
+    assert_eq!(payload["total_matches"], 1);
+    let keys = payload["keys"].as_array().expect("keys should be an array");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["key_id"], "key-openai-unrestricted");
+    assert_eq!(keys[0]["unrestricted"], true);
+    assert_eq!(keys[0]["allowed_models"], json!([]));
+    let matches = keys[0]["matching_global_models"]
+        .as_array()
+        .expect("matching models should be an array");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["global_model_name"], "gpt-4.1");
+    assert_eq!(
+        matches[0]["matched_models"][0]["allowed_model"],
+        "gpt-4.1-mini"
+    );
+    assert_eq!(
+        matches[0]["matched_models"][0]["mapping_pattern"],
+        "gpt-4\\.1-.*"
+    );
+}
+
+#[tokio::test]
+async fn gateway_mapping_preview_keeps_empty_allowlist_denial() {
+    let mut key = sample_key(
+        "key-openai-empty",
+        "provider-openai",
+        "openai:chat",
+        "sk-empty-1234",
+    );
+    key.allowed_models = Some(json!([]));
+    let payload = request_mapping_preview(
+        mapping_preview_provider_repository(key),
+        mapping_preview_global_models(true),
+    )
+    .await;
+
+    assert_eq!(payload["total_keys"], 0);
+    assert_eq!(payload["total_matches"], 0);
+    assert_eq!(payload["keys"], json!([]));
+}
+
+#[tokio::test]
+async fn gateway_mapping_preview_does_not_match_restricted_key_from_provider_catalog() {
+    let mut key = sample_key(
+        "key-openai-restricted",
+        "provider-openai",
+        "openai:chat",
+        "sk-restricted-1234",
+    );
+    key.allowed_models = Some(json!(["claude-3-5-sonnet"]));
+    let payload = request_mapping_preview(
+        mapping_preview_provider_repository(key),
+        mapping_preview_global_models(true),
+    )
+    .await;
+
+    assert_eq!(payload["total_keys"], 0);
+    assert_eq!(payload["total_matches"], 0);
+    assert_eq!(payload["keys"], json!([]));
+}
+
+#[tokio::test]
+async fn gateway_mapping_preview_does_not_invent_unrestricted_matches_without_catalog() {
+    let provider_catalog_repository = mapping_preview_provider_repository(sample_key(
+        "key-openai-unrestricted",
+        "provider-openai",
+        "openai:chat",
+        "sk-unrestricted-1234",
+    ));
+    let payload = request_mapping_preview(
+        provider_catalog_repository,
+        mapping_preview_global_models(false),
+    )
+    .await;
+
+    assert_eq!(payload["total_keys"], 0);
+    assert_eq!(payload["total_matches"], 0);
+    assert_eq!(payload["keys"], json!([]));
+}
+
+fn mapping_preview_provider_repository(
+    key: StoredProviderCatalogKey,
+) -> Arc<InMemoryProviderCatalogReadRepository> {
+    Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_provider("provider-openai", "openai", 10)],
+        Vec::new(),
+        vec![key],
+    ))
+}
+
+fn mapping_preview_global_models(
+    with_provider_catalog: bool,
+) -> Arc<InMemoryGlobalModelReadRepository> {
+    let repository = InMemoryGlobalModelReadRepository::seed(vec![
+        sample_public_global_model_with_mappings(
+            "global-gpt-41",
+            "gpt-4.1",
+            "GPT 4.1",
+            &["gpt-4\\.1-.*"],
+        ),
+        sample_public_global_model_with_mappings(
+            "global-gemini",
+            "gemini",
+            "Gemini",
+            &["gemini-.*"],
+        ),
+    ]);
+    if with_provider_catalog {
+        Arc::new(repository.with_admin_provider_models(vec![
+            sample_admin_provider_model(
+                "model-gpt-41-mini",
+                "provider-openai",
+                "global-gpt-41",
+                "gpt-4.1-mini",
+            ),
+            sample_admin_provider_model(
+                "model-claude",
+                "provider-openai",
+                "global-claude",
+                "claude-3-5-sonnet",
+            ),
+        ]))
+    } else {
+        Arc::new(repository)
+    }
+}
+
+async fn request_mapping_preview(
+    provider_catalog_repository: Arc<InMemoryProviderCatalogReadRepository>,
+    global_model_repository: Arc<InMemoryGlobalModelReadRepository>,
+) -> serde_json::Value {
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_reader_for_tests(
+                    provider_catalog_repository,
+                )
+                .with_global_model_repository_for_tests(global_model_repository),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/providers/provider-openai/mapping-preview"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+    let status = response.status();
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    gateway_handle.abort();
+    assert_eq!(status, StatusCode::OK, "payload={payload}");
+    payload
+}
+
+#[tokio::test]
 async fn gateway_submits_admin_provider_delete_task_locally_with_trusted_admin_principal() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
     let upstream_hits_clone = Arc::clone(&upstream_hits);

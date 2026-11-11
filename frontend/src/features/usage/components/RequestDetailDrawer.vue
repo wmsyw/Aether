@@ -161,6 +161,23 @@
         v-else-if="detail"
         class="space-y-4"
       >
+        <section
+          v-if="failureNotice"
+          class="rounded-xl border border-border bg-muted/30 p-4"
+          role="status"
+          data-request-failure-notice
+        >
+          <div class="flex items-start gap-3">
+            <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+            <div class="min-w-0 space-y-2">
+              <h4 class="text-sm font-medium">{{ t('ui.failureReason') }}</h4>
+              <p class="break-words whitespace-pre-wrap text-sm">{{ failureNotice.message }}</p>
+              <p v-if="failureNotice.meta.length" class="break-words text-xs text-muted-foreground">
+                {{ failureNotice.meta.join(' · ') }}
+              </p>
+            </div>
+          </div>
+        </section>
         <!-- 费用与性能概览 -->
         <RequestCostOverviewCard
           :detail="detail"
@@ -492,6 +509,7 @@ import TabsContent from '@/components/ui/tabs-content.vue'
 import { AlertTriangle, Check, Columns2, RefreshCw, X, Monitor, Server, MessageSquareText, Code2, Terminal, Play } from 'lucide-vue-next'
 import { dashboardApi, type RequestBodyField, type RequestDetail } from '@/api/dashboard'
 import { formatRequestBodyLoadError, formatStoredBodyLoadError } from '../utils/body-load-error'
+import { resolveRequestFailureNotice } from '../utils/errorNotice'
 import {
   asRecord,
   formatMetadataDisplayValue,
@@ -1053,6 +1071,13 @@ const detailCyberPolicyError = computed(() => {
     return isCyberPolicyError(detailErrors)
   }
   return isCyberPolicyError([summaryError, ...detailErrors])
+})
+const failureNotice = computed(() => {
+  const current = detailForCurrentRequest.value
+  if (!current || resolveRequestStateStatusFromDetail(current) !== 'failed') return null
+  if (authoritativeErrorSource.value === 'summary' && props.summaryRecord &&
+      resolveRequestStateStatus(props.summaryRecord.status, props.summaryRecord.status_code, props.summaryRecord.error_message) !== 'failed') return null
+  return resolveRequestFailureNotice(current)
 })
 
 function hasBodyContent(flag: boolean | undefined, data: unknown): boolean {

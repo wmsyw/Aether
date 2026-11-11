@@ -208,16 +208,14 @@ pub(crate) async fn build_admin_provider_mapping_preview_payload(
         .list_provider_catalog_keys_by_provider_ids(std::slice::from_ref(&provider.id))
         .await
         .ok()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|key| key.allowed_models.is_some())
-        .collect::<Vec<_>>();
-    let total_keys_with_allowed_models = keys.len();
+        .unwrap_or_default();
+    let total_considered_keys = keys.len();
     let truncated_keys =
-        total_keys_with_allowed_models.saturating_sub(ADMIN_PROVIDER_MAPPING_PREVIEW_MAX_KEYS);
+        total_considered_keys.saturating_sub(ADMIN_PROVIDER_MAPPING_PREVIEW_MAX_KEYS);
     if keys.len() > ADMIN_PROVIDER_MAPPING_PREVIEW_MAX_KEYS {
         keys.truncate(ADMIN_PROVIDER_MAPPING_PREVIEW_MAX_KEYS);
     }
+    let has_unrestricted_keys = keys.iter().any(|key| key.allowed_models.is_none());
 
     let admin_models = state
         .list_admin_global_models(&AdminGlobalModelListQuery {
@@ -299,46 +297,59 @@ pub(crate) async fn build_admin_provider_mapping_preview_payload(
         }));
     }
 
+    // An unrestricted key accepts every global model, so the only concrete
+    // names we can honestly match regex patterns against are the models this
+    // provider is already known to expose. Without that catalog there is no
+    // match to report; the preview must not claim that a regex itself is a
+    // provider capability.
+    let provider_catalog_model_names = if has_unrestricted_keys {
+        // Bound the concrete catalog names like the displayed model set; the
+        // preview already caps how many models it returns.
+        let mut names = state
+            .list_admin_provider_models(&AdminProviderModelListQuery {
+                provider_id: provider.id.clone(),
+                offset: 0,
+                limit: ADMIN_PROVIDER_MAPPING_PREVIEW_MAX_MODELS,
+                is_active: None,
+            })
+            .await
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|model| model.provider_model_name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        names
+    } else {
+        Vec::new()
+    };
+    let unrestricted_matching_global_models = if provider_catalog_model_names.is_empty() {
+        Vec::new()
+    } else {
+        mapping_preview_matching_global_models(&models_with_mappings, &provider_catalog_model_names)
+    };
+
     let mut key_payloads = Vec::new();
     let mut total_matches = 0_u64;
     for key in keys {
+        let unrestricted = key.allowed_models.is_none();
         let allowed_models = json_string_list(key.allowed_models.as_ref());
-        if allowed_models.is_empty() {
-            continue;
-        }
-
-        let mut matching_global_models = Vec::new();
-        for global_model in &models_with_mappings {
-            let mut matched_models = Vec::new();
-            for allowed_model in &allowed_models {
-                for mapping_pattern in &global_model.mappings {
-                    if matches_model_mapping_for_models(mapping_pattern, allowed_model) {
-                        matched_models.push(json!({
-                            "allowed_model": allowed_model,
-                            "mapping_pattern": mapping_pattern,
-                        }));
-                        break;
-                    }
-                }
-            }
-
-            if !matched_models.is_empty() {
-                matching_global_models.push(json!({
-                    "global_model_id": global_model.id,
-                    "global_model_name": global_model.name,
-                    "display_name": global_model.display_name,
-                    "is_active": global_model.is_active,
-                    "matched_models": matched_models,
-                }));
-                total_matches = total_matches.saturating_add(1);
-            }
-        }
-
+        // `None` means unrestricted, while `Some([])` explicitly denies every
+        // model. Preserve that distinction: an unrestricted key matches the
+        // provider's known catalog, an empty allowlist matches nothing.
+        let matching_global_models = if unrestricted {
+            unrestricted_matching_global_models.clone()
+        } else {
+            mapping_preview_matching_global_models(&models_with_mappings, allowed_models.as_slice())
+        };
         if matching_global_models.is_empty() {
             continue;
         }
+        total_matches = total_matches.saturating_add(matching_global_models.len() as u64);
 
-        key_payloads.push(json!({
+        let mut key_payload = json!({
             "key_id": key.id,
             "key_name": key.name,
             "masked_key": mapping_preview_masked_catalog_api_key(
@@ -349,7 +360,11 @@ pub(crate) async fn build_admin_provider_mapping_preview_payload(
             "is_active": key.is_active,
             "allowed_models": allowed_models,
             "matching_global_models": matching_global_models,
-        }));
+        });
+        if unrestricted {
+            key_payload["unrestricted"] = serde_json::Value::Bool(true);
+        }
+        key_payloads.push(key_payload);
     }
 
     Some(json!({
@@ -362,6 +377,38 @@ pub(crate) async fn build_admin_provider_mapping_preview_payload(
         "truncated_keys": truncated_keys,
         "truncated_models": truncated_models,
     }))
+}
+
+fn mapping_preview_matching_global_models(
+    models_with_mappings: &[MappingPreviewGlobalModel],
+    candidate_models: &[String],
+) -> Vec<serde_json::Value> {
+    let mut matching_global_models = Vec::new();
+    for global_model in models_with_mappings {
+        let mut matched_models = Vec::new();
+        for candidate_model in candidate_models {
+            for mapping_pattern in &global_model.mappings {
+                if matches_model_mapping_for_models(mapping_pattern, candidate_model) {
+                    matched_models.push(json!({
+                        "allowed_model": candidate_model,
+                        "mapping_pattern": mapping_pattern,
+                    }));
+                    break;
+                }
+            }
+        }
+
+        if !matched_models.is_empty() {
+            matching_global_models.push(json!({
+                "global_model_id": global_model.id,
+                "global_model_name": global_model.name,
+                "display_name": global_model.display_name,
+                "is_active": global_model.is_active,
+                "matched_models": matched_models,
+            }));
+        }
+    }
+    matching_global_models
 }
 
 #[cfg(test)]

@@ -64,6 +64,8 @@ export interface OverviewMetrics {
   success_rate: { value: number | null; numerator: number; denominator: number }
   latency_ms: { avg: number | null; p50: number | null; p95: number | null; p99: number | null; sample_count: number }
   rated_amount: OverviewAmount
+  /** Upstream procurement cost; distinct from rated usage and customer billing. */
+  provider_cost_amount?: OverviewAmount
   billable_amount: OverviewAmount
   quota_covered_amount: OverviewAmount
   wallet_consumed_amount: OverviewAmount

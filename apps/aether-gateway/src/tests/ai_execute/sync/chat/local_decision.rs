@@ -1520,6 +1520,11 @@ async fn gateway_executes_openai_chat_sync_via_local_cross_format_gemini_candida
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let created_before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after the Unix epoch")
+        .as_secs() as i64;
+
     let response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/chat/completions"))
         .header(http::header::CONTENT_TYPE, "application/json")
@@ -1544,8 +1549,25 @@ async fn gateway_executes_openai_chat_sync_via_local_cross_format_gemini_candida
         Some(EXECUTION_PATH_EXECUTION_RUNTIME_SYNC)
     );
     let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    let created_after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after the Unix epoch")
+        .as_secs() as i64;
+    let serde_json::Value::Object(mut response_fields) = response_json else {
+        panic!("chat response should be a JSON object");
+    };
+    let created = response_fields
+        .remove("created")
+        .expect("chat response should include created");
+    let created = created
+        .as_i64()
+        .expect("chat response created should be an integer");
+    assert!(
+        (created_before..=created_after).contains(&created),
+        "chat response created {created} should be within [{created_before}, {created_after}]"
+    );
     assert_eq!(
-        response_json,
+        serde_json::Value::Object(response_fields),
         json!({
             "id": "resp_openai_chat_gemini_local_123",
             "object": "chat.completion",

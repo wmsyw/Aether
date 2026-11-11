@@ -67,11 +67,15 @@ impl StreamingStandardFormatMatrix {
             return Ok(Vec::new());
         };
         let frames = provider.push_line(report_context, line)?;
+        let created_at = provider.created_at();
         if provider.actual_service_tier() != propagated_actual_service_tier.as_deref() {
             *propagated_actual_service_tier = provider.actual_service_tier().map(ToOwned::to_owned);
             if let Some(client) = client.as_mut() {
                 client.set_actual_service_tier(propagated_actual_service_tier.as_deref());
             }
+        }
+        if let Some(client) = client.as_mut() {
+            client.set_created_at(created_at);
         }
         self.emit_frames(report_context, frames)
     }
@@ -94,11 +98,15 @@ impl StreamingStandardFormatMatrix {
             return Ok(Vec::new());
         };
         let frames = provider.finish(report_context)?;
+        let created_at = provider.created_at();
         if provider.actual_service_tier() != propagated_actual_service_tier.as_deref() {
             *propagated_actual_service_tier = provider.actual_service_tier().map(ToOwned::to_owned);
             if let Some(client) = client.as_mut() {
                 client.set_actual_service_tier(propagated_actual_service_tier.as_deref());
             }
+        }
+        if let Some(client) = client.as_mut() {
+            client.set_created_at(created_at);
         }
         let mut out = self.emit_frames(report_context, frames)?;
         if let Some(client) = self.client.as_mut() {
@@ -541,6 +549,14 @@ impl ProviderStreamParser {
             ProviderStreamParser::Claude(_) | ProviderStreamParser::Gemini(_) => None,
         }
     }
+
+    fn created_at(&self) -> Option<i64> {
+        match self {
+            ProviderStreamParser::OpenAIChat(state) => state.created_at(),
+            ProviderStreamParser::OpenAIResponses(state) => state.created_at(),
+            ProviderStreamParser::Claude(_) | ProviderStreamParser::Gemini(_) => None,
+        }
+    }
 }
 
 enum ClientStreamEmitter {
@@ -612,6 +628,14 @@ impl ClientStreamEmitter {
             | FormatId::AliyunMultimodalEmbedding
             | FormatId::CodexLive => return None,
         })
+    }
+
+    fn set_created_at(&mut self, created_at: Option<i64>) {
+        match self {
+            ClientStreamEmitter::OpenAIChat(state) => state.set_created_at(created_at),
+            ClientStreamEmitter::OpenAIResponses(state) => state.set_created_at(created_at),
+            ClientStreamEmitter::Claude(_) | ClientStreamEmitter::Gemini(_) => {}
+        }
     }
 
     fn emit(&mut self, frame: CanonicalStreamFrame) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
@@ -927,6 +951,129 @@ mod tests {
 
     fn event_only_line(event: &str) -> Vec<u8> {
         format!("event: {event}\n").into_bytes()
+    }
+
+    fn chat_chunk_created_values(bytes: &[u8]) -> Vec<i64> {
+        json_data_events(bytes)
+            .iter()
+            .filter(|value| {
+                value.get("object").and_then(Value::as_str) == Some("chat.completion.chunk")
+            })
+            .map(|value| {
+                value
+                    .get("created")
+                    .and_then(Value::as_i64)
+                    .expect("chat completion chunk should carry an integer created")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn streams_openai_chat_upstream_created_into_every_chat_chunk() {
+        let context = report_context("openai:chat", "openai:chat");
+        let mut matrix = StreamingStandardFormatMatrix::default();
+        let mut output = matrix
+            .transform_line(
+                &context,
+                data_line(json!({
+                    "id": "chatcmpl_upstream_created",
+                    "object": "chat.completion.chunk",
+                    "created": 1776971267,
+                    "model": "gpt-5.4",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "hello"},
+                        "finish_reason": Value::Null
+                    }]
+                })),
+            )
+            .expect("chat chunk should transform");
+        output.extend(
+            matrix
+                .transform_line(
+                    &context,
+                    data_line(json!({
+                        "id": "chatcmpl_upstream_created",
+                        "object": "chat.completion.chunk",
+                        "created": 1776971267,
+                        "model": "gpt-5.4",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": "!"},
+                            "finish_reason": "stop"
+                        }]
+                    })),
+                )
+                .expect("chat finish chunk should transform"),
+        );
+        output.extend(matrix.finish(&context).expect("finish"));
+
+        let created = chat_chunk_created_values(&output);
+        assert!(created.len() >= 3, "{created:?}");
+        assert!(
+            created.iter().all(|value| *value == 1776971267),
+            "{created:?}"
+        );
+    }
+
+    #[test]
+    fn streams_openai_responses_created_at_into_every_chat_chunk() {
+        let context = report_context("openai:responses", "openai:chat");
+        let mut matrix = StreamingStandardFormatMatrix::default();
+        let mut output = matrix
+            .transform_line(
+                &context,
+                data_line(json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_upstream_created",
+                        "model": "gpt-5.4",
+                        "created_at": 1776971267,
+                        "status": "in_progress",
+                        "output": []
+                    }
+                })),
+            )
+            .expect("response.created should transform");
+        output.extend(
+            matrix
+                .transform_line(
+                    &context,
+                    data_line(json!({
+                        "type": "response.output_text.delta",
+                        "response_id": "resp_upstream_created",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": "hello"
+                    })),
+                )
+                .expect("text delta should transform"),
+        );
+        output.extend(
+            matrix
+                .transform_line(
+                    &context,
+                    data_line(json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_upstream_created",
+                            "model": "gpt-5.4",
+                            "created_at": 1776971267,
+                            "status": "completed",
+                            "output": []
+                        }
+                    })),
+                )
+                .expect("response.completed should transform"),
+        );
+        output.extend(matrix.finish(&context).expect("finish"));
+
+        let created = chat_chunk_created_values(&output);
+        assert!(created.len() >= 3, "{created:?}");
+        assert!(
+            created.iter().all(|value| *value == 1776971267),
+            "{created:?}"
+        );
     }
 
     /// Gemini runs `googleSearch` inside Google, so a grounded streaming answer

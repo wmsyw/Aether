@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 
 use crate::{
-    formats::context::FormatContext,
+    formats::{
+        context::FormatContext, openai::responses::response::openai_responses_current_timestamp,
+    },
     protocol::canonical::{
         canonical_blocks_to_openai_chat_message, canonical_stop_reason_to_openai,
         canonical_usage_to_openai, openai_extensions, openai_finish_reason_to_canonical,
@@ -139,10 +141,7 @@ pub fn from_raw(body_json: &Value) -> Option<CanonicalResponse> {
         content,
         stop_reason,
         usage: openai_usage_to_canonical(body.get("usage")),
-        extensions: openai_extensions(
-            body,
-            &["id", "object", "model", "choices", "usage", "created"],
-        ),
+        extensions: openai_extensions(body, &["id", "object", "model", "choices", "usage"]),
     })
 }
 
@@ -201,7 +200,7 @@ pub fn to_raw(canonical: &CanonicalResponse) -> Value {
             "total_tokens": 0,
         })),
     });
-    if let Some(created_at) = canonical
+    let created = canonical
         .extensions
         .get(OPENAI_RESPONSES_EXTENSION_NAMESPACE)
         .or_else(|| {
@@ -210,14 +209,19 @@ pub fn to_raw(canonical: &CanonicalResponse) -> Value {
                 .get(OPENAI_RESPONSES_LEGACY_EXTENSION_NAMESPACE)
         })
         .and_then(|value| value.get("created_at"))
+        .or_else(|| {
+            canonical
+                .extensions
+                .get("openai")
+                .and_then(|value| value.get("created"))
+        })
         .and_then(|value| {
             value
                 .as_i64()
-                .or_else(|| value.as_u64().map(|value| value as i64))
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
         })
-    {
-        response["created"] = Value::from(created_at);
-    }
+        .unwrap_or_else(openai_responses_current_timestamp);
+    response["created"] = Value::from(created);
     if let Some(service_tier) = openai_service_tier_extension(&canonical.extensions).cloned() {
         response["service_tier"] = service_tier;
     }
@@ -379,5 +383,43 @@ mod tests {
         .expect("openrouter response should convert");
 
         assert!(thinking_texts(&response).is_empty());
+    }
+
+    #[test]
+    fn chat_sync_response_preserves_upstream_created() {
+        let response = from_raw(&json!({
+            "id": "chatcmpl-created",
+            "object": "chat.completion",
+            "created": 1776971267,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect("Chat response should convert");
+
+        assert_eq!(to_raw(&response)["created"], 1776971267);
+    }
+
+    #[test]
+    fn chat_sync_response_defaults_created_when_upstream_omits_it() {
+        let response = from_raw(&json!({
+            "id": "chatcmpl-without-created",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect("Chat response should convert");
+
+        let created = to_raw(&response)["created"]
+            .as_i64()
+            .expect("Chat response should carry an integer created");
+        assert!(created > 0);
     }
 }

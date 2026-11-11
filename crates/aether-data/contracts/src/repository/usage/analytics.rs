@@ -96,6 +96,7 @@ pub enum UsageAnalyticsSort {
     #[default]
     Requests,
     BillableAmount,
+    ProviderCostAmount,
     LastUsed,
     Username,
     Tokens,
@@ -237,6 +238,10 @@ pub struct UsageAnalyticsMetrics {
     pub output_tps_sample_count: u64,
     pub output_tps_sum: f64,
     pub rated_amount: Option<String>,
+    /// Actual procurement cost. `provider_cost_amount` is the known subtotal and
+    /// `provider_cost_available_count` its coverage; never a fabricated zero.
+    pub provider_cost_available_count: u64,
+    pub provider_cost_amount: Option<String>,
     pub billable_amount: Option<String>,
     pub quota_covered_amount: Option<String>,
     pub wallet_consumed_amount: Option<String>,

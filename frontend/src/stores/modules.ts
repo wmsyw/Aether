@@ -1,8 +1,10 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { modulesApi, type ModuleStatus, type UserModuleStatus } from '@/api/modules'
 import { log } from '@/utils/logger'
 import { parseApiError } from '@/utils/errorParser'
+import { getErrorStatus } from '@/types/api-error'
+import { useAuthStore } from '@/stores/auth'
 
 export const useModuleStore = defineStore('modules', () => {
   const modules = ref<Record<string, ModuleStatus>>({})
@@ -14,25 +16,51 @@ export const useModuleStore = defineStore('modules', () => {
   const userLoaded = ref(false)
   const userLoading = ref(false)
   let fetchUserModulesPromise: Promise<Record<string, UserModuleStatus>> | null = null
+  const auth = useAuthStore()
+  let userStatusGeneration = 0
+  watch(() => [auth.token, auth.user?.id], () => {
+    userStatusGeneration += 1
+    userModules.value = {}
+    userLoaded.value = false
+    userLoading.value = false
+    fetchUserModulesPromise = null
+  }, { flush: 'sync' })
 
   async function fetchUserModules() {
     if (fetchUserModulesPromise) return fetchUserModulesPromise
+    const generation = userStatusGeneration
     userLoading.value = true
     fetchUserModulesPromise = (async () => {
       try {
-        const nextModules = await modulesApi.getUserStatus()
+        let nextModules: Record<string, UserModuleStatus>
+        try {
+          nextModules = await modulesApi.getUserStatus()
+        } catch (err) {
+          const status = getErrorStatus(err)
+          // One bounded retry recovers a transient first load without caching
+          // a permission or retaining a previous user's navigation state.
+          if (status != null && status !== 408 && status !== 429 && status < 500) throw err
+          // Keep compatibility with browsers targeted by the ES2022 build.
+          await new Promise<void>(resolve => { setTimeout(resolve, 250) })
+          if (generation !== userStatusGeneration) return {}
+          nextModules = await modulesApi.getUserStatus()
+        }
+        if (generation !== userStatusGeneration) return {}
         userModules.value = nextModules
         userLoaded.value = true
         return nextModules
       } catch (err) {
-        // 刷新失败时清除旧状态，避免继续显示已经关闭的功能入口。
+        if (generation !== userStatusGeneration) return {}
+        // Exhausted retries stay fail closed; no permission state is persisted.
         userModules.value = {}
         userLoaded.value = false
         log.error('Failed to fetch user modules status', err)
         throw err
       } finally {
-        userLoading.value = false
-        fetchUserModulesPromise = null
+        if (generation === userStatusGeneration) {
+          userLoading.value = false
+          fetchUserModulesPromise = null
+        }
       }
     })()
     return fetchUserModulesPromise

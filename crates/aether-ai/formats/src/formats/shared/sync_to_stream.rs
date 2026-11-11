@@ -20,10 +20,11 @@ use crate::formats::openai::image::{
 use crate::formats::openai::responses::history::{
     record_converted_response_history, ResponseHistoryRecord,
 };
+use crate::formats::openai::responses::response::openai_responses_current_timestamp;
 use crate::formats::shared::sse::{encode_done_sse, encode_json_sse};
 use crate::formats::shared::stream_core::common::{
     build_openai_chat_chunk, build_openai_chat_finish_chunk,
-    build_openai_chat_usage_chunk_with_cache,
+    build_openai_chat_usage_chunk_with_cache, with_openai_chat_created,
 };
 use crate::formats::shared::stream_core::{
     CanonicalStreamEvent, CanonicalStreamFrame, StreamingStandardFormatMatrix,
@@ -114,6 +115,14 @@ pub fn maybe_bridge_standard_sync_json_to_stream(
     );
     let response_history_record =
         record_converted_response_history(&bridge_context, &openai_responses_response);
+    let provider_created_at = provider_body_json
+        .get("created")
+        .or_else(|| provider_body_json.get("created_at"))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        });
     let canonical_frames = build_canonical_frames_from_openai_responses_response(
         &openai_responses_response,
         &bridge_context,
@@ -132,6 +141,7 @@ pub fn maybe_bridge_standard_sync_json_to_stream(
             canonical_frames,
             client_api_format.as_str(),
             provider_actual_service_tier.as_deref(),
+            provider_created_at,
             &bridge_context,
         )?
     };
@@ -255,15 +265,30 @@ fn maybe_bridge_openai_image_sync_json_to_chat_stream(
         .map(|(index, output)| output.markdown(index))
         .collect::<Vec<_>>()
         .join("\n\n");
+    let created = response
+        .get("created")
+        .or_else(|| response.get("created_at"))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        })
+        .unwrap_or_else(openai_responses_current_timestamp);
 
     let mut sse_body = Vec::new();
     sse_body.extend(encode_json_sse(
         None,
-        &build_openai_chat_chunk(&response_id, &model, content, None, None),
+        &with_openai_chat_created(
+            build_openai_chat_chunk(&response_id, &model, content, None, None),
+            created,
+        ),
     )?);
     sse_body.extend(encode_json_sse(
         None,
-        &build_openai_chat_finish_chunk(&response_id, &model, Some("stop")),
+        &with_openai_chat_created(
+            build_openai_chat_finish_chunk(&response_id, &model, Some("stop")),
+            created,
+        ),
     )?);
     if let Some((
         input_tokens,
@@ -279,15 +304,18 @@ fn maybe_bridge_openai_image_sync_json_to_chat_stream(
     {
         sse_body.extend(encode_json_sse(
             None,
-            &build_openai_chat_usage_chunk_with_cache(
-                &response_id,
-                &model,
-                input_tokens,
-                output_tokens,
-                total_tokens,
-                reasoning_tokens,
-                cache_creation_tokens,
-                cache_read_tokens,
+            &with_openai_chat_created(
+                build_openai_chat_usage_chunk_with_cache(
+                    &response_id,
+                    &model,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    reasoning_tokens,
+                    cache_creation_tokens,
+                    cache_read_tokens,
+                ),
+                created,
             ),
         )?);
     }
@@ -1069,17 +1097,20 @@ fn emit_client_stream_from_canonical_frames(
     canonical_frames: Vec<CanonicalStreamFrame>,
     client_api_format: &str,
     provider_actual_service_tier: Option<&str>,
+    provider_created_at: Option<i64>,
     report_context: &Value,
 ) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
     match client_api_format {
         "openai:chat" => {
             let mut emitter = OpenAIChatClientEmitter::default();
             emitter.set_actual_service_tier(provider_actual_service_tier);
+            emitter.set_created_at(provider_created_at);
             emit_with_openai_chat_emitter(&mut emitter, canonical_frames)
         }
         "openai:responses" | "openai:responses:compact" => {
             let mut emitter = OpenAIResponsesClientEmitter::with_report_context(report_context);
             emitter.set_actual_service_tier(provider_actual_service_tier);
+            emitter.set_created_at(provider_created_at);
             emit_with_openai_responses_emitter(&mut emitter, canonical_frames)
         }
         "claude:messages" => {
@@ -1876,6 +1907,86 @@ mod tests {
             usage.dimensions.get("image_quality"),
             Some(&json!("medium"))
         );
+    }
+
+    #[test]
+    fn bridges_openai_chat_sync_json_to_chat_stream_with_upstream_created() {
+        let report_context = json!({
+            "provider_api_format": "openai:chat",
+            "client_api_format": "openai:chat",
+            "mapped_model": "gpt-4o"
+        });
+        let outcome = maybe_bridge_standard_sync_json_to_stream(
+            &json!({
+                "id": "chatcmpl_sync_created",
+                "object": "chat.completion",
+                "created": 1776971267,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hello"},
+                    "finish_reason": "stop"
+                }]
+            }),
+            "openai:chat",
+            "openai:chat",
+            Some(&report_context),
+        )
+        .expect("bridge should succeed")
+        .expect("bridge should produce sse");
+
+        let events = json_sse_events(&utf8(outcome.sse_body));
+        let created = events
+            .iter()
+            .filter(|value| {
+                value.get("object").and_then(Value::as_str) == Some("chat.completion.chunk")
+            })
+            .map(|value| {
+                value
+                    .get("created")
+                    .and_then(Value::as_i64)
+                    .expect("chat chunk should carry an integer created")
+            })
+            .collect::<Vec<_>>();
+        assert!(!created.is_empty(), "{events:?}");
+        assert!(created.iter().all(|value| *value == 1776971267));
+    }
+
+    #[test]
+    fn bridges_openai_image_sync_json_to_chat_sse_with_stable_created() {
+        let report_context = json!({
+            "provider_api_format": "openai:image",
+            "client_api_format": "openai:chat",
+            "image_request": {"operation": "generate"}
+        });
+        let outcome = maybe_bridge_standard_sync_json_to_stream(
+            &json!({
+                "id": "img_created",
+                "created": 1776971267,
+                "data": [{"b64_json": "aGVsbG8="}]
+            }),
+            "openai:image",
+            "openai:chat",
+            Some(&report_context),
+        )
+        .expect("bridge should succeed")
+        .expect("bridge should produce sse");
+
+        let events = json_sse_events(&utf8(outcome.sse_body));
+        let created = events
+            .iter()
+            .filter(|value| {
+                value.get("object").and_then(Value::as_str) == Some("chat.completion.chunk")
+            })
+            .map(|value| {
+                value
+                    .get("created")
+                    .and_then(Value::as_i64)
+                    .expect("image chat chunk should carry an integer created")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(created.len(), 2, "{events:?}");
+        assert!(created.iter().all(|value| *value == 1776971267));
     }
 
     #[test]

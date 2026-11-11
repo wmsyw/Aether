@@ -156,6 +156,7 @@ fn summary_value(
 fn mark_incomplete_amounts(data: &mut Value) {
     for key in [
         "rated_amount",
+        "provider_cost_amount",
         "billable_amount",
         "quota_covered_amount",
         "wallet_consumed_amount",

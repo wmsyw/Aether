@@ -27,8 +27,9 @@ use crate::orchestration::{
     resolve_local_failover_analysis_for_attempt,
     resolve_local_transport_failover_analysis_for_attempt, with_upstream_response_report_context,
     LocalAdaptiveRateLimitEffect, LocalAttemptFailureEffect, LocalExecutionEffect,
-    LocalExecutionEffectContext, LocalFailoverAnalysis, LocalFailoverDecision,
-    LocalHealthFailureEffect, LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
+    LocalExecutionEffectContext, LocalFailoverAnalysis, LocalFailoverClassification,
+    LocalFailoverDecision, LocalHealthFailureEffect, LocalOAuthInvalidationEffect,
+    LocalPoolErrorEffect,
 };
 use crate::request_candidate_runtime::record_report_request_candidate_status;
 use crate::request_diagnostics::attach_current_request_diagnostics_and_candidate_timing_to_report_context;
@@ -418,6 +419,11 @@ async fn record_stream_sync_failure(
     started_at_unix_ms: Option<u64>,
     handling: StreamFailureHandling,
 ) -> LocalFailoverAnalysis {
+    // Once an inner failure handler starts it owns the single set of health
+    // and pool effects. Claim terminal handling before the first effect await
+    // so an outer first-byte watchdog waits for these writes instead of
+    // dropping this future and applying a second timeout effect.
+    crate::execution_runtime::mark_stream_candidate_watchdog_terminal_started();
     let error_type = stream_failure_body_field(payload, "type").unwrap_or("internal");
     let error_message = stream_failure_body_field(payload, "message").unwrap_or_default();
     let error_body = payload
@@ -511,7 +517,6 @@ async fn record_stream_sync_failure(
         LocalFailoverDecision::RetryNextCandidate
     );
     if !matches!(handling, StreamFailureHandling::HonorLocalFailover) || !retrying_next_candidate {
-        crate::execution_runtime::mark_stream_candidate_watchdog_terminal_started();
         let analytics_context =
             crate::usage::reporting::failure::sync_analytics_context(report_context, payload);
         let report_context_with_diagnostics =
@@ -772,6 +777,10 @@ async fn handle_prefetch_transport_stream_failure(
     candidate_elapsed_ms: u64,
     retry_scope_out: Option<&mut AiAttemptRetryScope>,
 ) -> Result<Option<Response<Body>>, GatewayError> {
+    // The inner precommit timeout is the authority for this attempt. Claim it
+    // before the first effect await so the outer watchdog cannot time out and
+    // apply a duplicate health/pool effect while this handler is writing.
+    crate::execution_runtime::mark_stream_candidate_watchdog_terminal_started();
     let error_type = stream_failure_body_field(&payload, "type").unwrap_or("internal");
     let error_message = stream_failure_body_field(&payload, "message").unwrap_or_default();
     if matches!(error_type, "first_byte_timeout" | "read_timeout") {
@@ -782,6 +791,18 @@ async fn handle_prefetch_transport_stream_failure(
                 report_context: payload.report_context.as_ref(),
             },
             LocalExecutionEffect::PoolStreamTimeout,
+        )
+        .await;
+        apply_local_execution_effect(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context: payload.report_context.as_ref(),
+            },
+            LocalExecutionEffect::HealthFailure(LocalHealthFailureEffect {
+                status_code: http::StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                classification: LocalFailoverClassification::RetryUpstreamFailure,
+            }),
         )
         .await;
     }
@@ -795,7 +816,6 @@ async fn handle_prefetch_transport_stream_failure(
     let retrying_next_candidate = retry_scope_out.is_some()
         && matches!(analysis.decision, LocalFailoverDecision::RetryNextCandidate);
     if !retrying_next_candidate {
-        crate::execution_runtime::mark_stream_candidate_watchdog_terminal_started();
         let analytics_context = crate::usage::reporting::failure::sync_analytics_context(
             payload.report_context.as_ref(),
             &payload,
@@ -934,8 +954,17 @@ pub(super) async fn submit_midstream_stream_failure(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
-    use aether_contracts::{ExecutionError, ExecutionErrorKind, ExecutionPhase};
+    use aether_ai_serving::AiAttemptRetryScope;
+    use aether_contracts::{
+        ExecutionError, ExecutionErrorKind, ExecutionPhase, ExecutionPlan, RequestBody,
+    };
+    use aether_crypto::{encrypt_python_fernet_plaintext, DEVELOPMENT_ENCRYPTION_KEY};
+    use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
+    use aether_data_contracts::repository::provider_catalog::{
+        StoredProviderCatalogEndpoint, StoredProviderCatalogKey, StoredProviderCatalogProvider,
+    };
     use base64::Engine as _;
     use serde_json::json;
 
@@ -943,7 +972,12 @@ mod tests {
         build_stream_failure_from_execution_error, build_stream_failure_from_provider_error_body,
         build_stream_failure_report, build_stream_failure_sync_payload,
         build_stream_transport_failure_report, encode_stream_capture_with_limit,
+        handle_prefetch_transport_stream_failure,
     };
+    use crate::control::GatewayControlDecision;
+    use crate::data::GatewayDataState;
+    use crate::usage::GatewaySyncReportRequest;
+    use crate::AppState;
 
     #[test]
     fn failure_capture_encoding_defensively_caps_an_oversized_slice() {
@@ -1194,5 +1228,157 @@ mod tests {
             .expect("raw provider stream should remain available for usage auditing");
         assert_eq!(raw_capture, provider_buffered_body);
         assert!(String::from_utf8_lossy(&raw_capture).contains("AGENTS.md secret prompt"));
+    }
+
+    fn precommit_timeout_plan() -> ExecutionPlan {
+        ExecutionPlan {
+            request_id: "req-precommit-health-once".to_string(),
+            candidate_id: Some("cand-precommit-health-once".to_string()),
+            provider_name: Some("provider".to_string()),
+            provider_id: "provider_id".to_string(),
+            endpoint_id: "endpoint_id".to_string(),
+            key_id: "key_id".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/v1/chat/completions".to_string(),
+            headers: BTreeMap::new(),
+            content_type: Some("application/json".to_string()),
+            content_encoding: None,
+            body: RequestBody::from_json(json!({"model": "gpt-test"})),
+            stream: true,
+            client_api_format: "openai:chat".to_string(),
+            provider_api_format: "openai:chat".to_string(),
+            model_name: Some("gpt-test".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        }
+    }
+
+    fn precommit_timeout_state() -> AppState {
+        let provider = StoredProviderCatalogProvider::new(
+            "provider_id".to_string(),
+            "provider".to_string(),
+            Some("https://example.com".to_string()),
+            "custom".to_string(),
+        )
+        .expect("provider should build");
+        let endpoint = StoredProviderCatalogEndpoint::new(
+            "endpoint_id".to_string(),
+            "provider_id".to_string(),
+            "openai:chat".to_string(),
+            Some("openai".to_string()),
+            Some("chat".to_string()),
+            true,
+        )
+        .expect("endpoint should build")
+        .with_transport_fields(
+            "https://example.com/v1/chat/completions".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("endpoint transport should build");
+        let key = StoredProviderCatalogKey::new(
+            "key_id".to_string(),
+            "provider_id".to_string(),
+            "prod".to_string(),
+            "api_key".to_string(),
+            None,
+            true,
+        )
+        .expect("key should build")
+        .with_transport_fields(
+            Some(json!(["openai:chat"])),
+            encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "sk-test")
+                .expect("api key should encrypt"),
+            None,
+            None,
+            Some(json!({"openai:chat": 1})),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("key transport should build");
+        let repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+            vec![provider],
+            vec![endpoint],
+            vec![key],
+        ));
+        AppState::new()
+            .expect("gateway state should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(repository)
+                    .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+    }
+
+    #[tokio::test]
+    async fn precommit_first_byte_timeout_applies_health_once_and_retries_candidate() {
+        let state = precommit_timeout_state();
+        let plan = precommit_timeout_plan();
+        let decision = GatewayControlDecision::synthetic(
+            "/v1/chat/completions",
+            None,
+            None,
+            None,
+            Some("openai:chat".to_string()),
+        )
+        .with_execution_runtime_candidate(true);
+        let payload = GatewaySyncReportRequest {
+            trace_id: "trace-precommit-health-once".to_string(),
+            report_kind: "openai_chat_stream_error".to_string(),
+            report_context: Some(json!({"candidate_index": 0})),
+            status_code: 504,
+            headers: BTreeMap::new(),
+            body_json: Some(json!({
+                "error": {
+                    "type": "first_byte_timeout",
+                    "message": "Upstream did not produce a semantic event before the first byte deadline",
+                }
+            })),
+            client_body_json: None,
+            body_base64: None,
+            telemetry: None,
+        };
+        let mut retry_scope = AiAttemptRetryScope::Provider;
+
+        let response = handle_prefetch_transport_stream_failure(
+            &state,
+            "trace-precommit-health-once",
+            &decision,
+            &plan,
+            "req-precommit-health-once",
+            Some("cand-precommit-health-once"),
+            payload,
+            0,
+            1,
+            Some(&mut retry_scope),
+        )
+        .await
+        .expect("precommit transport failure should be handled");
+
+        assert!(response.is_none());
+        assert_eq!(retry_scope, AiAttemptRetryScope::Candidate);
+        let stored_key = state
+            .read_provider_catalog_keys_by_ids(&["key_id".to_string()])
+            .await
+            .expect("provider catalog keys should load")
+            .into_iter()
+            .next()
+            .expect("stored key should exist");
+        assert_eq!(
+            stored_key
+                .health_by_format
+                .as_ref()
+                .and_then(|value| value.get("openai:chat"))
+                .and_then(|value| value.get("consecutive_failures"))
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
     }
 }

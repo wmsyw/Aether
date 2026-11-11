@@ -138,6 +138,7 @@ pub(crate) async fn materialize_local_same_format_provider_candidate_attempts(
             Some(&input.auth_snapshot),
             input.client_session_affinity.as_ref(),
             current_unix_secs(),
+            current_unix_secs(),
             false,
             spec.operation.map(|operation| operation.as_str()),
             crate::ai_serving::planner::candidate_ranking::scheduler_ordering_config_for_routing_policy(
@@ -246,6 +247,7 @@ pub(crate) async fn build_local_same_format_provider_candidate_attempt_source<'a
             input.required_capabilities.as_ref(),
             Some(&input.auth_snapshot),
             input.client_session_affinity.as_ref(),
+            current_unix_secs(),
             current_unix_secs(),
             false,
             spec.operation.map(|operation| operation.as_str()),
