@@ -189,15 +189,15 @@ mod tests {
     #[test]
     fn update_url_trust_rejects_credentials_and_untrusted_hosts() {
         for trusted in [
-            "https://github.com/fawney19/Aether/releases/download/v1/aether.tar.gz",
-            "https://api.github.com/repos/fawney19/Aether/releases",
+            "https://github.com/wmsyw/Aether/releases/download/v1/aether.tar.gz",
+            "https://api.github.com/repos/wmsyw/Aether/releases",
             "https://objects.githubusercontent.com/github-production-release-asset/test",
             "https://release-assets.githubusercontent.com/github-production-release-asset/test",
         ] {
             assert!(is_trusted_update_url(&url::Url::parse(trusted).unwrap()));
         }
         for untrusted in [
-            "http://github.com/fawney19/Aether/releases/download/v1/aether.tar.gz",
+            "http://github.com/wmsyw/Aether/releases/download/v1/aether.tar.gz",
             "https://github.com.evil.example/aether.tar.gz",
             "https://user@github.com/aether.tar.gz",
             "https://example.com/aether.tar.gz",

@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
 
-$Repo = if ($env:AETHER_TUNNEL_RELEASE_REPO) { $env:AETHER_TUNNEL_RELEASE_REPO } else { 'fawney19/Aether' }
+$Repo = if ($env:AETHER_TUNNEL_RELEASE_REPO) { $env:AETHER_TUNNEL_RELEASE_REPO } else { 'wmsyw/Aether' }
 $ReleaseTag = $env:AETHER_TUNNEL_RELEASE_TAG
 $InstallDir = $env:AETHER_TUNNEL_INSTALL_DIR
 $ConfigPath = $env:AETHER_TUNNEL_CONFIG

@@ -34,7 +34,7 @@ sed '/^main()/,$d' "${INSTALLER}" >"${LIB}"
 source "${LIB}"
 trap cleanup_test_root EXIT
 
-validate_release_repo "fawney19/Aether"
+validate_release_repo "wmsyw/Aether"
 validate_tunnel_release_tag "tunnel-v0.3.16-rc.1"
 validate_tunnel_release_tag "tunnel-v1.2.3+build.7"
 validate_release_asset_name "aether-tunnel-linux-amd64.tar.gz"
@@ -56,7 +56,7 @@ assert_rejected validate_node_name "$(printf 'n%.0s' {1..256})"
 assert_rejected validate_https_download_url "http://example.test/release.tar.gz"
 assert_rejected validate_https_download_url "https://user:pass@example.test/release.tar.gz"
 assert_rejected validate_https_download_url "https://example.test/release.tar.gz#fragment"
-validate_trusted_github_download_url "https://github.com/fawney19/Aether/releases/download/tunnel-v1.2.3/aether-tunnel-linux-amd64.tar.gz"
+validate_trusted_github_download_url "https://github.com/wmsyw/Aether/releases/download/tunnel-v1.2.3/aether-tunnel-linux-amd64.tar.gz"
 validate_trusted_github_download_url "https://release-assets.githubusercontent.com/example/object"
 assert_rejected validate_trusted_github_download_url "https://github.com.evil.example/release.tar.gz"
 assert_rejected validate_trusted_github_download_url "https://github.com:444/release.tar.gz"
@@ -78,7 +78,7 @@ curl() {
     printf '%s\n' "verified download from ${url}" >"${output}"
     printf '200'
 }
-download "https://github.com/fawney19/Aether/release.tar.gz" "${TEST_ROOT}/downloaded"
+download "https://github.com/wmsyw/Aether/release.tar.gz" "${TEST_ROOT}/downloaded"
 grep -Fxq -- '--proto' "${CURL_ARGS}" || fail_test "curl HTTPS protocol restriction is missing"
 grep -Fxq -- '=https' "${CURL_ARGS}" || fail_test "curl HTTPS protocol value is missing"
 grep -Fxq -- '--max-redirs' "${CURL_ARGS}" || fail_test "curl automatic redirects were not disabled"

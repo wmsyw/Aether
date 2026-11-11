@@ -31,7 +31,7 @@ Aether 是一个自托管的 AI API 网关，为团队和个人提供多租户�
   </picture>
 </p>
 
-页面预览: https://fawney19.github.io/Aether/
+页面预览: https://wmsyw.github.io/Aether/
 
 ## 部署
 
@@ -39,7 +39,7 @@ Aether 是一个自托管的 AI API 网关，为团队和个人提供多租户�
 
 ```bash
 # 1. 克隆代码
-git clone https://github.com/fawney19/Aether.git
+git clone https://github.com/wmsyw/Aether.git
 cd Aether
 
 # 2. 配置环境变量
@@ -57,26 +57,35 @@ docker compose pull && docker compose up -d
 ### 一键安装（PostgreSQL + Redis）
 
 ```bash
-git clone https://github.com/fawney19/Aether.git
+git clone https://github.com/wmsyw/Aether.git
 cd Aether
-curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/main/install.sh | sudo bash -s -- --mode compose
+curl -fsSL https://raw.githubusercontent.com/wmsyw/Aether/main/install.sh | sudo bash -s -- --mode compose
 ```
 
 正式版和 Nightly 自动构建仅提供 Linux `amd64` / `arm64` 二进制包，Docker 镜像同样支持这两种架构。macOS 用户可使用 Docker 或自行从源码构建；安装脚本保留对历史 macOS 制品的兼容。独立 Aether Tunnel 的多平台发行不受此调整影响。
 
 原生 Linux systemd 安装需先准备 PostgreSQL，将连接串通过 `DATABASE_URL` 传给安装进程，并选择 `--mode single-node`；不再自动创建本地数据库文件。
 
+### Fork 构建与镜像
+
+本仓库为 fork，镜像与制品由本仓库 Actions 构建：
+
+- GHCR 镜像：`ghcr.io/wmsyw/aether`。推送符合 `vX.Y.Z`、`vX.Y.Z-rc.N` 或 `vX.Y.Z-beta.N` 的 tag 才发布；手动触发 Release workflow 只构建、不发布。
+- `nightly` 由 Nightly workflow 从 `main` 按计划或手动构建并发布。fork 需先在 GitHub Actions 页面启用工作流；首次成功发布前，fork 镜像和 Release 制品不会自动存在。
+- Docker Hub 为可选发布：仅当仓库变量 `DOCKERHUB_IMAGE` 已配置为明确的 `owner/repository`，且 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets 均存在时才推送；未配置时只发布 GHCR，不推测 Docker Hub 账号。
+- 安装、在线更新与 Tunnel 默认从 `wmsyw/Aether` 获取制品。审查报告中的上游 PR 链接保留；Codex prompt-cache namespace 是稳定协议标识，不是下载地址，保持不变以免改变既有缓存身份。
+
 ### Nightly（每日 main 构建）
 
-Nightly workflow 每天从 `main` 的固定 commit 构建并发布滚动的 GitHub Release `nightly`，同时推送多架构 GHCR 镜像 `ghcr.io/fawney19/aether:nightly`。Nightly 是预发布版本，适合验证最新代码，不保证与正式版相同的稳定性。滚动 Release 需要仓库保持关闭 GitHub Release immutability。
+Nightly workflow 每天从 `main` 的固定 commit 构建并发布滚动的 GitHub Release `nightly`，同时推送多架构 GHCR 镜像 `ghcr.io/wmsyw/aether:nightly`。Nightly 是预发布版本，适合验证最新代码，不保证与正式版相同的稳定性。滚动 Release 需要仓库保持关闭 GitHub Release immutability。
 
 安装最新 nightly（PostgreSQL + Redis）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/main/install.sh | sudo bash -s -- --mode compose --channel nightly
+curl -fsSL https://raw.githubusercontent.com/wmsyw/Aether/main/install.sh | sudo bash -s -- --mode compose --channel nightly
 ```
 
-Docker Compose 用户可在部署目录的 `.env` 中设置 `APP_IMAGE=ghcr.io/fawney19/aether:nightly`，然后运行 `./update.sh` 获取下一次 nightly。二进制部署请沿用已有 PostgreSQL 环境配置，并使用 `--mode single-node --channel nightly` 重新运行安装脚本升级；当前管理后台的在线更新列表只跟踪正式版/RC/Beta，不会自动提示下一次 nightly。
+Docker Compose 用户可在部署目录的 `.env` 中设置 `APP_IMAGE=ghcr.io/wmsyw/aether:nightly`，然后运行 `./update.sh` 获取下一次 nightly。二进制部署请沿用已有 PostgreSQL 环境配置，并使用 `--mode single-node --channel nightly` 重新运行安装脚本升级；当前管理后台的在线更新列表只跟踪正式版/RC/Beta，不会自动提示下一次 nightly。
 
 ## 本地开发
 
@@ -189,4 +198,4 @@ AETHER_BACKUP_ENCRYPTION_KEY='原备份密钥' \
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=fawney19/Aether&type=date&legend=top-left)](https://www.star-history.com/?repos=fawney19%2FAether&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=wmsyw/Aether&type=date&legend=top-left)](https://www.star-history.com/?repos=wmsyw%2FAether&type=date&legend=top-left)

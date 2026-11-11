@@ -20,9 +20,9 @@ const INSTALL_SESSION_KEY_PREFIX: &str = "install:session:";
 const TUNNEL_INSTALL_SESSION_KEY_PREFIX: &str = "tunnel-install:session:";
 const INSTALL_SESSION_ENVELOPE_PREFIX: &str = "aether-install-session-v1:";
 const TUNNEL_INSTALL_UNIX_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/fawney19/Aether/refs/heads/main/apps/aether-tunnel/install.sh";
+    "https://raw.githubusercontent.com/wmsyw/Aether/refs/heads/main/apps/aether-tunnel/install.sh";
 const TUNNEL_INSTALL_POWERSHELL_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-tunnel/install.ps1";
+    "https://raw.githubusercontent.com/wmsyw/Aether/main/apps/aether-tunnel/install.ps1";
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1643,9 +1643,6 @@ mod tests {
         assert!(script.contains("export AETHER_TUNNEL_NODE_NAME='jp-proxy-01'"));
         assert!(script.contains("export AETHER_TUNNEL_SECURITY='non_tls_required'"));
         assert!(script.contains("export AETHER_TUNNEL_ENCRYPTION_KEY='base64-32-bytes'"));
-        assert!(script.contains(
-            "https://raw.githubusercontent.com/fawney19/Aether/refs/heads/main/apps/aether-tunnel/install.sh"
-        ));
         assert!(!script.contains("aether-rust-pioneer"));
         assert!(!script.contains("[[servers]]"));
     }
@@ -1659,9 +1656,6 @@ mod tests {
         assert!(script.contains("$env:AETHER_TUNNEL_NODE_NAME = 'jp-proxy-01'"));
         assert!(script.contains("$env:AETHER_TUNNEL_SECURITY = 'non_tls_required'"));
         assert!(script.contains("$env:AETHER_TUNNEL_ENCRYPTION_KEY = 'base64-32-bytes'"));
-        assert!(script.contains(
-            "https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-tunnel/install.ps1"
-        ));
         assert!(!script.contains("aether-rust-pioneer"));
         assert!(!script.contains("[[servers]]"));
     }

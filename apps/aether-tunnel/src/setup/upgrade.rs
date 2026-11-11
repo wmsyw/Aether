@@ -14,7 +14,7 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use sha2::{Digest, Sha256};
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
-const GITHUB_REPO: &str = "fawney19/Aether";
+const GITHUB_REPO: &str = "wmsyw/Aether";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_GITHUB_RELEASE_METADATA_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GITHUB_ERROR_RESPONSE_BYTES: usize = 256 * 1024;
@@ -1005,7 +1005,7 @@ mod tests {
     #[test]
     fn release_redirects_require_trusted_https_hosts() {
         for trusted in [
-            "https://github.com/fawney19/Aether/releases/download/tag/archive.tar.gz",
+            "https://github.com/wmsyw/Aether/releases/download/tag/archive.tar.gz",
             "https://objects.githubusercontent.com/github-production-release-asset/archive",
             "https://release-assets.githubusercontent.com/github-production-release-asset/archive",
         ] {
@@ -1014,11 +1014,11 @@ mod tests {
             ));
         }
         for untrusted in [
-            "http://github.com/fawney19/Aether/archive.tar.gz",
-            "https://github.com:8443/fawney19/Aether/archive.tar.gz",
+            "http://github.com/wmsyw/Aether/archive.tar.gz",
+            "https://github.com:8443/wmsyw/Aether/archive.tar.gz",
             "https://github.com.evil.example/archive.tar.gz",
             "https://user@github.com/archive.tar.gz",
-            "https://api.github.com/repos/fawney19/Aether/releases",
+            "https://api.github.com/repos/wmsyw/Aether/releases",
             "https://example.com/archive.tar.gz",
         ] {
             assert!(!is_trusted_github_download_url(

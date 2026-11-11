@@ -1221,7 +1221,7 @@ fn validate_update_release_urls(
         return Err("当前架构没有受支持的官方更新资产".to_string());
     };
     let asset_name = format!("aether-{safe_version}-{platform}-{arch}.tar.gz");
-    let release_prefix = format!("/fawney19/Aether/releases/download/{safe_version}/");
+    let release_prefix = format!("/wmsyw/Aether/releases/download/{safe_version}/");
 
     for (raw_url, expected_name) in [
         (tarball_url, asset_name.as_str()),
@@ -2393,7 +2393,7 @@ mod tests {
     #[test]
     fn update_validates_download_urls() {
         assert!(validate_update_download_url(
-            "https://github.com/fawney19/Aether/releases/download/v1/aether.tar.gz"
+            "https://github.com/wmsyw/Aether/releases/download/v1/aether.tar.gz"
         )
         .is_ok());
         assert!(validate_update_download_url(
@@ -2405,11 +2405,11 @@ mod tests {
         )
         .is_ok());
         assert!(validate_update_download_url(
-            "http://github.com/fawney19/Aether/releases/download/v1/aether.tar.gz"
+            "http://github.com/wmsyw/Aether/releases/download/v1/aether.tar.gz"
         )
         .is_err());
         assert!(validate_update_download_url(
-            "https://user@github.com/fawney19/Aether/releases/download/v1/aether.tar.gz"
+            "https://user@github.com/wmsyw/Aether/releases/download/v1/aether.tar.gz"
         )
         .is_err());
         assert!(
@@ -2431,16 +2431,20 @@ mod tests {
             "amd64"
         };
         let tarball = format!(
-            "https://github.com/fawney19/Aether/releases/download/v1.2.3/aether-v1.2.3-{platform}-{arch}.tar.gz"
+            "https://github.com/wmsyw/Aether/releases/download/v1.2.3/aether-v1.2.3-{platform}-{arch}.tar.gz"
         );
-        let checksums = "https://github.com/fawney19/Aether/releases/download/v1.2.3/SHA256SUMS";
+        let checksums = "https://github.com/wmsyw/Aether/releases/download/v1.2.3/SHA256SUMS";
 
         validate_update_release_urls("v1.2.3", &tarball, checksums)
             .expect("matching official release assets should pass");
 
         for (bad_tarball, bad_checksums) in [
             (
-                tarball.replace("fawney19/Aether", "attacker/project"),
+                tarball.replace("wmsyw/Aether", "attacker/project"),
+                checksums.to_string(),
+            ),
+            (
+                tarball.replace("wmsyw/Aether", "fawney19/Aether"),
                 checksums.to_string(),
             ),
             (tarball.clone(), checksums.replace("/v1.2.3/", "/v1.2.2/")),

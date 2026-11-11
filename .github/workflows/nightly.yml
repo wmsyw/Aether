@@ -3,7 +3,7 @@ name: Nightly Release
 on:
   # 02:17 Asia/Shanghai (18:17 UTC) every day.
   schedule:
-    - cron: '17 18 * * *'
+    - cron: "17 18 * * *"
   workflow_dispatch:
 
 # Checks and builds only need read access. Publishing jobs opt into write access
@@ -20,11 +20,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CARGO_INCREMENTAL: '0'
-  CARGO_PROFILE_DEV_DEBUG: '0'
-  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  RUST_BACKTRACE: "1"
 
 jobs:
   source:
@@ -49,13 +49,15 @@ jobs:
           fi
 
           sha="${GITHUB_SHA}"
-          # Docker 镜像仓库名必须全小写；GitHub owner 可能保留大写，先统一规范化。
-          repository_owner="${GITHUB_REPOSITORY%%/*}"
-          repository_owner="${repository_owner,,}"
-          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
-          echo "short_sha=${sha:0:7}" >> "${GITHUB_OUTPUT}"
-          echo "date=$(date -u +'%Y-%m-%d')" >> "${GITHUB_OUTPUT}"
-          echo "ghcr_image=ghcr.io/${repository_owner}/aether" >> "${GITHUB_OUTPUT}"
+          # Docker 镜像仓库名必须全小写；GitHub 仓库路径可能保留大写，先统一规范化。
+          repository="$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          ghcr_image="ghcr.io/${repository}"
+          {
+            echo "sha=${sha}"
+            echo "short_sha=${sha:0:7}"
+            echo "date=$(date -u +'%Y-%m-%d')"
+            echo "ghcr_image=${ghcr_image}"
+          } >> "${GITHUB_OUTPUT}"
           echo "Building main at ${sha}."
 
   # Keep the scheduled backend coverage in one place so it cannot drift from PR CI.
@@ -96,20 +98,20 @@ jobs:
       - name: Check all workspace targets
         env:
           RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_GHA_ENABLED: "true"
         run: cargo check --workspace --all-targets --all-features --locked
 
       - name: Run workspace doctests
         env:
           RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_GHA_ENABLED: "true"
         run: cargo test --workspace --all-features --doc --locked
 
       - name: Show sccache stats
         if: always()
         env:
           RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_GHA_ENABLED: "true"
         run: sccache --show-stats
 
   frontend:
@@ -125,7 +127,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
@@ -184,7 +186,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Check generated format coverage matrix
         run: python3 docs/api/generate_format_field_coverage.py --check
@@ -418,7 +420,7 @@ jobs:
             -e "s/^VERSION=\"\${AETHER_VERSION:-}\"/VERSION=\"\${AETHER_VERSION:-${VERSION}}\"/" \
             install.sh > release-assets/install.sh
           chmod 0755 release-assets/install.sh
-          (cd release-assets && sha256sum *.tar.gz > SHA256SUMS)
+          (cd release-assets && sha256sum -- *.tar.gz > SHA256SUMS)
 
           test "$(find release-assets -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
           test "$(wc -l < release-assets/SHA256SUMS)" -eq 2
@@ -558,7 +560,7 @@ jobs:
             sleep 2
           done
           if [[ "${resolved_sha}" != "${SOURCE_SHA}" ]]; then
-            echo "nightly tag resolved to ${resolved_sha}, expected ${SOURCE_SHA}." >&2
+            echo "nightly tag resolved to ${resolved_sha}, expected ${SOURCE_SHA} after ${attempt} attempts." >&2
             exit 1
           fi
 

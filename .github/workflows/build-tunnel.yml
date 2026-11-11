@@ -2,7 +2,7 @@ name: Build aether-tunnel
 
 on:
   push:
-    tags: ['tunnel-v*']
+    tags: ["tunnel-v*"]
   workflow_dispatch:
 
 permissions:
@@ -215,9 +215,9 @@ jobs:
       - name: Update README download links
         env:
           TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          VERSION="${TAG#tunnel-v}"
-          BASE="https://github.com/fawney19/Aether/releases/download/${TAG}"
+          BASE="https://github.com/${REPOSITORY}/releases/download/${TAG}"
 
           if [ -d apps/aether-tunnel ]; then
             TUNNEL_DIR="apps/aether-tunnel"

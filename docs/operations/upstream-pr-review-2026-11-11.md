@@ -7,7 +7,16 @@
 - 快照包含全部 **38** 个 open PR（含 draft），按**创建时间从新到旧**倒查，不因最近评论把旧 PR 提前。
 - 本地基线 `0eb3233903ec74806a7046669115d69eea54bce8` 与当时上游 `main` 完全相同。逐项对照提交边界、完整 diff、当前实现与调用链；不是依据标题直接合并。
 - 选择15项中的完整修复或明确子集；12项暂缓，8项不合入，3项已被当前实现覆盖。大 PR 仅迁移独立且仍适用的行为，不把旧 fork 历史混入。
-- 所有变更仅进入本地工作区；未创建提交、未推送、未修改上游 PR。
+- 首轮集成已提交为 `e433bc9cd`；后续 fork 发布源适配单独提交。未推送、未修改上游 PR，也未触发镜像发布。
+
+## Fork 发布源适配
+
+- 本 fork 为 `wmsyw/Aether`。Release 与 Nightly 镜像名取当前 `github.repository` 并转为小写，本仓库输出 `ghcr.io/wmsyw/aether`；Tunnel Release 的下载表也使用当前仓库。
+- Docker Hub 不再写死上游账号。仅在显式设置仓库变量 `DOCKERHUB_IMAGE` 且两个认证 secret 均存在时，才将目标加入镜像列表并执行登录和 provenance attestation；否则仅发布 GHCR。
+- 安装脚本、Compose 默认镜像、管理后台更新 API/下载校验、Tunnel 升级与安装源、前端链接及仓库元数据均指向本 fork。更新资产仍需精确匹配同仓库、同版本和当前平台；回归明确拒绝原上游路径。
+- 保留真正的上游 PR 研究链接，以及 Codex prompt-cache 的稳定 namespace。后者不是网络下载源，改变它会改变现有缓存身份。
+- 本地验证：3个修改工作流通过 Actionlint；14个实际 shell 场景覆盖仓库大小写、可选 Docker Hub、main 限制、正式版/RC/Beta 与手动构建门禁；Rust 更新安全49项、安装命令2项、管理端更新载荷6项、Tunnel 升级13项通过；Shell installer 安全场景通过；前端类型检查与2文件231测试通过，运行首页显示本 fork 的 GitHub 链接；`cargo fmt --all --check` 通过。
+- 未执行容器镜像构建/推送或 GitHub 发布；fork 需先启用 Actions 并完成首次成功发布，不能假定镜像和 Release 制品已经存在。
 
 ## 全部 PR 结论
 
@@ -16,7 +25,7 @@
 | [#903](https://github.com/fawney19/Aether/pull/903)  | 2026-11-10 | 选取 | 修复 Gemini 思考 token 结算、模态明细和 Vertex 服务账号 Interactions；现代模型参数、签名、URL 与候选认证共同适配。 |
 | [#902](https://github.com/fawney19/Aether/pull/902)  | 2026-11-10 | 选取 | 上下文溢出 400 停止无效换号，不扣健康分；允许 Responses 历史中的限定传输元数据进入 Chat。 |
 | [#901](https://github.com/fawney19/Aether/pull/901)  | 2026-10-28 | 选取子集 | 仅取消协议与结算生命周期；不引入默认排队、并发 admission 重排或新数据库字段。 |
-| [#900](https://github.com/fawney19/Aether/pull/900)  | 2026-10-24 | 不合入 | 拒绝：CPU 沙箱不约束网络出口；可把解密池密钥填入任意公网请求。 |
+| [#900](https://github.com/fawney19/Aether/pull/900) | 2026-10-24 | 不合入 | **Rhai 脚本自定义额度查询**。CPU 沙箱不约束网络出口；写入 provider 配置即可把解密池密钥填入任意公网请求，并自动发起查询，存在凭证外泄风险。 |
 | [#899](https://github.com/fawney19/Aether/pull/899)  | 2026-10-24 | 选取 | 扩展审计 base64 压缩至各类结构化负载，4KiB 解码阈值；不修改上游转发内容。 |
 | [#898](https://github.com/fawney19/Aether/pull/898)  | 2026-10-22 | 选取 | 保留 Responses additional_tools；Antigravity 混合工具优先客户端函数，避免内建工具冲突。 |
 | [#897](https://github.com/fawney19/Aether/pull/897)  | 2026-10-22 | 选取 | 注入的 Claude Code cache_control 跟随客户端 1h 标记，而非强制5m。 |
@@ -25,32 +34,44 @@
 | [#885](https://github.com/fawney19/Aether/pull/885)  | 2026-10-09 | 选取 | 维护覆盖当前表集合；缺表跳过、目录查询错误正常传播。 |
 | [#881](https://github.com/fawney19/Aether/pull/881)  | 2026-10-06 | 选取 | 单条 stop 也序列化为非空数组，兼容严格 OpenAI relay；空列表不发。 |
 | [#840](https://github.com/fawney19/Aether/pull/840)  | 2026-09-21 | 本地已有 | 已解决：当前流处理直接转移解析器状态，不再从截断预读缓存重建，无需旧 overflow 缓冲。 |
-| [#827](https://github.com/fawney19/Aether/pull/827)  | 2026-09-15 | 不合入 | 拒绝：空 allowlist UI 表示全部禁用，后端却视为 unrestricted；跨 provider 同名 key 可混入，缺最终发送前校验。 |
-| [#766](https://github.com/fawney19/Aether/pull/766)  | 2026-08-30 | 暂缓 | 暂缓：与 #736 是竞争性分组约束模型，先统一显式空集合与继承语义。 |
-| [#740](https://github.com/fawney19/Aether/pull/740)  | 2026-08-20 | 不合入 | 不合入：custom 已支持相同 OpenAI 协议，只有厂商预填与宣传，没有能力增量。 |
-| [#736](https://github.com/fawney19/Aether/pull/736)  | 2026-08-18 | 暂缓 | 暂缓：空集合仍归一化成 unrestricted；需一次性打通 API Key/分组/导入/池游标/发送前鉴权的 fail-closed 合同。 |
-| [#735](https://github.com/fawney19/Aether/pull/735)  | 2026-08-18 | 暂缓 | 暂缓：生成式 API 清单已落后于当前 v2 路由，不能作为完整文档发布。 |
+| [#827](https://github.com/fawney19/Aether/pull/827) | 2026-09-15 | 不合入 | **API Key 限定可用上游密钥**。空 allowlist UI 表示全部禁用，后端却视为 unrestricted；按名称匹配还会放行其他 provider 的同名 key，且缺发送前最终校验。 |
+| [#766](https://github.com/fawney19/Aether/pull/766) | 2026-08-30 | 暂缓 | **用户分组按 provider 限定上游密钥**。显式空集合拒绝访问、发送前校验值得保留，但只覆盖分组、不覆盖独立 API Key；与 #736 引入竞争性 schema，需先统一继承和交集语义。 |
+| [#740](https://github.com/fawney19/Aether/pull/740) | 2026-08-20 | 不合入 | **新增 OrcaRouter 命名提供商**。custom 已支持相同 OpenAI 协议，主要是厂商预填与宣传，没有协议能力增量。 |
+| [#736](https://github.com/fawney19/Aether/pull/736) | 2026-08-18 | 暂缓 | **按 provider ID/key ID 设置 API Key 和分组白名单**。稳定 ID 模型有价值，但空集合会归一化成 unrestricted；需一次打通分组继承、导入、池游标与发送前鉴权，不能局部接入后静默放宽权限。 |
+| [#735](https://github.com/fawney19/Aether/pull/735) | 2026-08-18 | 暂缓 | **完整管理 API、客户端 API、数据库和运维参考手册**。生成式清单已落后于当前 v2 路由，不能以“完整 API 文档”发布。 |
 | [#734](https://github.com/fawney19/Aether/pull/734)  | 2026-08-18 | 本地已有 | 已解决：旧 RoutingProfiles 已删除，当前编辑器移除最后一个 scope 后自动回到 all。 |
-| [#729](https://github.com/fawney19/Aether/pull/729)  | 2026-08-17 | 不合入 | 不合入：官方图表端点实测有效；无故替换成未验证第三方镜像。 |
-| [#727](https://github.com/fawney19/Aether/pull/727)  | 2026-08-15 | 暂缓 | 暂缓：撤销远程额度配置后可能保留 exhausted monthly_quota=0，生命周期未闭环。 |
-| [#714](https://github.com/fawney19/Aether/pull/714)  | 2026-08-06 | 暂缓 | 暂缓：当前 UsagePolicyWindow::CalendarDay 与 daily_quota 已覆盖；新 Redis fail-open 台账造成重复限额引擎。 |
+| [#729](https://github.com/fawney19/Aether/pull/729) | 2026-08-17 | 不合入 | **更换 README Star History 图片源**。原官方端点实测有效，没有必要替换成未验证的第三方镜像；本 fork 仅调整图表仓库参数。 |
+| [#727](https://github.com/fawney19/Aether/pull/727) | 2026-08-15 | 暂缓 | **同步 Sub2API 远程额度并参与调度限制**。撤销远程额度配置后可能保留 exhausted monthly_quota=0，导致永久不可调度；配置撤销与恢复生命周期未闭环。 |
+| [#714](https://github.com/fawney19/Aether/pull/714) | 2026-08-06 | 暂缓 | **可配置每日用量限额**。当前 CalendarDay/daily_quota 已覆盖核心能力；补丁另建 Redis fail-open 台账，会产生两套计数和限额语义。 |
 | [#713](https://github.com/fawney19/Aether/pull/713)  | 2026-08-05 | 选取子集 | 仅修复已有 billing.video.price_per_second_by_resolution 不结算；不引入 Doubao、每token视频新定价或 Ark 素材库。 |
-| [#708](https://github.com/fawney19/Aether/pull/708)  | 2026-08-01 | 不合入 | 不合入：既有36字符+hex/连字符校验与此处 UUID parser 没有有效行为差异。 |
+| [#708](https://github.com/fawney19/Aether/pull/708) | 2026-08-01 | 不合入 | **使用 UUID parser 替代手写校验**。此处既有36字符、hex和连字符检查与所提 parser 没有有效行为差异，不引入纯替换。 |
 | [#673](https://github.com/fawney19/Aether/pull/673)  | 2026-07-14 | 选取 | 同一代理节点多个 tunnel 会交错累计计数；按 session+递增 heartbeat cursor 建立基线，避免事件和流量膨胀。 |
-| [#656](https://github.com/fawney19/Aether/pull/656)  | 2026-07-02 | 暂缓 | 暂缓：可选批量编辑 UX；已有启停/删除，不优先引入大面积表单变更。 |
-| [#653](https://github.com/fawney19/Aether/pull/653)  | 2026-06-25 | 暂缓 | 暂缓：GLM 新功能混入删除现行 admin_bypass_limits/缓存语义，需先拆出纯 provider 功能。 |
-| [#647](https://github.com/fawney19/Aether/pull/647)  | 2026-06-19 | 暂缓 | 暂缓：第三方免费适配依赖当前没有的固定 key 自动创建约定。 |
-| [#642](https://github.com/fawney19/Aether/pull/642)  | 2026-06-16 | 暂缓 | 暂缓：旧分页循环上的按 key 模型链会绕开当前游标、授权与有效模型额度合同，需重做。 |
+| [#656](https://github.com/fawney19/Aether/pull/656) | 2026-07-02 | 暂缓 | **扩展提供商批量编辑表单与操作**。当前已能批量启停、删除；属于可选 UX 增强，不优先为此引入大面积表单变更。 |
+| [#653](https://github.com/fawney19/Aether/pull/653) | 2026-06-25 | 暂缓 | **GLM Coding Plan 额度查询与展示**。新功能混入删除现行 admin_bypass_limits 和缓存语义，需先拆出纯 GLM 功能，避免改变无关权限与缓存行为。 |
+| [#647](https://github.com/fawney19/Aether/pull/647) | 2026-06-19 | 暂缓 | **OpenCode Free / Kilo Free 无用户密钥提供商**。依赖当前没有的固定 key 自动创建机制，且第三方免费网关增加隐私、条款和可用性依赖。 |
+| [#642](https://github.com/fawney19/Aether/pull/642) | 2026-06-16 | 暂缓 | **按 API Key 配置 Codex 模型链与候选路由**。补丁在旧分页循环中嵌套模型循环，会影响当前优先/延迟分页、有效模型授权和额度约束；需按现有调度器重设计。 |
 | [#640](https://github.com/fawney19/Aether/pull/640)  | 2026-06-10 | 本地已有 | 已解决：默认 request recording 已是 Basic，无差异。 |
-| [#638](https://github.com/fawney19/Aether/pull/638)  | 2026-06-09 | 暂缓 | 暂缓：当前 UsageAnalyticsQuery 支持 users+provider_id；不再新增旧聚合接口。 |
-| [#634](https://github.com/fawney19/Aether/pull/634)  | 2026-06-07 | 暂缓 | 暂缓：API Key 客户计费倍率应进入不可变 admission snapshot；原实现误改供应商采购 actual_total_cost。 |
-| [#633](https://github.com/fawney19/Aether/pull/633)  | 2026-06-07 | 不合入 | 拒绝：Web 侧车持有 docker.sock、默认 token、mutable latest，扩大宿主机控制面。 |
+| [#638](https://github.com/fawney19/Aether/pull/638) | 2026-06-09 | 暂缓 | **按提供商查看用户成本归因及占比**。当前 UsageAnalyticsQuery 已支持 users+provider_id；可新增界面，但不应再建立旧聚合接口、名称匹配和内存排序链路。 |
+| [#634](https://github.com/fawney19/Aether/pull/634) | 2026-06-07 | 暂缓 | **独立 API Key 的客户计费倍率**。功能有价值，但补丁把倍率乘到供应商采购 actual_total_cost 上，污染成本统计；正确做法是纳入请求 admission 的不可变客户倍率快照。 |
+| [#633](https://github.com/fawney19/Aether/pull/633) | 2026-06-07 | 不合入 | **Web 后台触发 Docker 在线更新**。侧车持有 docker.sock、默认 token 并使用 mutable latest，把后台权限扩大到宿主机控制面，风险高于便利收益。 |
 | [#630](https://github.com/fawney19/Aether/pull/630)  | 2026-06-05 | 选取子集 | 仅 0355ed645：接纳 inline system/developer 指令并选择最后 user/assistant；不带入 ARN/profile/时延改动。 |
-| [#628](https://github.com/fawney19/Aether/pull/628)  | 2026-06-04 | 不合入 | 不合入：新增 -extra 别名无故障依据，扩大与真实模型名碰撞面；保留既有 xhigh/max。 |
+| [#628](https://github.com/fawney19/Aether/pull/628) | 2026-06-04 | 不合入 | **新增模型 -extra 指令后缀别名**。没有实际故障依据，增加与真实模型名碰撞的风险；保留现有 xhigh/max 约定。 |
 | [#626](https://github.com/fawney19/Aether/pull/626) （draft） | 2026-06-04 | 选取子集 | 仅 567926fc6：embedding/rerank 显式逐格式 auth override；无 override 保留每条路径原默认，不引入免费 provider。 |
-| [#623](https://github.com/fawney19/Aether/pull/623)  | 2026-06-03 | 不合入 | 拒绝：导出管理员 password_hash，而 importer 仍拒绝还原 full admin，没有恢复收益。 |
-| [#608](https://github.com/fawney19/Aether/pull/608)  | 2026-05-29 | 暂缓 | 暂缓：用户创建与备注分两次写导致部分成功，导入丢备注，密码生成还回退 Math.random。 |
+| [#623](https://github.com/fawney19/Aether/pull/623) | 2026-06-03 | 不合入 | **系统完整导出包含管理员账号**。会导出管理员 password_hash，导入器却仍拒绝恢复完整管理员，没有备份恢复收益，反而增加敏感数据暴露面。 |
+| [#608](https://github.com/fawney19/Aether/pull/608) | 2026-05-29 | 暂缓 | **创建用户自动生成密码、用户备注字段**。创建与备注分两次写可能部分成功；导入会丢备注；密码生成在无 crypto 时回退 Math.random，需先补原子性、备份往返及安全随机数合同。 |
 | [#588](https://github.com/fawney19/Aether/pull/588) （draft） | 2026-05-28 | 选取子集 | 仅可靠终态的失败显示纠正并保留恢复成功状态；不采纳无约束 error_message 判失败、死代码 notice 或原始错误体扩曝。 |
+
+### 只取子集的 PR：未采纳部分
+
+| PR | 未采纳功能或改动 | 原因 |
+| --- | --- | --- |
+| #901 | 默认15秒并发队列、admission 重排、新排队字段 | 改变过载时的延迟、429/503 与资源占用合同；不是取消协议的必需依赖，不能以取消修复为由一起切换。 |
+| #713 | Doubao 视频端点、每 token / 输入素材差异定价、Ark 素材库及大范围异步任务界面 | 只有已有秒价“不结算”是现行功能缺陷；其余是独立产品功能，涉及上传、外发和素材归属，需要独立设计与安全审查。 |
+| #630 | ARN/profile 与时延相关附带改动 | 与 inline system/developer 兼容无关，不带入无关行为变化。 |
+| #626 | 免费 provider 与固定密钥自动创建 | 不属于认证 override 的必要部分，且依赖当前不存在的 provider key 生命周期约定。 |
+| #588 | 任意 error_message 直接判失败、原始错误体扩曝、无效 notice | 会把重试中或恢复成功的请求误标失败，或扩大公共接口的信息泄露面。 |
+
+另有 #840（预读状态恢复）、#734（移除最后模型策略后切回统一范围）、#640（默认 Basic 记录）已被当前实现覆盖，未重复应用旧补丁。
 
 ## 关键合入边界
 
