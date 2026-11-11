@@ -129,3 +129,10 @@
 - 首次标签构建的amd64/arm64二进制、前端和安装包均成功；GHCR因已有包不授予该仓库写权限返回`permission_denied: write_package`。用户删除旧包后，由本仓库Action重新创建；不引入长期PAT。
 - `Cross.toml`仅透传`AETHER_BUILD_VERSION`、`AETHER_VERSION`、`AETHER_BUILD_TYPE`。此前cross丢弃这些变量，使二进制被标成source并阻止原生自更新；release工作流为前后端显式指定相同标签版本。
 - `actionlint .github/workflows/release.yml`通过；在无Git工作区的`/tmp`执行真实build.rs，输出版本`0.100.0`、构建类型`release`。双架构实际编译和发布仍以重建后的Action结果为准。
+
+### 发布结果
+
+- 修复提交：`e1d6bdbbf`；用户授权将未成功发布的`v0.100.0`标签更新到该提交。未改写其他标签。
+- [Release Aether #42998160253](https://github.com/wmsyw/Aether/actions/runs/42998160253)的8个job全部成功，包含两种musl二进制、前端、VSIX、多架构镜像、来源证明和GitHub Release。
+- 匿名读取GHCR manifest成功；`ghcr.io/wmsyw/aether:0.100.0`与`latest`同为`sha256:49a358774ed4ef67bb5d69785567cec7d89bd1554279db0ad10caee9ac0296ca`，含`linux/amd64`、`linux/arm64`及构建证明manifest。
+- [v0.100.0 Release](https://github.com/wmsyw/Aether/releases/tag/v0.100.0)为正式发布，含amd64/arm64 tarball、VSIX、`install.sh`、`SHA256SUMS`及sigstore来源证明；发布说明已回填。
