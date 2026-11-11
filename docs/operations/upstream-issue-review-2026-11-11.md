@@ -123,3 +123,9 @@
 存储细节：现有repository upsert会将缺省token规范化为0，公开接口仍以`usage_available=false`表达unknown。本轮没有改该写入合同；读取兼容同时覆盖数据库中已有的NULL input/output，total保留原有0语义，避免将兼容值误当真实上报零值。
 
 `live_canonical_unavailable_usage_reads_lists_and_details_without_error`真实PostgreSQL回归通过：验证upsert后unknown状态、已有NULL记录的列表/最近列表/ID详情/request_id详情/浅详情读取，以及明确上报0保持available。随后`cargo fmt --all --check`通过。本轮启动的浏览器页、前端、网关和隔离数据库均已停止。
+
+## v0.100.0 发布修复
+
+- 首次标签构建的amd64/arm64二进制、前端和安装包均成功；GHCR因已有包不授予该仓库写权限返回`permission_denied: write_package`。用户删除旧包后，由本仓库Action重新创建；不引入长期PAT。
+- `Cross.toml`仅透传`AETHER_BUILD_VERSION`、`AETHER_VERSION`、`AETHER_BUILD_TYPE`。此前cross丢弃这些变量，使二进制被标成source并阻止原生自更新；release工作流为前后端显式指定相同标签版本。
+- `actionlint .github/workflows/release.yml`通过；在无Git工作区的`/tmp`执行真实build.rs，输出版本`0.100.0`、构建类型`release`。双架构实际编译和发布仍以重建后的Action结果为准。

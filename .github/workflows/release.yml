@@ -89,6 +89,9 @@ jobs:
 
       - name: Install & build
         working-directory: frontend
+        env:
+          AETHER_BUILD_VERSION: ${{ needs.preflight.outputs.version_tag }}
+          AETHER_VERSION: ${{ needs.preflight.outputs.version_tag }}
         run: |
           npm ci
           npm run build
@@ -206,6 +209,7 @@ jobs:
 
       - name: Build
         env:
+          AETHER_BUILD_VERSION: ${{ needs.preflight.outputs.version_tag }}
           AETHER_VERSION: ${{ needs.preflight.outputs.version_tag }}
           AETHER_BUILD_TYPE: release
           CARGO_TERM_COLOR: always

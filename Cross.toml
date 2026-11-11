@@ -1,0 +1,2 @@
+[build.env]
+passthrough = ["AETHER_BUILD_VERSION", "AETHER_VERSION", "AETHER_BUILD_TYPE"]
