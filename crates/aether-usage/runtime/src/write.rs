@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use aether_ai_formats::UPSTREAM_IS_STREAM_KEY;
 use aether_contracts::{ExecutionPlan, ExecutionTelemetry};
 use aether_data_contracts::repository::usage::{
+    authorize_provider_cancelled_usage_metadata, strip_provider_cancelled_usage_authorization,
     UpsertUsageRecord, UsageBodyCaptureState, BILLING_MULTIPLIER_SNAPSHOT_METADATA_KEY,
     LIVE_SESSION_METADATA_KEY, ROUTING_GROUP_BILLING_MULTIPLIER_METADATA_KEY,
     ROUTING_GROUP_ID_METADATA_KEY, ROUTING_GROUP_NAME_METADATA_KEY, USAGE_AVAILABLE_METADATA_KEY,
@@ -155,6 +156,30 @@ pub struct TerminalUsageContextSeed {
     body_states: UsageBodyStatesSeed,
     routing: UsageRoutingSeed,
     pub request_metadata: Option<Value>,
+    /// Trusted authorization for billing provider-cancelled usage.
+    ///
+    /// Deliberately separate from [`Self::request_metadata`]: metadata is
+    /// caller-controlled and its authorization marker is stripped at every
+    /// public seed boundary. Only a transport that observed the provider's own
+    /// cancellation terminal with reported usage may set this.
+    provider_cancelled_usage_authorized: bool,
+}
+
+impl TerminalUsageContextSeed {
+    /// Authorizes provider-cancelled usage billing for this terminal.
+    ///
+    /// Callers must have observed a provider-declared cancellation terminal
+    /// that also reported usage. Arbitrary seed metadata cannot express this
+    /// fact: the marker is stripped before a public builder decides whether to
+    /// apply it from this explicit authorization.
+    pub fn authorize_provider_cancelled_usage(&mut self) {
+        self.provider_cancelled_usage_authorized = true;
+    }
+
+    /// Whether this seed carries a trusted provider-cancelled authorization.
+    pub fn provider_cancelled_usage_authorized(&self) -> bool {
+        self.provider_cancelled_usage_authorized
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +221,14 @@ pub struct StreamTerminalUsagePayloadSeed {
 pub struct TerminalUsageSeed {
     token_measurement_source: &'static str,
     pub terminal_state: UsageTerminalState,
+    /// Keeps the record unsettled even though the request itself finished.
+    ///
+    /// An async job submission (video create) returns success as soon as the
+    /// upstream accepts the task, but its tokens and cost are only known when
+    /// the poller sees the job finish. Settling now would freeze the record at
+    /// zero, because the usage upsert only accepts token and cost updates while
+    /// `billing_status = 'pending'`.
+    pub defer_settlement: bool,
     pub client_contract: String,
     pub provider_contract: String,
     pub request_id: String,
@@ -231,6 +264,12 @@ pub struct TerminalUsageSeed {
     pub client_response: Option<Value>,
     routing: UsageRoutingSeed,
     pub request_metadata: Option<Value>,
+    /// Trusted authorization carried from [`TerminalUsageContextSeed`].
+    ///
+    /// Never derived from [`Self::request_metadata`] or [`Self::audit_payload`];
+    /// those caller-controlled fields are stripped of the marker before the
+    /// authorizing builder applies it.
+    provider_cancelled_usage_authorized: bool,
     pub audit_payload: Option<Value>,
     pub standardized_usage: Option<StandardizedUsage>,
 }
@@ -657,6 +696,7 @@ fn build_terminal_usage_event_from_seed_impl(
     let TerminalUsageSeed {
         token_measurement_source,
         terminal_state,
+        defer_settlement,
         client_contract,
         provider_contract,
         request_id,
@@ -692,10 +732,14 @@ fn build_terminal_usage_event_from_seed_impl(
         client_response,
         routing,
         request_metadata,
+        provider_cancelled_usage_authorized,
         audit_payload,
         standardized_usage,
     } = seed;
     let event_type = match terminal_state {
+        // A deferred submission stays pending so the terminal poll can still
+        // write the tokens and cost it discovers later.
+        UsageTerminalState::Completed if defer_settlement => UsageEventType::Pending,
         UsageTerminalState::Completed => UsageEventType::Completed,
         UsageTerminalState::Failed => UsageEventType::Failed,
         UsageTerminalState::Cancelled => UsageEventType::Cancelled,
@@ -716,11 +760,18 @@ fn build_terminal_usage_event_from_seed_impl(
         .filter(StandardizedUsage::has_token_signal);
     let standardized_usage =
         StandardizedUsage::choose_more_complete(standardized_usage, derived_standardized_usage);
-    let request_metadata = if trusted_request_metadata {
+    let mut request_metadata = if trusted_request_metadata {
         merge_usage_request_metadata_owned(request_metadata, audit_payload)
     } else {
         merge_usage_request_metadata(request_metadata, audit_payload)
     };
+    // `provider_cancelled_usage` authorizes billing a cancelled request. Both
+    // `request_metadata` and `audit_payload` come from public seeds, so the
+    // marker is only re-applied from the seed's explicit trusted authorization.
+    strip_provider_cancelled_usage_authorization(&mut request_metadata);
+    if provider_cancelled_usage_authorized {
+        authorize_provider_cancelled_usage_metadata(&mut request_metadata);
+    }
     let request_metadata =
         attach_client_request_body_metadata(request_metadata, request_body.as_ref());
     let request_metadata = attach_provider_request_body_metadata(
@@ -854,6 +905,14 @@ pub fn build_terminal_usage_context_seed(
         client_contract.as_str(),
         provider_contract.as_str(),
     );
+    let mut request_metadata = merge_usage_request_metadata_owned(
+        merge_usage_request_metadata_owned(
+            build_usage_request_metadata_seed(plan, context),
+            build_plan_body_capture_metadata(plan.body.body_bytes_b64.as_deref()),
+        ),
+        build_runtime_body_size_request_metadata(plan, context),
+    );
+    strip_provider_cancelled_usage_authorization(&mut request_metadata);
 
     TerminalUsageContextSeed {
         token_measurement_source: match context_value_ref(context, "usage_token_source")
@@ -906,13 +965,8 @@ pub fn build_terminal_usage_context_seed(
             client_response_body_ref: context_string(context, "client_response_body_ref"),
         },
         body_states: request_capture.body_states,
-        request_metadata: merge_usage_request_metadata_owned(
-            merge_usage_request_metadata_owned(
-                build_usage_request_metadata_seed(plan, context),
-                build_plan_body_capture_metadata(plan.body.body_bytes_b64.as_deref()),
-            ),
-            build_runtime_body_size_request_metadata(plan, context),
-        ),
+        request_metadata,
+        provider_cancelled_usage_authorized: false,
     }
 }
 
@@ -1039,9 +1093,11 @@ pub fn build_stream_terminal_usage_payload_seed(
 }
 
 pub fn build_sync_terminal_usage_seed(
-    context_seed: TerminalUsageContextSeed,
+    mut context_seed: TerminalUsageContextSeed,
     payload_seed: SyncTerminalUsagePayloadSeed,
 ) -> TerminalUsageSeed {
+    strip_provider_cancelled_usage_authorization(&mut context_seed.request_metadata);
+    let provider_cancelled_usage_authorized = context_seed.provider_cancelled_usage_authorized;
     let SyncTerminalUsagePayloadSeed {
         report_kind,
         status_code,
@@ -1054,8 +1110,9 @@ pub fn build_sync_terminal_usage_seed(
         client_response,
         client_response_body_state,
         standardized_usage,
-        capture_metadata,
+        mut capture_metadata,
     } = payload_seed;
+    strip_provider_cancelled_usage_authorization(&mut capture_metadata);
     let derived_standardized_usage = provider_response_full
         .as_ref()
         .map(|response| map_usage_from_response(response, context_seed.provider_contract.as_str()));
@@ -1098,6 +1155,7 @@ pub fn build_sync_terminal_usage_seed(
     TerminalUsageSeed {
         token_measurement_source,
         terminal_state,
+        defer_settlement: report_kind_defers_settlement(report_kind.as_str()),
         client_contract: context_seed.client_contract,
         provider_contract: context_seed.provider_contract,
         request_id: context_seed.request_id,
@@ -1138,6 +1196,7 @@ pub fn build_sync_terminal_usage_seed(
         client_response_headers,
         client_response,
         request_metadata,
+        provider_cancelled_usage_authorized,
         audit_payload: capture_metadata,
         standardized_usage,
     }
@@ -1163,10 +1222,12 @@ fn merge_standardized_usage_with_context_cache(
 }
 
 pub fn build_stream_terminal_usage_seed(
-    context_seed: TerminalUsageContextSeed,
+    mut context_seed: TerminalUsageContextSeed,
     payload_seed: StreamTerminalUsagePayloadSeed,
     cancelled: bool,
 ) -> TerminalUsageSeed {
+    strip_provider_cancelled_usage_authorization(&mut context_seed.request_metadata);
+    let provider_cancelled_usage_authorized = context_seed.provider_cancelled_usage_authorized;
     let StreamTerminalUsagePayloadSeed {
         report_kind,
         status_code,
@@ -1182,8 +1243,9 @@ pub fn build_stream_terminal_usage_seed(
         provider_actual_service_tier,
         observed_stream_finish,
         terminal_error_message,
-        capture_metadata,
+        mut capture_metadata,
     } = payload_seed;
+    strip_provider_cancelled_usage_authorization(&mut capture_metadata);
     let standardized_usage = standardized_usage.or_else(|| {
         provider_response_full.as_ref().map(|response| {
             map_usage_from_response(response, context_seed.provider_contract.as_str())
@@ -1292,6 +1354,7 @@ pub fn build_stream_terminal_usage_seed(
     TerminalUsageSeed {
         token_measurement_source: context_seed.token_measurement_source,
         terminal_state,
+        defer_settlement: false,
         client_contract: context_seed.client_contract,
         provider_contract: context_seed.provider_contract,
         request_id: context_seed.request_id,
@@ -1332,6 +1395,7 @@ pub fn build_stream_terminal_usage_seed(
         client_response_headers,
         client_response,
         request_metadata,
+        provider_cancelled_usage_authorized,
         audit_payload: capture_metadata,
         standardized_usage,
     }
@@ -1353,6 +1417,26 @@ fn infer_sync_terminal_state(
     } else {
         UsageTerminalState::Completed
     }
+}
+
+/// Whether a successful report only submitted work whose cost is not yet known.
+///
+/// Video create returns as soon as the upstream accepts the task; tokens and
+/// cost arrive later from the poller. Settling at submission time would pin the
+/// record to zero, since the usage upsert refuses token and cost updates once
+/// `billing_status` leaves `pending`.
+///
+/// Cancel and delete reports are genuinely terminal and settle normally.
+fn report_kind_defers_settlement(report_kind: &str) -> bool {
+    matches!(
+        report_kind,
+        "openai_video_create_sync_success"
+            | "openai_video_create_sync_finalize"
+            | "openai_video_remix_sync_success"
+            | "openai_video_remix_sync_finalize"
+            | "gemini_video_create_sync_success"
+            | "gemini_video_create_sync_finalize"
+    )
 }
 
 fn infer_stream_terminal_state(
@@ -2808,7 +2892,6 @@ fn standardized_usage_total_tokens(usage: &StandardizedUsage) -> u64 {
 
     positive_usage_component(usage.input_tokens)
         .saturating_add(positive_usage_component(usage.output_tokens))
-        .saturating_add(positive_usage_component(usage.reasoning_tokens))
 }
 
 fn standardized_usage_explicit_total_tokens(usage: &StandardizedUsage) -> Option<u64> {
@@ -3584,22 +3667,10 @@ fn extract_token_counts_from_json(value: &Value) -> Option<(u64, u64, u64)> {
             .or_else(|| usage.get("completion_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or_default();
-        let reasoning = usage
-            .get("reasoning_tokens")
-            .and_then(Value::as_u64)
-            .or_else(|| {
-                usage
-                    .get("output_tokens_details")
-                    .or_else(|| usage.get("completion_tokens_details"))
-                    .and_then(Value::as_object)
-                    .and_then(|details| details.get("reasoning_tokens"))
-                    .and_then(Value::as_u64)
-            })
-            .unwrap_or_default();
         let total = usage
             .get("total_tokens")
             .and_then(Value::as_u64)
-            .unwrap_or_else(|| input.saturating_add(output).saturating_add(reasoning));
+            .unwrap_or_else(|| input.saturating_add(output));
         return Some((input, output, total));
     }
 
@@ -3611,11 +3682,17 @@ fn extract_token_counts_from_json(value: &Value) -> Option<(u64, u64, u64)> {
         let output = usage
             .get("candidatesTokenCount")
             .and_then(Value::as_u64)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .saturating_add(
+                usage
+                    .get("thoughtsTokenCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            );
         let raw_total = usage
             .get("totalTokenCount")
             .and_then(Value::as_u64)
-            .unwrap_or(input + output);
+            .unwrap_or_else(|| input.saturating_add(output));
         return Some((input, output, raw_total));
     }
 
@@ -3641,16 +3718,17 @@ mod tests {
     use super::{
         build_pending_usage_event_from_owned_seed, build_pending_usage_record,
         build_pending_usage_record_from_seed, build_stream_terminal_usage_event,
+        build_stream_terminal_usage_payload_seed, build_stream_terminal_usage_seed,
         build_streaming_usage_event_from_owned_seed, build_streaming_usage_record,
         build_sync_terminal_usage_event, build_sync_terminal_usage_payload_seed,
         build_sync_terminal_usage_seed, build_terminal_usage_context_seed,
-        build_terminal_usage_event_from_seed, build_usage_event_data_seed,
-        build_usage_event_data_seed_describing_request_bodies, decode_body_for_storage,
-        extract_token_counts_from_json, extract_token_counts_from_value, headers_to_json,
-        mask_sensitive_body_fields, parse_sse_body_for_storage, resolve_error_message,
-        trim_owned_non_empty_string, validate_usage_headers_in_json_value, LifecycleUsageSeed,
-        TerminalUsageSeed, UsageBodyRefsSeed, UsageBodyStatesSeed, UsageRoutingSeed,
-        UsageTerminalState, MAX_USAGE_CAPTURE_BYTES, MAX_USAGE_CAPTURE_DEPTH,
+        build_terminal_usage_event_from_outcome, build_terminal_usage_event_from_seed,
+        build_usage_event_data_seed, build_usage_event_data_seed_describing_request_bodies,
+        decode_body_for_storage, extract_token_counts_from_json, extract_token_counts_from_value,
+        headers_to_json, mask_sensitive_body_fields, parse_sse_body_for_storage,
+        resolve_error_message, trim_owned_non_empty_string, validate_usage_headers_in_json_value,
+        LifecycleUsageSeed, TerminalUsageSeed, UsageBodyRefsSeed, UsageBodyStatesSeed,
+        UsageRoutingSeed, UsageTerminalState, MAX_USAGE_CAPTURE_BYTES, MAX_USAGE_CAPTURE_DEPTH,
     };
     use crate::{
         build_upsert_usage_record_from_event, GatewayStreamReportRequest, GatewaySyncReportRequest,
@@ -3665,6 +3743,17 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn total_tokens_does_not_count_reasoning_twice() {
+        let usage = aether_contracts::StandardizedUsage {
+            input_tokens: 35,
+            output_tokens: 70,
+            reasoning_tokens: 65,
+            ..aether_contracts::StandardizedUsage::new()
+        };
+        assert_eq!(super::standardized_usage_total_tokens(&usage), 105);
+    }
+
+    #[test]
     fn extracts_openai_usage_tokens() {
         let tokens = extract_token_counts_from_json(&json!({
             "usage": {
@@ -3676,6 +3765,32 @@ mod tests {
         .expect("tokens should exist");
 
         assert_eq!(tokens, (3, 5, 8));
+    }
+
+    #[test]
+    fn extracts_openai_usage_without_counting_reasoning_twice() {
+        let tokens = extract_token_counts_from_json(&json!({
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 5,
+                "output_tokens_details": { "reasoning_tokens": 2 }
+            }
+        }))
+        .unwrap();
+        assert_eq!(tokens, (3, 5, 8));
+    }
+
+    #[test]
+    fn extracts_gemini_usage_with_thoughts_in_output() {
+        let tokens = extract_token_counts_from_json(&json!({
+            "usageMetadata": {
+                "promptTokenCount": 3,
+                "candidatesTokenCount": 5,
+                "thoughtsTokenCount": 2
+            }
+        }))
+        .unwrap();
+        assert_eq!(tokens, (3, 7, 10));
     }
 
     #[test]
@@ -4764,6 +4879,7 @@ mod tests {
             body: RequestBody::from_json(json!({
                 "model": "gpt-5.4",
                 "input": "This cancelled request has terminal upstream usage",
+                "provider_cancelled_usage": true,
                 "stream": true
             })),
             stream: true,
@@ -4784,7 +4900,8 @@ mod tests {
             report_kind: "openai_responses_stream_cancelled".to_string(),
             report_context: Some(json!({
                 "client_api_format": "openai:responses",
-                "provider_api_format": "openai:responses"
+                "provider_api_format": "openai:responses",
+                "provider_cancelled_usage": true
             })),
             status_code: 499,
             headers: BTreeMap::new(),
@@ -4815,6 +4932,185 @@ mod tests {
         assert_eq!(event.data.total_tokens, Some(34));
         assert_eq!(event.data.cache_creation_input_tokens, Some(2));
         assert_eq!(event.data.cache_read_input_tokens, Some(3));
+        let record = crate::build_upsert_usage_record_from_event(&event)
+            .expect("cancelled usage record should build");
+        assert_eq!(record.billing_status, "void");
+        assert!(record
+            .request_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("provider_cancelled_usage"))
+            .is_none());
+    }
+
+    fn cancellation_plan() -> ExecutionPlan {
+        serde_json::from_value(json!({
+            "request_id": "req-provider-cancelled-authorization",
+            "provider_name": "OpenAI",
+            "provider_id": "provider-1",
+            "endpoint_id": "endpoint-1",
+            "key_id": "key-1",
+            "method": "POST",
+            "url": "https://example.com/v1/responses",
+            "body": {"json_body": {"model": "gpt-5", "input": "cancel me"}},
+            "stream": true,
+            "client_api_format": "openai:responses",
+            "provider_api_format": "openai:responses",
+            "model_name": "gpt-5"
+        }))
+        .expect("cancellation plan should deserialize")
+    }
+
+    fn cancelled_stream_report() -> GatewayStreamReportRequest {
+        GatewayStreamReportRequest {
+            trace_id: "trace-provider-cancelled".to_string(),
+            report_kind: "openai_responses_stream_cancelled".to_string(),
+            report_context: None,
+            status_code: 499,
+            headers: BTreeMap::new(),
+            provider_body_base64: None,
+            provider_body_state: Some(UsageBodyCaptureState::None),
+            client_body_base64: None,
+            client_body_state: Some(UsageBodyCaptureState::None),
+            terminal_summary: Some(ExecutionStreamTerminalSummary {
+                standardized_usage: Some(StandardizedUsage {
+                    input_tokens: 9,
+                    output_tokens: 3,
+                    ..Default::default()
+                }),
+                observed_finish: true,
+                ..Default::default()
+            }),
+            telemetry: None,
+        }
+    }
+
+    fn cancelled_sync_report() -> GatewaySyncReportRequest {
+        GatewaySyncReportRequest {
+            trace_id: "trace-provider-cancelled-sync".to_string(),
+            report_kind: "openai_responses_sync_cancelled".to_string(),
+            report_context: None,
+            status_code: 499,
+            headers: BTreeMap::new(),
+            body_json: Some(json!({"status": "cancelled"})),
+            client_body_json: None,
+            body_base64: None,
+            telemetry: None,
+        }
+    }
+
+    fn provider_cancelled_marker(metadata: Option<&Value>) -> Option<&Value> {
+        metadata.and_then(|metadata| metadata.get("provider_cancelled_usage"))
+    }
+
+    #[test]
+    fn terminal_context_seed_metadata_cannot_authorize_provider_cancelled_usage() {
+        let plan = cancellation_plan();
+        let mut context = build_terminal_usage_context_seed(
+            &plan,
+            Some(&json!({
+                "trace_id": "trace-context",
+                "provider_cancelled_usage": true
+            })),
+        );
+        assert!(provider_cancelled_marker(context.request_metadata.as_ref()).is_none());
+
+        // The public field remains caller-controlled even after the builder
+        // stripped the report context.
+        context.request_metadata = Some(json!({"provider_cancelled_usage": true}));
+        let payload = build_stream_terminal_usage_payload_seed(&cancelled_stream_report());
+        let event = build_terminal_usage_event_from_seed(build_stream_terminal_usage_seed(
+            context, payload, false,
+        ))
+        .expect("cancelled stream usage should build");
+
+        assert_eq!(event.event_type, UsageEventType::Cancelled);
+        assert!(provider_cancelled_marker(event.data.request_metadata.as_ref()).is_none());
+        let record = build_upsert_usage_record_from_event(&event)
+            .expect("cancelled usage record should build");
+        assert_eq!(record.billing_status, "void");
+    }
+
+    #[test]
+    fn terminal_seed_metadata_and_audit_payload_cannot_authorize_provider_cancelled_usage() {
+        let plan = cancellation_plan();
+        let context = build_terminal_usage_context_seed(&plan, None);
+        let payload = build_stream_terminal_usage_payload_seed(&cancelled_stream_report());
+        let mut seed = build_stream_terminal_usage_seed(context, payload, false);
+        seed.request_metadata = Some(json!({"provider_cancelled_usage": true}));
+        seed.audit_payload = Some(json!({"provider_cancelled_usage": true}));
+
+        let event = build_terminal_usage_event_from_seed(seed)
+            .expect("cancelled stream usage should build");
+
+        assert_eq!(event.event_type, UsageEventType::Cancelled);
+        assert!(provider_cancelled_marker(event.data.request_metadata.as_ref()).is_none());
+        let record = build_upsert_usage_record_from_event(&event)
+            .expect("cancelled usage record should build");
+        assert_eq!(record.billing_status, "void");
+    }
+
+    #[test]
+    fn payload_capture_metadata_cannot_authorize_provider_cancelled_usage() {
+        let plan = cancellation_plan();
+
+        let mut stream_payload =
+            build_stream_terminal_usage_payload_seed(&cancelled_stream_report());
+        stream_payload.capture_metadata = Some(json!({"provider_cancelled_usage": true}));
+        let stream_event = build_terminal_usage_event_from_seed(build_stream_terminal_usage_seed(
+            build_terminal_usage_context_seed(&plan, None),
+            stream_payload,
+            false,
+        ))
+        .expect("cancelled stream usage should build");
+        assert_eq!(stream_event.event_type, UsageEventType::Cancelled);
+        assert!(provider_cancelled_marker(stream_event.data.request_metadata.as_ref()).is_none());
+        assert_eq!(
+            build_upsert_usage_record_from_event(&stream_event)
+                .expect("cancelled usage record should build")
+                .billing_status,
+            "void"
+        );
+
+        let mut sync_payload = build_sync_terminal_usage_payload_seed(&cancelled_sync_report());
+        sync_payload.capture_metadata = Some(json!({"provider_cancelled_usage": true}));
+        let sync_event = build_terminal_usage_event_from_outcome(build_sync_terminal_usage_seed(
+            build_terminal_usage_context_seed(&plan, None),
+            sync_payload,
+        ))
+        .expect("cancelled sync usage should build");
+        assert_eq!(sync_event.event_type, UsageEventType::Cancelled);
+        assert!(provider_cancelled_marker(sync_event.data.request_metadata.as_ref()).is_none());
+        assert_eq!(
+            build_upsert_usage_record_from_event(&sync_event)
+                .expect("cancelled usage record should build")
+                .billing_status,
+            "void"
+        );
+    }
+
+    #[test]
+    fn authorized_terminal_context_seed_bills_provider_cancelled_usage() {
+        let plan = cancellation_plan();
+        let mut context = build_terminal_usage_context_seed(&plan, None);
+        context.authorize_provider_cancelled_usage();
+        let payload = build_stream_terminal_usage_payload_seed(&cancelled_stream_report());
+
+        let event = build_terminal_usage_event_from_seed(build_stream_terminal_usage_seed(
+            context, payload, false,
+        ))
+        .expect("cancelled stream usage should build");
+
+        assert_eq!(event.event_type, UsageEventType::Cancelled);
+        assert_eq!(
+            provider_cancelled_marker(event.data.request_metadata.as_ref()),
+            Some(&json!(true))
+        );
+        assert_eq!(event.data.input_tokens, Some(9));
+        assert_eq!(event.data.output_tokens, Some(3));
+        let record = build_upsert_usage_record_from_event(&event)
+            .expect("cancelled usage record should build");
+        assert_eq!(record.status, "cancelled");
+        assert_eq!(record.billing_status, "pending");
     }
 
     #[test]
@@ -6905,6 +7201,7 @@ mod tests {
         let event = build_terminal_usage_event_from_seed(TerminalUsageSeed {
             token_measurement_source: "reported",
             terminal_state: UsageTerminalState::Completed,
+            defer_settlement: false,
             client_contract: "openai:chat".to_string(),
             provider_contract: "openai:chat".to_string(),
             request_id: "req-manual-seed-1".to_string(),
@@ -6965,6 +7262,7 @@ mod tests {
                     "payload": "x".repeat(32 * 1024)
                 }
             })),
+            provider_cancelled_usage_authorized: false,
             audit_payload: None,
             standardized_usage: None,
         })
@@ -7456,6 +7754,85 @@ mod tests {
         assert_eq!(
             extract_token_counts_from_value(&Value::String(sse_body.to_string())),
             Some((3, 5, 8)),
+        );
+    }
+}
+
+#[cfg(test)]
+mod deferred_settlement_tests {
+    use super::{report_kind_defers_settlement, UsageTerminalState};
+    use crate::UsageEventType;
+
+    #[test]
+    fn video_create_reports_defer_settlement() {
+        for report_kind in [
+            "openai_video_create_sync_success",
+            "openai_video_create_sync_finalize",
+            "openai_video_remix_sync_success",
+            "openai_video_remix_sync_finalize",
+            "gemini_video_create_sync_success",
+            "gemini_video_create_sync_finalize",
+        ] {
+            assert!(
+                report_kind_defers_settlement(report_kind),
+                "{report_kind} only submits a job; its cost is unknown until it finishes"
+            );
+        }
+    }
+
+    #[test]
+    fn genuinely_terminal_reports_settle_immediately() {
+        // Cancel and delete end the task, and chat completions already carry
+        // their usage, so none of them may be held open.
+        for report_kind in [
+            "openai_video_delete_sync_success",
+            "openai_video_cancel_sync_success",
+            "gemini_video_cancel_sync_success",
+            "openai_video_create_sync_error",
+            "openai_chat_sync_success",
+            "openai_chat_sync_finalize",
+        ] {
+            assert!(
+                !report_kind_defers_settlement(report_kind),
+                "{report_kind} is terminal and must settle"
+            );
+        }
+    }
+
+    /// Mirrors the event-type decision in `build_terminal_usage_event_from_seed_impl`.
+    fn event_type_for(terminal_state: UsageTerminalState, defer: bool) -> UsageEventType {
+        match terminal_state {
+            UsageTerminalState::Completed if defer => UsageEventType::Pending,
+            UsageTerminalState::Completed => UsageEventType::Completed,
+            UsageTerminalState::Failed => UsageEventType::Failed,
+            UsageTerminalState::Cancelled => UsageEventType::Cancelled,
+        }
+    }
+
+    #[test]
+    fn deferred_success_stays_pending_so_later_tokens_are_accepted() {
+        // The usage upsert only applies token and cost updates while
+        // billing_status is 'pending'; settling here would freeze it at zero.
+        assert_eq!(
+            event_type_for(UsageTerminalState::Completed, true),
+            UsageEventType::Pending
+        );
+        assert_eq!(
+            event_type_for(UsageTerminalState::Completed, false),
+            UsageEventType::Completed
+        );
+    }
+
+    #[test]
+    fn deferral_never_masks_a_failure() {
+        // A submission that failed is final: there is no later poll to correct it.
+        assert_eq!(
+            event_type_for(UsageTerminalState::Failed, true),
+            UsageEventType::Failed
+        );
+        assert_eq!(
+            event_type_for(UsageTerminalState::Cancelled, true),
+            UsageEventType::Cancelled
         );
     }
 }

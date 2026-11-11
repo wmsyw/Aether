@@ -197,7 +197,8 @@ export function isUsageRecordFailed(record: UsageFailureSignal & Pick<UsageRecor
   const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : ''
   if (status) {
     if (status === 'pending' || status === 'streaming') {
-      return !hasTerminalSuccessStatusCode(record) && hasAnyFailureSignal(record)
+      return hasImageProgressFailureSignal(record) ||
+        (!hasTerminalSuccessStatusCode(record) && hasLegacyFailureSignal(record))
     }
     if (status === 'cancelled') {
       return false
@@ -208,6 +209,9 @@ export function isUsageRecordFailed(record: UsageFailureSignal & Pick<UsageRecor
     if (status === 'failed') {
       return true
     }
+  }
+  if (hasImageProgressFailureSignal(record)) {
+    return true
   }
   if (hasTerminalSuccessStatusCode(record)) {
     return false
@@ -252,8 +256,8 @@ export function normalizeRequestStatus(status: RequestStatusLike): RequestStatus
 export function resolveDisplayRequestStatus(record: UsageDisplayStatusRecord): RequestStatus | undefined {
   const status = normalizeRequestStatus(record.status)
   if ((status === 'pending' || status === 'streaming') &&
-    !hasTerminalSuccessStatusCode(record) &&
-    hasAnyFailureSignal(record)) {
+    (hasImageProgressFailureSignal(record) ||
+      (!hasTerminalSuccessStatusCode(record) && hasLegacyFailureSignal(record)))) {
     return 'failed'
   }
   if (status === 'streaming' && record.first_byte_time_ms == null) {
@@ -312,11 +316,16 @@ export function resolveTimelineFinalStatus(params: {
     }
     return requestStatus
   }
+  const traceStatus = normalizeTimelineFinalStatus(params.traceFinalStatus)
+  // A failed trace can be the last observed attempt during recovery. Only
+  // terminalize an active request once no candidate is genuinely live.
+  if ((traceStatus === 'failed' || traceStatus === 'cancelled') && !params.hasPendingCandidates) {
+    return traceStatus
+  }
   if (requestStatus === 'pending' || requestStatus === 'streaming') {
     return requestStatus
   }
 
-  const traceStatus = normalizeTimelineFinalStatus(params.traceFinalStatus)
   if (traceStatus === 'success' || traceStatus === 'failed' || traceStatus === 'cancelled') {
     if (traceStatus === 'success' && hasTerminalSuccessStatusCode === false) {
       return 'failed'

@@ -2087,7 +2087,7 @@ impl OpenAIResponsesProviderState {
                 }
                 out.push(self.unknown_frame(report_context, payload));
             }
-            "response.completed" | "response.done" => {
+            event_type @ ("response.completed" | "response.done" | "response.cancelled") => {
                 let Some(response) = value.get("response").and_then(Value::as_object) else {
                     return Ok(out);
                 };
@@ -2095,11 +2095,14 @@ impl OpenAIResponsesProviderState {
                 let (id, model) = self.identity(report_context);
                 self.emit_response_output_items(report_context, &mut out, response);
 
-                let finish_reason = if self.tool_calls.is_empty() {
-                    Some("stop".to_string())
-                } else {
-                    Some("tool_calls".to_string())
-                };
+                let finish_reason =
+                    match (event_type, response.get("status").and_then(Value::as_str)) {
+                        ("response.cancelled", _) | (_, Some("cancelled")) => {
+                            Some("cancelled".to_string())
+                        }
+                        _ if self.tool_calls.is_empty() => Some("stop".to_string()),
+                        _ => Some("tool_calls".to_string()),
+                    };
                 out.push(CanonicalStreamFrame {
                     id,
                     model,
@@ -3305,6 +3308,39 @@ impl OpenAIResponsesClientEmitter {
 
     fn incomplete_response(&self, usage: CanonicalUsage, reason: &str) -> Value {
         self.terminal_response(usage, "incomplete", Some(reason))
+    }
+
+    fn cancelled_response(&self, usage: Option<&CanonicalUsage>) -> Value {
+        self.terminal_response(usage.cloned().unwrap_or_default(), "cancelled", None)
+    }
+
+    /// Emits the native `response.cancelled` terminal.
+    ///
+    /// A cancelled response is terminal but never completed, so partial output
+    /// and reported usage are preserved while no completed history is recorded:
+    /// `previous_response_id` must not replay a response that never finished.
+    pub(crate) fn emit_provider_cancelled(
+        &mut self,
+        usage: Option<&CanonicalUsage>,
+    ) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        let mut out = self.ensure_started()?;
+        out.extend(self.finish_reasoning_item()?);
+        out.extend(self.finish_text_item()?);
+        out.extend(self.finish_tool_items()?);
+        out.extend(self.finish_tool_result_items()?);
+        let response = self.cancelled_response(usage);
+        out.extend(self.encode_response_event(
+            "response.cancelled",
+            json!({
+                "type": "response.cancelled",
+                "response": response,
+            }),
+        )?);
+        self.finished = true;
+        Ok(out)
     }
 
     pub(crate) fn finish_with_authoritative_response_event(
@@ -5012,6 +5048,77 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn openai_responses_provider_state_preserves_cancelled_terminal_usage() {
+        for event_type in ["response.cancelled", "response.done", "response.completed"] {
+            let mut state = OpenAIResponsesProviderState::default();
+            let report_context = json!({});
+            let frames = state
+                .push_event(
+                    &report_context,
+                    &json!({
+                        "type": event_type,
+                        "response": {
+                            "id": "resp_cancelled_usage",
+                            "model": "gpt-5.5",
+                            "status": "cancelled",
+                            "output": [{
+                                "id": "msg_cancelled_usage",
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Partial answer"}],
+                            }],
+                            "usage": {
+                                "input_tokens": 26,
+                                "input_tokens_details": {"cached_tokens": 7, "cache_write_tokens": 6},
+                                "output_tokens": 13,
+                                "output_tokens_details": {"reasoning_tokens": 3},
+                                "total_tokens": 39,
+                            },
+                        },
+                    }),
+                )
+                .expect("cancelled terminal event should parse");
+
+            let finishes: Vec<_> = frames
+                .iter()
+                .filter(|frame| matches!(frame.event, CanonicalStreamEvent::Finish { .. }))
+                .collect();
+            assert_eq!(finishes.len(), 1, "{event_type}");
+            assert_eq!(finishes[0].id, "resp_cancelled_usage");
+            assert_eq!(finishes[0].model, "gpt-5.5");
+            assert!(
+                matches!(
+                    &finishes[0].event,
+                    CanonicalStreamEvent::Finish {
+                        finish_reason: Some(reason),
+                        usage: Some(CanonicalUsage {
+                            input_tokens: 26,
+                            output_tokens: 13,
+                            total_tokens: 39,
+                            cache_read_tokens: 7,
+                            cache_creation_tokens: 6,
+                            reasoning_tokens: 3,
+                            ..
+                        }),
+                    } if reason == "cancelled"
+                ),
+                "{event_type}"
+            );
+            assert!(
+                frames.iter().any(|frame| matches!(
+                    &frame.event,
+                    CanonicalStreamEvent::TextDelta(text) if text == "Partial answer"
+                )),
+                "{event_type}"
+            );
+            assert!(
+                state.finish(&report_context).unwrap().is_empty(),
+                "{event_type}"
+            );
+        }
     }
 
     #[test]

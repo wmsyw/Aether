@@ -120,7 +120,7 @@ INNER JOIN LATERAL (
       OR (
         LOWER(BTRIM(p.provider_type)) = 'vertex_ai'
         AND LOWER(BTRIM(pak.auth_type)) IN ('api_key', 'service_account', 'vertex_ai')
-        AND LOWER($3) IN ('gemini:generate_content', 'gemini:embedding')
+        AND (LOWER($3) IN ('gemini:generate_content', 'gemini:embedding') OR (LOWER($3) = 'gemini:interactions' AND LOWER(BTRIM(pak.auth_type)) IN ('service_account', 'vertex_ai')))
       )
       OR (
         LOWER(BTRIM(p.provider_type)) NOT IN (
@@ -211,7 +211,7 @@ WHERE p.is_active = TRUE
     OR (
       LOWER(BTRIM(p.provider_type)) = 'vertex_ai'
       AND LOWER(BTRIM(pak.auth_type)) IN ('api_key', 'service_account', 'vertex_ai')
-      AND LOWER($3) IN ('gemini:generate_content', 'gemini:embedding')
+      AND (LOWER($3) IN ('gemini:generate_content', 'gemini:embedding') OR (LOWER($3) = 'gemini:interactions' AND LOWER(BTRIM(pak.auth_type)) IN ('service_account', 'vertex_ai')))
     )
     OR (
       LOWER(BTRIM(p.provider_type)) NOT IN (
@@ -395,7 +395,7 @@ INNER JOIN LATERAL (
       OR (
         LOWER(BTRIM(p.provider_type)) = 'vertex_ai'
         AND LOWER(BTRIM(pak.auth_type)) IN ('api_key', 'service_account', 'vertex_ai')
-        AND LOWER($4) IN ('gemini:generate_content', 'gemini:embedding')
+        AND (LOWER($4) IN ('gemini:generate_content', 'gemini:embedding') OR (LOWER($4) = 'gemini:interactions' AND LOWER(BTRIM(pak.auth_type)) IN ('service_account', 'vertex_ai')))
       )
       OR (
         LOWER(BTRIM(p.provider_type)) NOT IN (
@@ -487,7 +487,7 @@ WHERE p.is_active = TRUE
     OR (
       LOWER(BTRIM(p.provider_type)) = 'vertex_ai'
       AND LOWER(BTRIM(pak.auth_type)) IN ('api_key', 'service_account', 'vertex_ai')
-      AND LOWER($4) IN ('gemini:generate_content', 'gemini:embedding')
+      AND (LOWER($4) IN ('gemini:generate_content', 'gemini:embedding') OR (LOWER($4) = 'gemini:interactions' AND LOWER(BTRIM(pak.auth_type)) IN ('service_account', 'vertex_ai')))
     )
     OR (
       LOWER(BTRIM(p.provider_type)) NOT IN (
@@ -679,7 +679,7 @@ WHERE p.is_active = TRUE
     OR (
       LOWER(BTRIM(p.provider_type)) = 'vertex_ai'
       AND LOWER(BTRIM(pak.auth_type)) IN ('api_key', 'service_account', 'vertex_ai')
-      AND LOWER($6) IN ('gemini:generate_content', 'gemini:embedding')
+      AND (LOWER($6) IN ('gemini:generate_content', 'gemini:embedding') OR (LOWER($6) = 'gemini:interactions' AND LOWER(BTRIM(pak.auth_type)) IN ('service_account', 'vertex_ai')))
     )
     OR (
       LOWER(BTRIM(p.provider_type)) NOT IN (
@@ -1845,6 +1845,9 @@ mod tests {
                 ));
                 assert!(vertex_clause.contains("gemini:embedding"));
                 assert!(vertex_clause.contains("gemini:generate_content"));
+                assert!(vertex_clause.contains(
+                    "= 'gemini:interactions' AND LOWER(BTRIM(pak.auth_type)) IN ('service_account', 'vertex_ai')"
+                ));
                 assert!(!vertex_clause.contains("claude:messages"));
                 occurrences += 1;
                 remaining = rest;

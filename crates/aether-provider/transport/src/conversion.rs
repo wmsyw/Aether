@@ -6,7 +6,8 @@ use aether_ai_formats::normalize_api_format_alias;
 
 use crate::antigravity::is_antigravity_provider_transport;
 use crate::auth::{
-    resolve_local_gemini_auth, resolve_local_openai_bearer_auth, resolve_local_standard_auth,
+    resolve_local_gemini_auth, resolve_local_openai_bearer_auth,
+    resolve_local_openai_embedding_rerank_auth, resolve_local_standard_auth,
 };
 use crate::claude_code::local_claude_code_transport_unsupported_reason_with_network;
 use crate::kiro::{
@@ -182,6 +183,17 @@ pub fn request_pair_transport_unsupported_reason(
     let client_api_format = normalize_api_format_alias(client_api_format);
     let provider_api_format = normalize_api_format_alias(provider_api_format);
 
+    if client_api_format == "gemini:interactions" && client_api_format == provider_api_format {
+        return if is_vertex_transport_context(transport) {
+            local_vertex_gemini_transport_unsupported_reason_with_network(transport)
+        } else {
+            local_gemini_transport_unsupported_reason_with_network(
+                transport,
+                provider_api_format.as_str(),
+            )
+        };
+    }
+
     if let Some(kind) =
         request_conversion_kind(client_api_format.as_str(), provider_api_format.as_str())
     {
@@ -238,14 +250,15 @@ fn request_direct_auth_for_provider_format(
         "openai:chat" if is_windsurf_provider_transport(transport) => {
             resolve_windsurf_cascade_auth(transport)
         }
+        "openai:embedding" | "openai:rerank" => {
+            resolve_local_openai_embedding_rerank_auth(transport, provider_api_format)
+        }
         "openai:chat"
         | "openai:responses"
         | "openai:responses:compact"
-        | "openai:embedding"
         | "jina:embedding"
         | "doubao:embedding"
         | "aliyun:multimodal_embedding"
-        | "openai:rerank"
         | "jina:rerank" => resolve_local_openai_bearer_auth(transport),
         "gemini:generate_content" | "gemini:embedding" => {
             if is_vertex_api_key_transport_context(transport) {
@@ -715,6 +728,60 @@ mod tests {
         assert_eq!(
             request_pair_direct_auth(&transport, "gemini:embedding"),
             Some(("key".to_string(), "secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn openai_embedding_rerank_override_changes_direct_auth_but_chat_stays_bearer() {
+        for api_format in ["openai:embedding", "openai:rerank"] {
+            let mut transport = transport_snapshot("openai", api_format, "api_key", false, None);
+
+            transport.key.auth_type_by_format = Some(json!({
+                "openai:embedding": "api_key",
+                "openai:rerank": "api_key"
+            }));
+            assert_eq!(
+                request_pair_direct_auth(&transport, api_format),
+                Some(("x-api-key".to_string(), "secret".to_string()))
+            );
+
+            transport.key.auth_type_by_format = Some(json!({
+                "openai:embedding": "bearer",
+                "openai:rerank": "bearer"
+            }));
+            assert_eq!(
+                request_pair_direct_auth(&transport, api_format),
+                Some(("authorization".to_string(), "Bearer secret".to_string(),))
+            );
+
+            transport.key.auth_type_by_format = Some(json!({
+                "openai:embedding": "oauth",
+                "openai:rerank": "basic"
+            }));
+            assert_eq!(
+                request_pair_direct_auth(&transport, api_format),
+                Some(("authorization".to_string(), "Bearer secret".to_string(),))
+            );
+
+            transport.key.auth_type_by_format = None;
+            assert_eq!(
+                request_pair_direct_auth(&transport, api_format),
+                Some(("authorization".to_string(), "Bearer secret".to_string(),))
+            );
+        }
+
+        let mut transport = transport_snapshot("openai", "openai:chat", "api_key", false, None);
+        transport.key.auth_type_by_format = Some(json!({
+            "openai:chat": "api_key",
+            "openai:responses": "api_key"
+        }));
+        assert_eq!(
+            request_pair_direct_auth(&transport, "openai:chat"),
+            Some(("authorization".to_string(), "Bearer secret".to_string(),))
+        );
+        assert_eq!(
+            request_pair_direct_auth(&transport, "openai:responses"),
+            Some(("authorization".to_string(), "Bearer secret".to_string(),))
         );
     }
 

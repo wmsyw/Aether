@@ -333,7 +333,8 @@ fn local_candidate_failure_should_project_health(
         }
         LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
-        | LocalFailoverClassification::StopCyberPolicy => false,
+        | LocalFailoverClassification::StopCyberPolicy
+        | LocalFailoverClassification::StopContextOverflow => false,
     }
 }
 
@@ -387,15 +388,28 @@ mod tests {
     }
 
     #[test]
-    fn failure_projection_ignores_configured_stop_pattern() {
-        assert!(project_local_failure_health(
-            None,
-            "openai:chat",
+    fn failure_projection_ignores_config_stop_and_context_overflow() {
+        for classification in [
             LocalFailoverClassification::StopErrorPattern,
-            400,
-            1_760_000_000,
-        )
-        .is_none());
+            LocalFailoverClassification::StopContextOverflow,
+        ] {
+            assert!(project_local_failure_health(
+                None,
+                "openai:chat",
+                classification,
+                400,
+                1_760_000_000,
+            )
+            .is_none());
+            assert!(project_local_failure_health(
+                None,
+                "openai:chat",
+                classification,
+                503,
+                1_760_000_000,
+            )
+            .is_none());
+        }
     }
 
     #[test]

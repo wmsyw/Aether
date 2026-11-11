@@ -1845,7 +1845,8 @@ fn local_candidate_failure_should_invalidate_affinity(
         }
         LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
-        | LocalFailoverClassification::StopCyberPolicy => false,
+        | LocalFailoverClassification::StopCyberPolicy
+        | LocalFailoverClassification::StopContextOverflow => false,
     }
 }
 
@@ -3473,10 +3474,18 @@ mod tests {
     }
 
     #[test]
-    fn configured_stop_pattern_does_not_penalize_pool_feedback() {
+    fn configured_stop_pattern_and_context_overflow_do_not_penalize_pool_feedback() {
         assert!(!local_candidate_failure_should_record_pool_error(
             LocalFailoverClassification::StopErrorPattern,
             400,
+        ));
+        assert!(!local_candidate_failure_should_record_pool_error(
+            LocalFailoverClassification::StopContextOverflow,
+            400,
+        ));
+        assert!(!local_candidate_failure_should_record_pool_error(
+            LocalFailoverClassification::StopContextOverflow,
+            503,
         ));
         assert!(!local_candidate_failure_should_record_pool_error(
             LocalFailoverClassification::RetryUpstreamFailure,

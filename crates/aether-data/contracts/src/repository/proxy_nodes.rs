@@ -455,6 +455,12 @@ pub struct TunnelMetricsCounters {
     pub heartbeat_rtt_last_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HeartbeatCursor<'a> {
+    session_id: &'a str,
+    heartbeat_id: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunnelMetricsSample {
     pub samples: i64,
@@ -487,21 +493,40 @@ pub fn build_tunnel_metrics_sample(
     let current = extract_tunnel_metrics_counters(current_proxy_metadata)?;
     let previous = extract_tunnel_metrics_counters(previous_proxy_metadata);
     let current_recent_errors = extract_recent_tunnel_errors(current_proxy_metadata);
+    let previous_cursor = extract_heartbeat_cursor(previous_proxy_metadata);
+    let current_cursor = extract_heartbeat_cursor(current_proxy_metadata);
+    // Cursorless samples come from older tunnels; keep their existing delta behavior only
+    // while both sides are legacy metadata. A different session, a non-advancing heartbeat,
+    // or a one-sided cursor starts a new counter baseline instead of reconciling unrelated
+    // cumulative counters.
+    let counters_are_comparable = match (previous_cursor, current_cursor) {
+        (None, None) => true,
+        (Some(previous), Some(current)) => {
+            previous.session_id == current.session_id
+                && current.heartbeat_id > previous.heartbeat_id
+        }
+        _ => false,
+    };
 
+    let counter_delta = |previous: Option<u64>, current: u64| {
+        if counters_are_comparable {
+            counter_delta_u64(previous, current)
+        } else {
+            0
+        }
+    };
     let connect_errors_delta =
-        counter_delta_u64(previous.map(|v| v.connect_errors), current.connect_errors);
-    let disconnects_delta = counter_delta_u64(previous.map(|v| v.disconnects), current.disconnects);
-    let error_events_delta = counter_delta_u64(
+        counter_delta(previous.map(|v| v.connect_errors), current.connect_errors);
+    let disconnects_delta = counter_delta(previous.map(|v| v.disconnects), current.disconnects);
+    let error_events_delta = counter_delta(
         previous.map(|v| v.error_events_total),
         current.error_events_total,
     );
-    let ws_in_bytes_delta = counter_delta_u64(previous.map(|v| v.ws_in_bytes), current.ws_in_bytes);
-    let ws_out_bytes_delta =
-        counter_delta_u64(previous.map(|v| v.ws_out_bytes), current.ws_out_bytes);
-    let ws_in_frames_delta =
-        counter_delta_u64(previous.map(|v| v.ws_in_frames), current.ws_in_frames);
+    let ws_in_bytes_delta = counter_delta(previous.map(|v| v.ws_in_bytes), current.ws_in_bytes);
+    let ws_out_bytes_delta = counter_delta(previous.map(|v| v.ws_out_bytes), current.ws_out_bytes);
+    let ws_in_frames_delta = counter_delta(previous.map(|v| v.ws_in_frames), current.ws_in_frames);
     let ws_out_frames_delta =
-        counter_delta_u64(previous.map(|v| v.ws_out_frames), current.ws_out_frames);
+        counter_delta(previous.map(|v| v.ws_out_frames), current.ws_out_frames);
 
     let take_recent = usize::try_from(error_events_delta).unwrap_or(usize::MAX);
     let recent_error_events = if take_recent == 0 {
@@ -539,6 +564,37 @@ pub fn build_tunnel_error_event_detail(event: &TunnelErrorEventRecord) -> String
         event.category,
         event.summary.as_deref().unwrap_or(event.message.as_str())
     )
+}
+
+/// Persist the authenticated heartbeat identity that produced this metadata so
+/// metric deltas can tell cumulative counters from a different tunnel process.
+///
+/// The cursor is only attached to an actual metrics snapshot: metadata that is
+/// absent, null, or carries no `tunnel_metrics` object keeps the previous
+/// repository behavior, and absent metadata is never synthesized into a
+/// cursor-only object that would erase the stored snapshot. Cursor fields
+/// always come from the heartbeat payload; any values supplied in client
+/// metadata are dropped so a tunnel cannot forge its own baseline.
+pub fn attach_heartbeat_cursor(
+    proxy_metadata: Option<Value>,
+    heartbeat_session_id: &str,
+    heartbeat_id: u64,
+) -> Option<Value> {
+    let Value::Object(mut metadata) = proxy_metadata? else {
+        return None;
+    };
+    // Never persist a client-supplied cursor, even when this payload carries no
+    // metrics snapshot to attach the authenticated cursor to.
+    metadata.remove("heartbeat_session_id");
+    metadata.remove("heartbeat_id");
+    if metadata.get("tunnel_metrics").is_some_and(Value::is_object) {
+        metadata.insert(
+            "heartbeat_session_id".to_string(),
+            Value::String(heartbeat_session_id.trim().to_string()),
+        );
+        metadata.insert("heartbeat_id".to_string(), heartbeat_id.into());
+    }
+    Some(Value::Object(metadata))
 }
 
 pub fn normalize_proxy_metadata(
@@ -707,6 +763,18 @@ fn extract_tunnel_metrics_counters(
         ws_in_frames: json_u64(tunnel_metrics.get("ws_in_frames")).unwrap_or(0),
         ws_out_frames: json_u64(tunnel_metrics.get("ws_out_frames")).unwrap_or(0),
         heartbeat_rtt_last_ms: json_u64(tunnel_metrics.get("heartbeat_rtt_last_ms")).unwrap_or(0),
+    })
+}
+
+fn extract_heartbeat_cursor(proxy_metadata: Option<&Value>) -> Option<HeartbeatCursor<'_>> {
+    let metadata = proxy_metadata.and_then(Value::as_object)?;
+    let session_id = metadata
+        .get("heartbeat_session_id")
+        .and_then(Value::as_str)?;
+    let heartbeat_id = json_u64(metadata.get("heartbeat_id"))?;
+    Some(HeartbeatCursor {
+        session_id,
+        heartbeat_id,
     })
 }
 
@@ -988,16 +1056,17 @@ pub trait ProxyNodeWriteRepository: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::{
-        bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
-        merge_proxy_metadata_for_registration, normalize_heartbeat_proxy_metadata,
-        normalize_proxy_node_scheduling_state, preserve_proxy_metadata_tunnel_security,
-        proxy_node_accepts_new_tunnels, proxy_reported_version,
-        reconcile_remote_config_after_heartbeat, remote_config_scheduling_state,
-        remote_config_upgrade_target, ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation,
-        ProxyNodeMetricsStep, StoredProxyNode,
+        attach_heartbeat_cursor, bucket_start_unix_secs, build_tunnel_error_event_detail,
+        build_tunnel_metrics_sample, merge_proxy_metadata_for_registration,
+        normalize_heartbeat_proxy_metadata, normalize_proxy_node_scheduling_state,
+        preserve_proxy_metadata_tunnel_security, proxy_node_accepts_new_tunnels,
+        proxy_reported_version, reconcile_remote_config_after_heartbeat,
+        remote_config_scheduling_state, remote_config_upgrade_target,
+        ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeMetricsStep,
+        StoredProxyNode,
     };
 
     #[test]
@@ -1217,6 +1286,332 @@ mod tests {
             build_tunnel_error_event_detail(&sample.recent_error_events[1]),
             "[newer] WebSocket write failed because the peer closed or reset the connection"
         );
+    }
+
+    #[test]
+    fn builds_tunnel_metrics_sample_treats_changed_or_non_advancing_cursors_as_baselines() {
+        let previous = json!({
+            "heartbeat_session_id": "process-a",
+            "heartbeat_id": 40,
+            "tunnel_metrics": {
+                "connect_errors": 10,
+                "disconnects": 5,
+                "error_events_total": 7,
+                "ws_in_bytes": 1_000,
+                "ws_out_bytes": 2_000,
+                "ws_in_frames": 10,
+                "ws_out_frames": 20,
+                "heartbeat_rtt_last_ms": 30
+            }
+        });
+
+        for (session_id, heartbeat_id) in [("process-b", 1), ("process-a", 40), ("process-a", 39)] {
+            let current = json!({
+                "heartbeat_session_id": session_id,
+                "heartbeat_id": heartbeat_id,
+                "tunnel_metrics": {
+                    "connect_errors": 12,
+                    "disconnects": 8,
+                    "error_events_total": 9,
+                    "ws_in_bytes": 1_500,
+                    "ws_out_bytes": 2_500,
+                    "ws_in_frames": 15,
+                    "ws_out_frames": 25,
+                    "heartbeat_rtt_last_ms": 44
+                },
+                "recent_tunnel_errors": [
+                    {"timestamp_unix_secs": 101, "category": "newer", "message": "new"}
+                ]
+            });
+
+            let sample = build_tunnel_metrics_sample(Some(&previous), Some(&current), 4, true)
+                .expect("sample should build");
+            assert_eq!(sample.samples, 1);
+            assert_eq!(sample.heartbeat_rtt_ms_sum, 44);
+            assert_eq!(sample.connect_errors_delta, 0);
+            assert_eq!(sample.disconnects_delta, 0);
+            assert_eq!(sample.error_events_delta, 0);
+            assert_eq!(sample.ws_in_bytes_delta, 0);
+            assert_eq!(sample.ws_out_bytes_delta, 0);
+            assert_eq!(sample.ws_in_frames_delta, 0);
+            assert_eq!(sample.ws_out_frames_delta, 0);
+            assert!(sample.recent_error_events.is_empty());
+        }
+    }
+
+    #[test]
+    fn builds_tunnel_metrics_sample_treats_cursor_adoption_and_loss_as_baselines() {
+        let legacy = json!({
+            "tunnel_metrics": {
+                "connect_errors": 10,
+                "disconnects": 5,
+                "error_events_total": 7,
+                "ws_in_bytes": 1_000,
+                "ws_out_bytes": 2_000,
+                "ws_in_frames": 10,
+                "ws_out_frames": 20,
+                "heartbeat_rtt_last_ms": 30
+            }
+        });
+        let with_cursor = json!({
+            "heartbeat_session_id": "process-a",
+            "heartbeat_id": 1,
+            "tunnel_metrics": {
+                "connect_errors": 12,
+                "disconnects": 8,
+                "error_events_total": 9,
+                "ws_in_bytes": 1_500,
+                "ws_out_bytes": 2_500,
+                "ws_in_frames": 15,
+                "ws_out_frames": 25,
+                "heartbeat_rtt_last_ms": 44
+            },
+            "recent_tunnel_errors": [
+                {"timestamp_unix_secs": 101, "category": "newer", "message": "new"}
+            ]
+        });
+
+        for (previous, current) in [(&legacy, &with_cursor), (&with_cursor, &legacy)] {
+            let sample = build_tunnel_metrics_sample(Some(previous), Some(current), 4, true)
+                .expect("sample should build");
+            assert_eq!(sample.connect_errors_delta, 0);
+            assert_eq!(sample.disconnects_delta, 0);
+            assert_eq!(sample.error_events_delta, 0);
+            assert_eq!(sample.ws_in_bytes_delta, 0);
+            assert_eq!(sample.ws_out_bytes_delta, 0);
+            assert_eq!(sample.ws_in_frames_delta, 0);
+            assert_eq!(sample.ws_out_frames_delta, 0);
+            assert!(sample.recent_error_events.is_empty());
+        }
+    }
+
+    #[test]
+    fn builds_tunnel_metrics_sample_preserves_legacy_counter_behavior_without_cursors() {
+        let previous = json!({
+            "tunnel_metrics": {
+                "connect_errors": 10,
+                "disconnects": 5,
+                "error_events_total": 7,
+                "ws_in_bytes": 1_000,
+                "ws_out_bytes": 2_000,
+                "ws_in_frames": 10,
+                "ws_out_frames": 20,
+                "heartbeat_rtt_last_ms": 30
+            }
+        });
+        let current = json!({
+            "tunnel_metrics": {
+                "connect_errors": 12,
+                "disconnects": 2,
+                "error_events_total": 9,
+                "ws_in_bytes": 1_500,
+                "ws_out_bytes": 100,
+                "ws_in_frames": 11,
+                "ws_out_frames": 3,
+                "heartbeat_rtt_last_ms": 44
+            },
+            "recent_tunnel_errors": [
+                {"timestamp_unix_secs": 100, "category": "older", "message": "old"},
+                {"timestamp_unix_secs": 101, "category": "newer", "message": "new"}
+            ]
+        });
+
+        let sample = build_tunnel_metrics_sample(Some(&previous), Some(&current), 4, true)
+            .expect("sample should build");
+        assert_eq!(sample.connect_errors_delta, 2);
+        assert_eq!(sample.disconnects_delta, 2);
+        assert_eq!(sample.error_events_delta, 2);
+        assert_eq!(sample.ws_in_bytes_delta, 500);
+        assert_eq!(sample.ws_out_bytes_delta, 100);
+        assert_eq!(sample.ws_in_frames_delta, 1);
+        assert_eq!(sample.ws_out_frames_delta, 3);
+        assert_eq!(sample.recent_error_events.len(), 2);
+    }
+
+    #[test]
+    fn builds_tunnel_metrics_sample_isolates_interleaved_sessions_until_the_cursor_advances() {
+        let metadata = |session_id: &str,
+                        heartbeat_id: u64,
+                        ws_in_bytes: u64,
+                        ws_out_bytes: u64,
+                        ws_in_frames: u64,
+                        ws_out_frames: u64,
+                        recent_errors: &[u64]| {
+            json!({
+                "heartbeat_session_id": session_id,
+                "heartbeat_id": heartbeat_id,
+                "tunnel_metrics": {
+                    "ws_in_bytes": ws_in_bytes,
+                    "ws_out_bytes": ws_out_bytes,
+                    "ws_in_frames": ws_in_frames,
+                    "ws_out_frames": ws_out_frames,
+                    "error_events_total": recent_errors.len() as u64
+                },
+                "recent_tunnel_errors": recent_errors
+                    .iter()
+                    .map(|timestamp| json!({
+                        "timestamp_unix_secs": timestamp,
+                        "category": "session_interleave",
+                        "message": format!("event-{timestamp}")
+                    }))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let session_a_baseline = metadata("process-a", 1, 1_000, 2_000, 10, 20, &[1, 2, 3, 4, 5]);
+        let session_a_advance =
+            metadata("process-a", 2, 1_500, 2_400, 15, 23, &[1, 2, 3, 4, 5, 6, 7]);
+        let session_b_baseline = metadata("process-b", 1, 50, 60, 2, 3, &[100]);
+        let session_b_advance = metadata("process-b", 2, 90, 130, 5, 8, &[100, 101, 102]);
+        let session_a_resumed = metadata(
+            "process-a",
+            3,
+            2_000,
+            3_000,
+            20,
+            30,
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+        );
+        let session_a_resumed_advance = metadata(
+            "process-a",
+            4,
+            2_100,
+            3_300,
+            22,
+            33,
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        );
+
+        let cases: [(Option<&Value>, &Value, [i64; 5], usize); 6] = [
+            (None, &session_a_baseline, [0, 0, 0, 0, 0], 0),
+            (
+                Some(&session_a_baseline),
+                &session_a_advance,
+                [500, 400, 5, 3, 2],
+                2,
+            ),
+            (
+                Some(&session_a_advance),
+                &session_b_baseline,
+                [0, 0, 0, 0, 0],
+                0,
+            ),
+            (
+                Some(&session_b_baseline),
+                &session_b_advance,
+                [40, 70, 3, 5, 2],
+                2,
+            ),
+            (
+                Some(&session_b_advance),
+                &session_a_resumed,
+                [0, 0, 0, 0, 0],
+                0,
+            ),
+            (
+                Some(&session_a_resumed),
+                &session_a_resumed_advance,
+                [100, 300, 2, 3, 3],
+                3,
+            ),
+        ];
+
+        for (previous, current, expected_deltas, expected_error_events) in cases {
+            let sample = build_tunnel_metrics_sample(previous, Some(current), 4, true)
+                .expect("sample should build");
+            assert_eq!(
+                [
+                    sample.ws_in_bytes_delta,
+                    sample.ws_out_bytes_delta,
+                    sample.ws_in_frames_delta,
+                    sample.ws_out_frames_delta,
+                    sample.error_events_delta,
+                ],
+                expected_deltas
+            );
+            assert_eq!(
+                sample.recent_error_events.len(),
+                expected_error_events,
+                "unexpected recent error replay for {current:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn attaches_authenticated_heartbeat_cursor_over_spoofed_metadata() {
+        let spoofed = json!({
+            "arch": "arm64",
+            "heartbeat_session_id": "spoofed-session",
+            "heartbeat_id": 999,
+            "tunnel_metrics": {"ws_in_bytes": 1_500}
+        });
+
+        let attached = attach_heartbeat_cursor(Some(spoofed), " session-a ", 7)
+            .expect("metadata should remain present");
+        assert_eq!(attached.get("arch"), Some(&json!("arm64")));
+        assert_eq!(
+            attached.get("heartbeat_session_id"),
+            Some(&json!("session-a"))
+        );
+        assert_eq!(attached.get("heartbeat_id"), Some(&json!(7)));
+        assert_eq!(
+            attached.pointer("/tunnel_metrics/ws_in_bytes"),
+            Some(&json!(1_500))
+        );
+    }
+
+    #[test]
+    fn heartbeat_cursor_requires_an_actual_metrics_snapshot() {
+        for metadata in [None, Some(Value::Null), Some(json!("not-an-object"))] {
+            assert_eq!(
+                attach_heartbeat_cursor(metadata, "session-a", 8),
+                None,
+                "absent or null metadata must stay absent instead of becoming a cursor"
+            );
+        }
+
+        let without_metrics = json!({
+            "arch": "arm64",
+            "heartbeat_session_id": "spoofed-session",
+            "heartbeat_id": 999
+        });
+        let attached = attach_heartbeat_cursor(Some(without_metrics), "session-a", 8)
+            .expect("metadata should remain present");
+        assert_eq!(attached.get("arch"), Some(&json!("arm64")));
+        assert_eq!(
+            attached.get("heartbeat_session_id"),
+            None,
+            "a cursor without counters must not be persisted"
+        );
+        assert_eq!(attached.get("heartbeat_id"), None);
+
+        let with_metrics = json!({"tunnel_metrics": {"ws_in_bytes": 10}});
+        let attached = attach_heartbeat_cursor(Some(with_metrics), "session-a", 8)
+            .expect("metrics snapshot should keep metadata");
+        assert_eq!(
+            attached.get("heartbeat_session_id"),
+            Some(&json!("session-a"))
+        );
+        assert_eq!(attached.get("heartbeat_id"), Some(&json!(8)));
+    }
+
+    #[test]
+    fn absent_or_null_heartbeat_metadata_keeps_the_repository_snapshot() {
+        let previous = json!({
+            "arch": "arm64",
+            "heartbeat_session_id": "process-a",
+            "heartbeat_id": 5,
+            "tunnel_metrics": {"ws_in_bytes": 1_000}
+        });
+
+        for metadata in [None, Some(Value::Null)] {
+            let attached = attach_heartbeat_cursor(metadata, "process-a", 6);
+            assert_eq!(attached, None);
+            assert_eq!(
+                normalize_heartbeat_proxy_metadata(Some(&previous), attached.as_ref(), None),
+                None,
+                "repositories must keep the previous metadata snapshot"
+            );
+        }
     }
 
     #[test]

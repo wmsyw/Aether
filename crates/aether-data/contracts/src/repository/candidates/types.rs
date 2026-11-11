@@ -131,6 +131,7 @@ define_candidate_diagnostic_categories!(
         "overloaded_error",
         "permission_error",
         "plan_usage_limit_exceeded",
+        "provider_cancelled",
         "provider_request_body_build_failed",
         "provider_request_body_missing",
         "protocol_error",

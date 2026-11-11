@@ -1,13 +1,21 @@
 use aether_crypto::{encrypt_python_fernet_plaintext, DEVELOPMENT_ENCRYPTION_KEY};
+use aether_data::repository::billing::InMemoryBillingReadRepository;
 use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
+use aether_data::repository::settlement::InMemorySettlementRepository;
+use aether_data::repository::usage::InMemoryUsageReadRepository;
 use aether_data::repository::video_tasks::InMemoryVideoTaskRepository;
+use aether_data::repository::wallet::{InMemoryWalletRepository, StoredWalletSnapshot};
+use aether_data_contracts::repository::billing::StoredBillingModelContext;
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogKey, StoredProviderCatalogProvider,
 };
+use aether_data_contracts::repository::usage::UsageReadRepository;
 use aether_data_contracts::repository::video_tasks::{
     UpsertVideoTask, VideoTaskLookupKey, VideoTaskReadRepository, VideoTaskStatus,
     VideoTaskWriteRepository,
 };
+use aether_data_contracts::repository::wallet::{WalletLookupKey, WalletReadRepository};
+use std::collections::BTreeMap;
 
 use super::{
     any, authenticated_operational_client, build_state_with_execution_runtime_override, json,
@@ -971,4 +979,488 @@ async fn user_scoped_video_task_cancel_rechecks_owner_before_side_effects() {
         .expect("task lookup should succeed")
         .expect("task should remain present");
     assert_eq!(stored.status, VideoTaskStatus::Processing);
+}
+
+struct VideoRefreshSettlementFixture {
+    state: AppState,
+    usage_repository: Arc<InMemoryUsageReadRepository>,
+    wallet_repository: Arc<InMemoryWalletRepository>,
+    task_repository: Arc<InMemoryVideoTaskRepository>,
+    upstream_base_url: String,
+    upstream_handle: tokio::task::JoinHandle<()>,
+    task_id: String,
+    request_id: String,
+    api_key_id: String,
+}
+
+impl Drop for VideoRefreshSettlementFixture {
+    fn drop(&mut self) {
+        self.upstream_handle.abort();
+    }
+}
+
+// Production mints reservation tokens as canonical UUIDs, and the persistence
+// metadata projection only retains that admitted shape.
+const VIDEO_REFRESH_RESERVATION_TOKEN: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+fn video_refresh_billing_context() -> StoredBillingModelContext {
+    StoredBillingModelContext::new(
+        "provider-1".to_string(),
+        Some("pay_as_you_go".to_string()),
+        Some("provider-key-1".to_string()),
+        None,
+        None,
+        "global-model-video-1".to_string(),
+        "sora-2".to_string(),
+        Some(json!({
+            "billing": {
+                "video": { "price_per_second_by_resolution": { "720p": 2.0 } }
+            }
+        })),
+        None,
+        None,
+        Some("model-video-1".to_string()),
+        Some("sora-2".to_string()),
+        None,
+        None,
+        None,
+    )
+    .expect("video billing context should build")
+}
+
+fn video_refresh_wallet_repository() -> Arc<InMemoryWalletRepository> {
+    Arc::new(InMemoryWalletRepository::seed(vec![
+        StoredWalletSnapshot::new(
+            "wallet-video-1".to_string(),
+            Some("user-1".to_string()),
+            None,
+            100.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            100,
+        )
+        .expect("wallet should build"),
+    ]))
+}
+
+async fn video_refresh_settlement_fixture(
+    task_id: &str,
+    provider_body: serde_json::Value,
+) -> VideoRefreshSettlementFixture {
+    // Read refreshes go through the direct sync transport, so the fixture needs
+    // a real loopback upstream rather than the executor-only test override.
+    let upstream = Router::new().fallback(any(move |_request: Request| {
+        let provider_body = provider_body.clone();
+        async move { Json(provider_body) }
+    }));
+    let (upstream_base_url, upstream_handle) = start_server(upstream).await;
+    let request_id = format!("request-{task_id}");
+    let api_key_id = format!("api-key-{task_id}");
+    let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+    let wallet_repository = video_refresh_wallet_repository();
+    let task_repository = Arc::new(InMemoryVideoTaskRepository::default());
+    let data_state = crate::data::GatewayDataState::with_usage_billing_and_wallet_for_tests(
+        Arc::clone(&usage_repository),
+        Arc::new(InMemoryBillingReadRepository::seed(vec![
+            video_refresh_billing_context(),
+        ])),
+        Arc::clone(&wallet_repository),
+    )
+    .with_settlement_writer_for_tests(Arc::new(
+        InMemorySettlementRepository::from_wallet_repository(Arc::clone(&wallet_repository)),
+    ))
+    .attach_video_task_repository_for_tests(Arc::clone(&task_repository));
+    let state = AppState::new()
+        .expect("gateway state should build")
+        .with_data_state_for_tests(data_state)
+        .with_video_task_truth_source_mode(
+            crate::video_tasks::VideoTaskTruthSourceMode::RustAuthoritative,
+        )
+        .with_usage_runtime_for_tests(crate::usage::UsageRuntimeConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+    VideoRefreshSettlementFixture {
+        state,
+        usage_repository,
+        wallet_repository,
+        task_repository,
+        upstream_base_url,
+        upstream_handle,
+        task_id: task_id.to_string(),
+        request_id,
+        api_key_id,
+    }
+}
+
+fn video_refresh_snapshot(
+    fixture: &VideoRefreshSettlementFixture,
+) -> crate::video_tasks::LocalVideoTaskSnapshot {
+    crate::video_tasks::LocalVideoTaskSnapshot::OpenAi(crate::video_tasks::OpenAiVideoTaskSeed {
+        local_short_id: Some(format!("short-{}", fixture.task_id)),
+        native_response: None,
+        xai_provider: false,
+        local_task_id: fixture.task_id.clone(),
+        upstream_task_id: format!("ext-{}", fixture.task_id),
+        created_at_unix_ms: 100,
+        user_id: Some("user-1".to_string()),
+        api_key_id: Some(fixture.api_key_id.clone()),
+        model: Some("sora-2".to_string()),
+        prompt: Some("hello".to_string()),
+        size: Some("1280x720".to_string()),
+        seconds: Some("4".to_string()),
+        remixed_from_video_id: None,
+        status: crate::video_tasks::LocalVideoTaskStatus::Processing,
+        progress_percent: 50,
+        completed_at_unix_secs: None,
+        expires_at_unix_secs: None,
+        error_code: None,
+        error_message: None,
+        video_url: None,
+        persistence: crate::video_tasks::LocalVideoTaskPersistence {
+            request_id: fixture.request_id.clone(),
+            username: Some("user-1".to_string()),
+            api_key_name: Some("primary".to_string()),
+            client_api_format: "openai:video".to_string(),
+            provider_api_format: "openai:video".to_string(),
+            original_request_body: json!({
+                "prompt": "hello",
+                "seconds": "4",
+                "resolution": "720p",
+                "size": "1280x720"
+            }),
+            format_converted: false,
+        },
+        transport: crate::video_tasks::LocalVideoTaskTransport {
+            upstream_base_url: format!("{}/v1", fixture.upstream_base_url),
+            provider_name: Some("provider".to_string()),
+            provider_id: "provider-1".to_string(),
+            endpoint_id: "endpoint-1".to_string(),
+            key_id: "provider-key-1".to_string(),
+            headers: BTreeMap::new(),
+            content_type: Some("application/json".to_string()),
+            model_name: Some("sora-2".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        },
+    })
+}
+
+async fn seed_refreshable_openai_video_task(fixture: &VideoRefreshSettlementFixture) {
+    fixture
+        .task_repository
+        .upsert(sample_video_task(
+            &fixture.task_id,
+            VideoTaskStatus::Processing,
+            100,
+            "sora-2",
+            "user-1",
+            "openai:video",
+        ))
+        .await
+        .expect("video task upsert should succeed");
+    fixture
+        .state
+        .video_tasks
+        .record_snapshot(video_refresh_snapshot(fixture));
+}
+
+fn video_refresh_usage_plan(request_id: &str) -> aether_contracts::ExecutionPlan {
+    aether_contracts::ExecutionPlan {
+        request_id: request_id.to_string(),
+        candidate_id: None,
+        provider_name: Some("provider".to_string()),
+        provider_id: "provider-1".to_string(),
+        endpoint_id: "endpoint-1".to_string(),
+        key_id: "provider-key-1".to_string(),
+        method: "POST".to_string(),
+        url: "https://api.openai.example/v1/videos".to_string(),
+        headers: BTreeMap::new(),
+        content_type: Some("application/json".to_string()),
+        content_encoding: None,
+        body: aether_contracts::RequestBody {
+            json_body: None,
+            body_bytes_b64: None,
+            body_ref: None,
+        },
+        stream: false,
+        client_api_format: "openai:video".to_string(),
+        provider_api_format: "openai:video".to_string(),
+        model_name: Some("sora-2".to_string()),
+        proxy: None,
+        transport_profile: None,
+        timeouts: None,
+    }
+}
+
+fn video_refresh_usage_context(fixture: &VideoRefreshSettlementFixture) -> serde_json::Value {
+    json!({
+        "trace_id": fixture.request_id,
+        "request_id": fixture.request_id,
+        "user_id": "user-1",
+        "api_key_id": fixture.api_key_id,
+        "model": "sora-2",
+        "provider_name": "provider",
+        "plan_usage_reservation_token": VIDEO_REFRESH_RESERVATION_TOKEN,
+        "routing_group_billing_multiplier": 2.0
+    })
+}
+
+async fn seed_deferred_video_create_usage(fixture: &VideoRefreshSettlementFixture) {
+    let plan = video_refresh_usage_plan(&fixture.request_id);
+    let context = video_refresh_usage_context(fixture);
+    let pending = aether_usage_runtime::build_pending_usage_record(
+        &plan,
+        Some(&context),
+        crate::clock::current_unix_secs(),
+    )
+    .expect("deferred create usage should build");
+    fixture
+        .state
+        .data
+        .upsert_usage(pending)
+        .await
+        .expect("deferred create usage should persist")
+        .expect("usage writer should store the pending row");
+}
+
+async fn video_refresh_wallet_balance(fixture: &VideoRefreshSettlementFixture) -> f64 {
+    fixture
+        .wallet_repository
+        .find(WalletLookupKey::UserId("user-1"))
+        .await
+        .expect("wallet lookup should succeed")
+        .expect("wallet should exist")
+        .balance
+}
+
+async fn video_refresh_usage_row(
+    fixture: &VideoRefreshSettlementFixture,
+) -> aether_data_contracts::repository::usage::StoredRequestUsageAudit {
+    fixture
+        .usage_repository
+        .find_by_request_id(&fixture.request_id)
+        .await
+        .expect("usage lookup should succeed")
+        .expect("usage row should exist")
+}
+
+async fn prepared_openai_read_refresh_plan(
+    fixture: &VideoRefreshSettlementFixture,
+) -> crate::video_tasks::LocalVideoTaskReadRefreshPlan {
+    let refresh_path = format!("/v1/videos/{}", fixture.task_id);
+    fixture
+        .state
+        .video_tasks
+        .prepare_read_refresh_sync_plan_for_user(
+            Some("openai"),
+            &refresh_path,
+            "user-1",
+            "trace-video-read-refresh",
+        )
+        .expect("read refresh plan should build")
+}
+
+#[tokio::test]
+async fn gateway_video_read_refresh_finalizes_deferred_create_usage_exactly_once() {
+    let fixture = video_refresh_settlement_fixture(
+        "task-refresh-finalize",
+        json!({
+            "id": "ext-task-refresh-finalize",
+            "status": "completed",
+            "video": { "url": "https://cdn.example/video.mp4" },
+            "seconds": 4,
+            "progress": 100
+        }),
+    )
+    .await;
+    seed_refreshable_openai_video_task(&fixture).await;
+    seed_deferred_video_create_usage(&fixture).await;
+    let refresh_plan = prepared_openai_read_refresh_plan(&fixture).await;
+
+    assert!(fixture
+        .state
+        .execute_video_task_refresh_plan(&refresh_plan)
+        .await
+        .expect("read refresh should succeed"));
+
+    let stored = fixture
+        .task_repository
+        .find(VideoTaskLookupKey::Id(&fixture.task_id))
+        .await
+        .expect("task lookup should succeed")
+        .expect("task should exist");
+    assert_eq!(stored.status, VideoTaskStatus::Completed);
+
+    let usage = video_refresh_usage_row(&fixture).await;
+    assert_eq!(usage.status, "completed");
+    // Four seconds at 2.0/s is billed once; the pending row supplied the
+    // reservation identity the settlement must keep using.
+    assert_eq!(usage.total_cost_usd, 8.0);
+    let metadata = usage
+        .request_metadata
+        .as_ref()
+        .expect("settled usage should keep request metadata");
+    assert_eq!(
+        metadata["plan_usage_reservation_token"],
+        json!(VIDEO_REFRESH_RESERVATION_TOKEN)
+    );
+    assert_eq!(metadata["routing_group_billing_multiplier"], json!(2.0));
+    assert_eq!(video_refresh_wallet_balance(&fixture).await, 84.0);
+
+    // Replaying the same client read stays terminal and must not charge again.
+    assert!(fixture
+        .state
+        .execute_video_task_refresh_plan(&refresh_plan)
+        .await
+        .expect("replayed read refresh should succeed"));
+    let replayed = video_refresh_usage_row(&fixture).await;
+    assert_eq!(replayed.status, "completed");
+    assert_eq!(replayed.total_cost_usd, 8.0);
+    assert_eq!(video_refresh_wallet_balance(&fixture).await, 84.0);
+    let now_unix_secs = crate::clock::current_unix_secs();
+    assert!(
+        fixture
+            .state
+            .claim_due_video_tasks(now_unix_secs, now_unix_secs.saturating_add(30), 8)
+            .await
+            .expect("poller claim should succeed")
+            .is_empty(),
+        "terminal tasks must not be claimable by the settlement poller"
+    );
+}
+
+#[tokio::test]
+async fn gateway_video_read_refresh_settles_failed_and_cancelled_tasks_as_void() {
+    for provider_status in ["failed", "cancelled"] {
+        let fixture = video_refresh_settlement_fixture(
+            &format!("task-refresh-{provider_status}"),
+            json!({
+                "id": format!("ext-task-refresh-{provider_status}"),
+                "status": provider_status,
+                "error": { "code": "generation_failed" }
+            }),
+        )
+        .await;
+        seed_refreshable_openai_video_task(&fixture).await;
+        seed_deferred_video_create_usage(&fixture).await;
+        let refresh_plan = prepared_openai_read_refresh_plan(&fixture).await;
+
+        assert!(fixture
+            .state
+            .execute_video_task_refresh_plan(&refresh_plan)
+            .await
+            .expect("read refresh should succeed"));
+
+        let stored = fixture
+            .task_repository
+            .find(VideoTaskLookupKey::Id(&fixture.task_id))
+            .await
+            .expect("task lookup should succeed")
+            .expect("task should exist");
+        assert_eq!(
+            stored.status,
+            if provider_status == "failed" {
+                VideoTaskStatus::Failed
+            } else {
+                VideoTaskStatus::Cancelled
+            }
+        );
+
+        let usage = video_refresh_usage_row(&fixture).await;
+        assert_eq!(usage.status, provider_status);
+        assert_eq!(usage.total_cost_usd, 0.0);
+        let metadata = usage
+            .request_metadata
+            .as_ref()
+            .expect("void usage should keep request metadata");
+        assert_eq!(
+            metadata["plan_usage_reservation_token"],
+            json!(VIDEO_REFRESH_RESERVATION_TOKEN)
+        );
+        // A failed or cancelled task must never pick up a seconds fee, and the
+        // deferred reservation must not stay pending.
+        assert_eq!(video_refresh_wallet_balance(&fixture).await, 100.0);
+
+        assert!(fixture
+            .state
+            .execute_video_task_refresh_plan(&refresh_plan)
+            .await
+            .expect("replayed read refresh should succeed"));
+        assert_eq!(video_refresh_usage_row(&fixture).await.total_cost_usd, 0.0);
+        assert_eq!(video_refresh_wallet_balance(&fixture).await, 100.0);
+    }
+}
+
+#[tokio::test]
+async fn gateway_video_create_terminal_snapshot_finalizes_deferred_admission_after_order() {
+    let fixture = video_refresh_settlement_fixture("task-create-terminal", json!({})).await;
+    let stored = fixture
+        .task_repository
+        .upsert(sample_video_task(
+            &fixture.task_id,
+            VideoTaskStatus::Completed,
+            100,
+            "sora-2",
+            "user-1",
+            "openai:video",
+        ))
+        .await
+        .expect("terminal create task upsert should succeed");
+
+    // The create path enqueues the deferred pending usage row before it stores
+    // the initial snapshot; an upstream that reports a terminal state in the
+    // create response must settle only after that admission row lands.
+    let plan = video_refresh_usage_plan(&fixture.request_id);
+    let context = video_refresh_usage_context(&fixture);
+    let report = crate::usage::GatewaySyncReportRequest {
+        trace_id: fixture.request_id.clone(),
+        report_kind: "openai_video_create_sync_success".to_string(),
+        report_context: Some(context.clone()),
+        status_code: 200,
+        headers: BTreeMap::new(),
+        body_json: Some(json!({
+            "id": format!("ext-{}", fixture.task_id),
+            "status": "completed"
+        })),
+        client_body_json: None,
+        body_base64: None,
+        telemetry: None,
+    };
+    fixture
+        .state
+        .usage_runtime
+        .record_sync_terminal(
+            fixture.state.usage_lifecycle_data_state().as_ref(),
+            aether_usage_runtime::build_terminal_usage_context_seed(&plan, Some(&context)),
+            aether_usage_runtime::build_sync_terminal_usage_payload_seed(&report),
+        )
+        .await;
+    crate::async_task::finalize_video_task_if_terminal(&fixture.state, &stored).await;
+
+    let usage = video_refresh_usage_row(&fixture).await;
+    assert_eq!(usage.status, "completed");
+    assert_eq!(usage.total_cost_usd, 8.0);
+    let metadata = usage
+        .request_metadata
+        .as_ref()
+        .expect("initially terminal create should settle the admission row");
+    assert_eq!(
+        metadata["plan_usage_reservation_token"],
+        json!(VIDEO_REFRESH_RESERVATION_TOKEN)
+    );
+    assert_eq!(metadata["routing_group_billing_multiplier"], json!(2.0));
+    assert_eq!(video_refresh_wallet_balance(&fixture).await, 84.0);
+
+    crate::async_task::finalize_video_task_if_terminal(&fixture.state, &stored).await;
+    assert_eq!(video_refresh_usage_row(&fixture).await.total_cost_usd, 8.0);
+    assert_eq!(video_refresh_wallet_balance(&fixture).await, 84.0);
 }

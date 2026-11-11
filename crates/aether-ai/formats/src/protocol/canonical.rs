@@ -2462,6 +2462,10 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
             let mut messages = Vec::new();
             let mut next_generated_tool_call_index = 0usize;
             let mut pending_reasoning: Option<CanonicalContentBlock> = None;
+            // A `next` Gemini signature carrier belongs to the following tool call even
+            // when clients replay reasoning text (or assistant text) in between, so it is
+            // parked separately from `pending_reasoning`.
+            let mut pending_tool_signature: Option<String> = None;
             for item in items {
                 if let Some(text) = item.as_str() {
                     if !text.trim().is_empty() {
@@ -2475,6 +2479,7 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                         });
                     }
                     pending_reasoning = None;
+                    pending_tool_signature = None;
                     continue;
                 }
                 let Some(item_object) = item.as_object() else {
@@ -2483,6 +2488,7 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                         String::new(),
                     ));
                     pending_reasoning = None;
+                    pending_tool_signature = None;
                     continue;
                 };
                 let item_type = item_object
@@ -2494,28 +2500,31 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                 match item_type.as_str() {
                     "reasoning" => {
                         let reasoning = openai_responses_reasoning_block_from_item(item_object);
-                        let previous_signature = reasoning.as_ref().and_then(|block| match block {
+                        let carrier = reasoning.as_ref().and_then(|block| match block {
                             CanonicalContentBlock::Thinking {
                                 text,
                                 encrypted_content: Some(carrier),
                                 ..
-                            } if text.trim().is_empty() => decode_gemini_tool_signature_carrier(
-                                carrier,
-                            )
-                            .and_then(|(signature, direction)| {
-                                (direction == GeminiToolSignatureCarrierDirection::Previous)
-                                    .then_some(signature)
-                            }),
+                            } if text.trim().is_empty() => {
+                                decode_gemini_tool_signature_carrier(carrier)
+                            }
                             _ => None,
                         });
-                        if let Some(signature) = previous_signature {
-                            if attach_gemini_signature_to_previous_tool_use(
-                                &mut messages,
-                                signature,
-                            ) {
+                        match carrier {
+                            Some((signature, GeminiToolSignatureCarrierDirection::Next)) => {
+                                pending_tool_signature = Some(signature);
+                                continue;
+                            }
+                            Some((signature, GeminiToolSignatureCarrierDirection::Previous))
+                                if attach_gemini_signature_to_previous_tool_use(
+                                    &mut messages,
+                                    &signature,
+                                ) =>
+                            {
                                 pending_reasoning = None;
                                 continue;
                             }
+                            _ => {}
                         }
                         pending_reasoning = reasoning;
                     }
@@ -2543,6 +2552,7 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                             }
                         } else {
                             pending_reasoning = None;
+                            pending_tool_signature = None;
                         }
                         messages.push(message);
                     }
@@ -2581,6 +2591,7 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                             &mut messages,
                             tool_use,
                             &mut pending_reasoning,
+                            pending_tool_signature.take(),
                         );
                     }
                     "custom_tool_call" => {
@@ -2632,6 +2643,7 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                             &mut messages,
                             tool_use,
                             &mut pending_reasoning,
+                            pending_tool_signature.take(),
                         );
                     }
                     "function_call_output" => {
@@ -2682,6 +2694,7 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                             extensions: BTreeMap::new(),
                         });
                         pending_reasoning = None;
+                        pending_tool_signature = None;
                     }
                     "custom_tool_call_output"
                     | "local_shell_call_output"
@@ -2698,10 +2711,12 @@ pub(crate) fn openai_responses_input_to_canonical_messages(
                             extensions: BTreeMap::new(),
                         });
                         pending_reasoning = None;
+                        pending_tool_signature = None;
                     }
                     _ => {
                         messages.push(openai_responses_opaque_input_item_message(item, item_type));
                         pending_reasoning = None;
+                        pending_tool_signature = None;
                     }
                 }
             }
@@ -2730,25 +2745,14 @@ fn append_openai_responses_tool_use(
     messages: &mut Vec<CanonicalMessage>,
     mut tool_use: CanonicalContentBlock,
     pending_reasoning: &mut Option<CanonicalContentBlock>,
+    gemini_signature: Option<String>,
 ) {
-    let mut reasoning = pending_reasoning.take();
-    if let Some(CanonicalContentBlock::Thinking {
-        text,
-        encrypted_content: Some(carrier),
-        ..
-    }) = reasoning.as_ref()
+    let reasoning = pending_reasoning.take();
+    if let (Some(signature), CanonicalContentBlock::ToolUse { extensions, .. }) =
+        (gemini_signature, &mut tool_use)
     {
-        if text.trim().is_empty() {
-            if let Some((signature, GeminiToolSignatureCarrierDirection::Next)) =
-                decode_gemini_tool_signature_carrier(carrier)
-            {
-                if let CanonicalContentBlock::ToolUse { extensions, .. } = &mut tool_use {
-                    canonical_extension_object_mut(extensions, "gemini")
-                        .insert("thoughtSignature".to_string(), Value::String(signature));
-                    reasoning = None;
-                }
-            }
-        }
+        canonical_extension_object_mut(extensions, "gemini")
+            .insert("thoughtSignature".to_string(), Value::String(signature));
     }
     if let Some(last_message) = messages.last_mut() {
         if last_message.role == CanonicalRole::Assistant
@@ -2777,7 +2781,7 @@ fn append_openai_responses_tool_use(
 
 fn attach_gemini_signature_to_previous_tool_use(
     messages: &mut [CanonicalMessage],
-    signature: String,
+    signature: &str,
 ) -> bool {
     let Some(message) = messages.last_mut() else {
         return false;
@@ -2788,8 +2792,10 @@ fn attach_gemini_signature_to_previous_tool_use(
     let Some(CanonicalContentBlock::ToolUse { extensions, .. }) = message.content.last_mut() else {
         return false;
     };
-    canonical_extension_object_mut(extensions, "gemini")
-        .insert("thoughtSignature".to_string(), Value::String(signature));
+    canonical_extension_object_mut(extensions, "gemini").insert(
+        "thoughtSignature".to_string(),
+        Value::String(signature.to_string()),
+    );
     true
 }
 
@@ -5304,14 +5310,12 @@ pub(crate) fn write_openai_generation_config(
         output.insert("top_k".to_string(), Value::from(value));
     }
     if let Some(values) = &config.stop_sequences {
-        output.insert(
-            "stop".to_string(),
-            if values.len() == 1 {
-                Value::String(values[0].clone())
-            } else {
-                Value::Array(values.iter().cloned().map(Value::String).collect())
-            },
-        );
+        if !values.is_empty() {
+            output.insert(
+                "stop".to_string(),
+                Value::Array(values.iter().cloned().map(Value::String).collect()),
+            );
+        }
     }
     if let Some(value) = config.n {
         output.insert("n".to_string(), Value::from(value));
@@ -7360,10 +7364,11 @@ mod tests {
         from_gemini_to_canonical_request, from_gemini_to_canonical_response,
         from_openai_chat_to_canonical_request, from_openai_chat_to_canonical_response,
         from_openai_responses_to_canonical_request, from_openai_responses_to_canonical_response,
-        CanonicalContentBlock, CanonicalEmbedding, CanonicalEmbeddingContent,
-        CanonicalEmbeddingInput, CanonicalEmbeddingRequest, CanonicalRole, CanonicalUsage,
+        write_openai_generation_config, CanonicalContentBlock, CanonicalEmbedding,
+        CanonicalEmbeddingContent, CanonicalEmbeddingInput, CanonicalEmbeddingRequest,
+        CanonicalGenerationConfig, CanonicalRole, CanonicalUsage,
     };
-    use serde_json::{json, Value};
+    use serde_json::{json, Map, Value};
 
     #[test]
     fn canonical_embedding_request_accepts_axonhub_input_shapes() {
@@ -8138,6 +8143,61 @@ mod tests {
         assert_eq!(rebuilt["messages"], request["messages"]);
         assert_eq!(rebuilt["stop"], Value::Array(vec![json!("x"), json!("y")]));
         assert_eq!(rebuilt["n"], 2);
+    }
+
+    #[test]
+    fn test_write_openai_generation_config_stop_always_array() {
+        let mut output = Map::new();
+        let config = CanonicalGenerationConfig {
+            stop_sequences: Some(vec!["</block>".to_string()]),
+            ..Default::default()
+        };
+        write_openai_generation_config(&mut output, &config);
+
+        assert_eq!(
+            output.get("stop"),
+            Some(&Value::Array(vec![Value::String("</block>".to_string())]))
+        );
+
+        let mut output_multi = Map::new();
+        let config_multi = CanonicalGenerationConfig {
+            stop_sequences: Some(vec!["stop1".to_string(), "stop2".to_string()]),
+            ..Default::default()
+        };
+        write_openai_generation_config(&mut output_multi, &config_multi);
+        assert_eq!(
+            output_multi.get("stop"),
+            Some(&Value::Array(vec![
+                Value::String("stop1".to_string()),
+                Value::String("stop2".to_string()),
+            ]))
+        );
+
+        let mut output_empty = Map::new();
+        let config_empty = CanonicalGenerationConfig {
+            stop_sequences: Some(vec![]),
+            ..Default::default()
+        };
+        write_openai_generation_config(&mut output_empty, &config_empty);
+        assert!(output_empty.get("stop").is_none());
+    }
+
+    #[test]
+    fn claude_to_openai_chat_request_stop_sequences_always_array() {
+        let claude_request = json!({
+            "model": "claude-3-7-sonnet-20250219",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1024,
+            "stop_sequences": ["</block>"]
+        });
+        let canonical =
+            from_claude_to_canonical_request(&claude_request).expect("canonical request");
+        let openai_chat =
+            canonical_to_openai_chat_request(&canonical).expect("openai chat request");
+        assert_eq!(
+            openai_chat.get("stop"),
+            Some(&Value::Array(vec![Value::String("</block>".to_string())]))
+        );
     }
 
     #[test]

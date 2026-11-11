@@ -33,6 +33,14 @@ impl PostgresBackend {
             .map_postgres_err()?;
         for table_name in table_names {
             let table_name = maintenance_identifier(table_name)?;
+            let exists = sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+                .bind(format!("public.\"{table_name}\""))
+                .fetch_one(&mut *conn)
+                .await
+                .map_postgres_err()?;
+            if !exists {
+                continue;
+            }
             summary.attempted += 1;
             let statement = format!("VACUUM ANALYZE \"{table_name}\"");
             match sqlx::query(&statement)
@@ -679,4 +687,56 @@ struct PostgresStatementObservabilitySnapshot {
     top_shared_blks_read_total: u64,
     top_shared_blks_hit_total: u64,
     top_temp_blks_total: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::driver::postgres::PostgresPoolConfig;
+
+    use super::PostgresBackend;
+
+    #[tokio::test]
+    #[ignore = "requires AETHER_TEST_DATABASE_URL; creates and drops probe tables"]
+    async fn table_maintenance_skips_absent_tables_and_keeps_going() {
+        let backend = PostgresBackend::from_config(PostgresPoolConfig {
+            database_url: std::env::var("AETHER_TEST_DATABASE_URL")
+                .expect("AETHER_TEST_DATABASE_URL must point at the test database"),
+            min_connections: 1,
+            ..PostgresPoolConfig::default()
+        })
+        .expect("backend should build");
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after the epoch")
+            .as_nanos();
+        let first = format!("aether_maintenance_probe_first_{suffix}");
+        let second = format!("aether_maintenance_probe_second_{suffix}");
+        let missing = format!("aether_maintenance_probe_missing_{suffix}");
+
+        for table in [&first, &second] {
+            let create = format!("CREATE TABLE \"{table}\" (id BIGINT NOT NULL)");
+            sqlx::query(&create)
+                .execute(backend.pool())
+                .await
+                .expect("probe table should be created");
+        }
+
+        let summary = backend
+            .run_table_maintenance(&[first.as_str(), missing.as_str(), second.as_str()])
+            .await;
+
+        for table in [&first, &second] {
+            let drop_table = format!("DROP TABLE IF EXISTS \"{table}\"");
+            sqlx::query(&drop_table)
+                .execute(backend.pool())
+                .await
+                .expect("probe table should be dropped");
+        }
+
+        let summary = summary.expect("maintenance should skip the absent table");
+        assert_eq!(summary.attempted, 2);
+        assert_eq!(summary.succeeded, 2);
+    }
 }

@@ -46,7 +46,13 @@ pub(crate) async fn execute_video_task_refresh_plan(
                 .apply_read_refresh_projection(refresh_plan, &provider_body);
             if projected {
                 if let Some(snapshot) = state.video_tasks.snapshot_for_refresh_plan(refresh_plan) {
-                    let _ = state.upsert_video_task_snapshot(&snapshot).await?;
+                    if let Some(stored) = state.upsert_video_task_snapshot(&snapshot).await? {
+                        // A client read can observe the terminal transition before the poller
+                        // does. The poller only claims active tasks, so without finalizing here
+                        // the stored terminal row would permanently strand the deferred create
+                        // usage row (pending settlement, unreleased reservation).
+                        finalize_video_task_if_terminal(state, &stored).await;
+                    }
                 }
             }
             Ok(projected)
@@ -412,7 +418,31 @@ pub(crate) async fn finalize_video_task_if_terminal(state: &AppState, task: &Sto
     let Some(event) = build_video_task_terminal_usage_event(task) else {
         return;
     };
-    let mut event = event;
+    if state.usage_runtime.is_enabled() {
+        // A video create only records a pending usage row: the poller supplies the real
+        // terminal dimensions later. That row also owns the admission reservation token and
+        // billing multiplier the terminal settlement must finalize. The ordered lifecycle
+        // barrier waits for every submission already queued for this request id, so a client
+        // read (or an immediately-terminal create) cannot replace the pending row before it is
+        // written; a runtime with the queue disabled persists it directly before this point.
+        state
+            .usage_runtime
+            .record_terminal_event_direct(state.usage_lifecycle_data_state().as_ref(), event)
+            .await;
+        return;
+    }
+    write_video_task_terminal_usage_event_direct(state, task, event).await;
+}
+
+/// Settles a terminal video task without the usage runtime ordering barrier.
+///
+/// Only used when the usage runtime is disabled, where no deferred lifecycle write can race
+/// this event.
+async fn write_video_task_terminal_usage_event_direct(
+    state: &AppState,
+    task: &StoredVideoTask,
+    mut event: UsageEvent,
+) {
     if let Err(err) = enrich_usage_event_with_billing(state.data.as_ref(), &mut event).await {
         warn!(
             event_name = "video_task_finalize_billing_enrichment_failed",
@@ -456,6 +486,48 @@ pub(crate) async fn finalize_video_task_if_terminal(state: &AppState, task: &Sto
             );
         }
     }
+}
+
+/// Publishes the billing dimensions a finished video task priced by.
+///
+/// Billing reads dimensions out of `request_metadata.dimensions` (the same path
+/// image pricing uses). Only a completed task may carry a duration: failed,
+/// cancelled, deleted and expired tasks must never pick up a seconds fee. The
+/// task's stored metadata is deliberately not copied — it contains internal
+/// snapshots that the persistence scrubber is meant to drop.
+fn build_video_task_billing_dimensions(task: &StoredVideoTask) -> Option<Value> {
+    if task.status != VideoTaskStatus::Completed {
+        return None;
+    }
+    let mut dimensions = Map::new();
+    // OpenAI video requests carry a pixel `size`; other clients report a tier
+    // in `resolution`. Both spellings normalize to the same table key.
+    let resolution = task
+        .resolution
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            task.size
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    if let Some(resolution) = resolution {
+        dimensions.insert("video_resolution".to_string(), Value::from(resolution));
+    }
+    if let Some(duration_seconds) = task.duration_seconds {
+        dimensions.insert(
+            "video_duration_seconds".to_string(),
+            Value::from(duration_seconds),
+        );
+    }
+    if dimensions.is_empty() {
+        return None;
+    }
+    let mut metadata = Map::new();
+    metadata.insert("dimensions".to_string(), Value::Object(dimensions));
+    Some(Value::Object(metadata))
 }
 
 fn build_video_task_terminal_usage_event(task: &StoredVideoTask) -> Option<UsageEvent> {
@@ -510,7 +582,7 @@ fn build_video_task_terminal_usage_event(task: &StoredVideoTask) -> Option<Usage
             error_message: task.error_code.clone(),
             response_time_ms,
             request_body: None,
-            request_metadata: None,
+            request_metadata: build_video_task_billing_dimensions(task),
             ..UsageEventData::default()
         },
     ))
@@ -525,7 +597,11 @@ fn now_unix_secs() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_failed_poll_update, stored_task_to_upsert, VideoTaskRefreshError};
+    use super::{
+        build_failed_poll_update, build_video_task_billing_dimensions,
+        build_video_task_terminal_usage_event, stored_task_to_upsert, VideoTaskRefreshError,
+    };
+    use crate::usage::UsageEventType;
     use crate::video_tasks::{
         LocalVideoTaskPersistence, LocalVideoTaskSnapshot, LocalVideoTaskStatus,
         LocalVideoTaskTransport, OpenAiVideoTaskSeed,
@@ -662,5 +738,93 @@ mod tests {
         assert!(record.progress_message.is_none());
         assert!(record.error_message.is_none());
         assert!(record.request_metadata.is_none());
+    }
+
+    #[test]
+    fn completed_video_task_publishes_billing_dimensions_only() {
+        let mut task = sample_sparse_stored_task();
+        task.status = VideoTaskStatus::Completed;
+        task.resolution = Some(" 720p ".to_string());
+        task.duration_seconds = Some(5);
+
+        let metadata =
+            build_video_task_billing_dimensions(&task).expect("completed task should publish dims");
+        let dimensions = metadata
+            .get("dimensions")
+            .expect("dimensions should be present");
+
+        assert_eq!(dimensions.get("video_resolution"), Some(&json!("720p")));
+        assert_eq!(dimensions.get("video_duration_seconds"), Some(&json!(5)));
+        // The stored rust_local_snapshot is deliberately not restored.
+        assert!(metadata.get("rust_local_snapshot").is_none());
+        assert_eq!(metadata.as_object().map(serde_json::Map::len), Some(1));
+    }
+
+    #[test]
+    fn completed_video_task_falls_back_to_pixel_size_for_resolution() {
+        let mut task = sample_sparse_stored_task();
+        task.status = VideoTaskStatus::Completed;
+        task.resolution = None;
+        task.size = Some("1280x720".to_string());
+        task.duration_seconds = Some(4);
+
+        let metadata =
+            build_video_task_billing_dimensions(&task).expect("completed task should publish dims");
+        let dimensions = metadata
+            .get("dimensions")
+            .expect("dimensions should be present");
+
+        assert_eq!(dimensions.get("video_resolution"), Some(&json!("1280x720")));
+        assert_eq!(dimensions.get("video_duration_seconds"), Some(&json!(4)));
+    }
+
+    #[test]
+    fn failed_cancelled_deleted_and_expired_video_tasks_publish_no_seconds() {
+        for status in [
+            VideoTaskStatus::Failed,
+            VideoTaskStatus::Cancelled,
+            VideoTaskStatus::Deleted,
+            VideoTaskStatus::Expired,
+        ] {
+            let mut task = sample_sparse_stored_task();
+            task.status = status;
+            task.resolution = Some("720p".to_string());
+            task.duration_seconds = Some(5);
+            assert!(
+                build_video_task_billing_dimensions(&task).is_none(),
+                "{status:?} must not publish billable video seconds"
+            );
+        }
+        // Active tasks are not terminal at all.
+        assert!(build_video_task_billing_dimensions(&sample_sparse_stored_task()).is_none());
+    }
+
+    #[test]
+    fn terminal_usage_event_marks_completed_video_billable_and_failed_video_void() {
+        let mut completed = sample_sparse_stored_task();
+        completed.status = VideoTaskStatus::Completed;
+        completed.resolution = Some("720p".to_string());
+        completed.duration_seconds = Some(5);
+        let event = build_video_task_terminal_usage_event(&completed)
+            .expect("completed task should build a terminal event");
+        assert_eq!(event.event_type, UsageEventType::Completed);
+        assert_eq!(event.data.status_code, Some(200));
+        assert_eq!(
+            event
+                .data
+                .request_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.pointer("/dimensions/video_duration_seconds")),
+            Some(&json!(5))
+        );
+
+        let mut failed = sample_sparse_stored_task();
+        failed.status = VideoTaskStatus::Failed;
+        failed.resolution = Some("720p".to_string());
+        failed.duration_seconds = Some(5);
+        let event = build_video_task_terminal_usage_event(&failed)
+            .expect("failed task should build a terminal event");
+        assert_eq!(event.event_type, UsageEventType::Failed);
+        assert!(event.data.request_metadata.is_none());
     }
 }

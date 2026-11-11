@@ -40,7 +40,7 @@ use super::{
     usage_cleanup_window_with_override, wallet_daily_usage_aggregation_target, AppState,
     DbMaintenanceRunSummary, FailedPendingUsageRow, GatewayDataState, ManualUsageCleanupMode,
     ProxyNodeMetricsCleanupSettings, ProxyUpgradeRolloutProbeConfig, StalePendingUsageRow,
-    UsageCleanupSettings, USAGE_CLEANUP_HOUR, USAGE_CLEANUP_MINUTE,
+    UsageCleanupSettings, DB_MAINTENANCE_TABLES, USAGE_CLEANUP_HOUR, USAGE_CLEANUP_MINUTE,
     WALLET_DAILY_USAGE_AGGREGATION_HOUR, WALLET_DAILY_USAGE_AGGREGATION_MINUTE,
 };
 
@@ -1343,20 +1343,31 @@ async fn db_maintenance_continues_across_table_failures() {
     .await
     .expect("db maintenance should continue after failures");
 
+    let seen_tables = seen_tables.lock().expect("seen tables lock").clone();
+    let attempted = seen_tables.len();
+    let failed_index = seen_tables
+        .iter()
+        .position(|table| table.as_str() == "request_candidates")
+        .expect("request_candidates should be scheduled");
+    assert!(
+        failed_index + 1 < attempted,
+        "maintenance should keep going after a failed table"
+    );
+    assert_eq!(attempted, DB_MAINTENANCE_TABLES.len());
+    assert!(
+        attempted > 3,
+        "maintenance should cover the full current schema, not the legacy three tables"
+    );
+    let mut unique = seen_tables.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), attempted, "each configured table runs once");
     assert_eq!(
         summary,
         DbMaintenanceRunSummary {
-            attempted: 3,
-            succeeded: 2,
+            attempted,
+            succeeded: attempted - 1,
         }
-    );
-    assert_eq!(
-        *seen_tables.lock().expect("seen tables lock"),
-        vec![
-            "usage".to_string(),
-            "request_candidates".to_string(),
-            "audit_logs".to_string(),
-        ]
     );
 }
 

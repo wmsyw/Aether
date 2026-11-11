@@ -23,7 +23,7 @@ use crate::tunnel::{claim_tunnel_heartbeat, finish_tunnel_heartbeat_claim};
 use crate::tunnel::{is_tunnel_heartbeat_path, is_tunnel_node_status_path, TUNNEL_ROUTE_FAMILY};
 use crate::{AppState, GatewayError};
 use aether_data::repository::proxy_nodes::{
-    ProxyNodeHeartbeatMutation, ProxyNodeTunnelStatusMutation,
+    attach_heartbeat_cursor, ProxyNodeHeartbeatMutation, ProxyNodeTunnelStatusMutation,
 };
 use axum::body::{Body, Bytes};
 use axum::http::{self, HeaderName, HeaderValue, Response};
@@ -1005,6 +1005,11 @@ pub(crate) async fn maybe_build_local_internal_proxy_response_impl(
                 return Ok(Some(response));
             }
             let claim = claim.expect("fresh heartbeat claim should be present");
+            let proxy_metadata = attach_heartbeat_cursor(
+                payload.proxy_metadata,
+                &payload.heartbeat_session_id,
+                payload.heartbeat_id,
+            );
             let mutation = ProxyNodeHeartbeatMutation {
                 node_id: node_id.clone(),
                 expected_tunnel_generation: Some(authenticated_generation.clone()),
@@ -1015,7 +1020,7 @@ pub(crate) async fn maybe_build_local_internal_proxy_response_impl(
                 failed_requests_delta: payload.window_failed_requests.or(payload.failed_requests),
                 dns_failures_delta: payload.window_dns_failures.or(payload.dns_failures),
                 stream_errors_delta: payload.window_stream_errors.or(payload.stream_errors),
-                proxy_metadata: payload.proxy_metadata,
+                proxy_metadata,
                 proxy_version: payload.proxy_version,
             };
 

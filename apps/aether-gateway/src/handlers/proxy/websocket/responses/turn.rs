@@ -862,6 +862,14 @@ fn websocket_auth_rejection_error(rejection: GatewayLocalAuthRejection) -> Gatew
 }
 
 impl ResponsesProviderAttempt {
+    /// Provider-announced response identity for cancel validation.
+    ///
+    /// This includes identities carried by `response.queued`, which the
+    /// canonical usage summary does not materialize.
+    pub(super) fn response_id(&self) -> Option<&str> {
+        self.observer.response_id()
+    }
+
     pub(super) fn cancel_on_client_disconnect(&self) -> bool {
         crate::orchestration::routing_execution_policy_from_report_context(
             self.lifecycle.report_context(),

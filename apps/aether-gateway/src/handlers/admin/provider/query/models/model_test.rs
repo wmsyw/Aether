@@ -3412,6 +3412,7 @@ async fn provider_query_execute_standard_test_candidate(
             | "openai:search"
             | "claude:messages"
             | "gemini:generate_content"
+            | "gemini:interactions"
             | "openai:embedding"
             | "gemini:embedding"
             | "jina:embedding"
@@ -3426,19 +3427,24 @@ async fn provider_query_execute_standard_test_candidate(
         | "openai:responses"
         | "openai:responses:compact"
         | "openai:search"
-        | "openai:embedding"
         | "jina:embedding"
         | "doubao:embedding"
         | "aliyun:multimodal_embedding"
-        | "openai:rerank"
         | "jina:rerank" => {
             crate::provider_transport::auth::resolve_local_openai_bearer_auth(&transport)
                 .or(oauth_auth)
         }
+        "openai:embedding" | "openai:rerank" => {
+            crate::provider_transport::auth::resolve_local_openai_embedding_rerank_auth(
+                &transport,
+                provider_api_format,
+            )
+            .or(oauth_auth)
+        }
         "claude:messages" => {
             crate::provider_transport::auth::resolve_local_standard_auth(&transport).or(oauth_auth)
         }
-        "gemini:generate_content" | "gemini:embedding" => {
+        "gemini:generate_content" | "gemini:embedding" | "gemini:interactions" => {
             if uses_vertex_query_auth {
                 oauth_auth
             } else {

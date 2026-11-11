@@ -11,7 +11,8 @@ use crate::antigravity::is_antigravity_provider_transport;
 use crate::auth::{
     build_complete_passthrough_headers, build_complete_passthrough_headers_with_auth,
     replace_upstream_auth_headers, resolve_local_gemini_auth, resolve_local_openai_bearer_auth,
-    resolve_local_standard_auth,
+    resolve_local_openai_embedding_rerank_auth, resolve_local_standard_auth,
+    resolve_local_standard_auth_with_format_override,
 };
 use crate::claude_code::{
     build_claude_code_passthrough_headers, current_claude_code_transport_identity_profile,
@@ -583,6 +584,7 @@ fn build_same_format_provider_request_body_inner(
         }
     }
     if input.is_vertex
+        && !aether_ai_formats::gemini_model_requires_function_response_ids(input.mapped_model)
         && matches!(input.family, SameFormatProviderFamily::Gemini)
         && aether_ai_formats::api_format_alias_matches(
             input.provider_api_format,
@@ -1009,8 +1011,11 @@ fn resolve_same_format_standard_direct_auth(
     transport: &GatewayProviderTransportSnapshot,
     provider_api_format: &str,
 ) -> Option<(String, String)> {
-    if aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:embedding")
-        || aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:search")
+    if aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:embedding") {
+        resolve_local_openai_embedding_rerank_auth(transport, provider_api_format)
+    } else if aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:rerank") {
+        resolve_local_standard_auth_with_format_override(transport, provider_api_format)
+    } else if aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:search")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:realtime")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "codex:live")
     {
@@ -1618,6 +1623,104 @@ mod tests {
             ),
             Some(("authorization".to_string(), "Bearer secret".to_string()))
         );
+    }
+
+    #[test]
+    fn same_format_embedding_and_rerank_preserve_baseline_auth_defaults() {
+        for (api_format, report_kind, header_name, header_value) in [
+            (
+                "openai:embedding",
+                "openai_embedding_sync_success",
+                "authorization",
+                "Bearer secret",
+            ),
+            (
+                "openai:rerank",
+                "openai_rerank_sync_success",
+                "x-api-key",
+                "secret",
+            ),
+        ] {
+            let mut transport = sample_transport("custom");
+            transport.endpoint.api_format = api_format.to_string();
+            transport.key.auth_type = "api_key".to_string();
+            let behavior = classify_same_format_provider_request_behavior(
+                &transport,
+                SameFormatProviderRequestBehaviorParams {
+                    require_streaming: false,
+                    provider_api_format: api_format,
+                    report_kind,
+                },
+            );
+
+            assert_eq!(
+                resolve_same_format_provider_direct_auth(
+                    &behavior,
+                    &transport,
+                    SameFormatProviderFamily::Standard,
+                    api_format,
+                ),
+                Some((header_name.to_string(), header_value.to_string()))
+            );
+
+            transport.key.auth_type_by_format = Some(json!({
+                "openai:embedding": "oauth",
+                "openai:rerank": "basic"
+            }));
+            assert_eq!(
+                resolve_same_format_provider_direct_auth(
+                    &behavior,
+                    &transport,
+                    SameFormatProviderFamily::Standard,
+                    api_format,
+                ),
+                Some((header_name.to_string(), header_value.to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn same_format_embedding_and_rerank_follow_explicit_auth_overrides() {
+        for (api_format, report_kind) in [
+            ("openai:embedding", "openai_embedding_sync_success"),
+            ("openai:rerank", "openai_rerank_sync_success"),
+        ] {
+            let mut transport = sample_transport("custom");
+            transport.endpoint.api_format = api_format.to_string();
+            transport.key.auth_type = "api_key".to_string();
+            let behavior = classify_same_format_provider_request_behavior(
+                &transport,
+                SameFormatProviderRequestBehaviorParams {
+                    require_streaming: false,
+                    provider_api_format: api_format,
+                    report_kind,
+                },
+            );
+
+            transport.key.auth_type_by_format =
+                Some(json!({"openai:embedding": "api_key", "openai:rerank": "api_key"}));
+            assert_eq!(
+                resolve_same_format_provider_direct_auth(
+                    &behavior,
+                    &transport,
+                    SameFormatProviderFamily::Standard,
+                    api_format,
+                ),
+                Some(("x-api-key".to_string(), "secret".to_string()))
+            );
+
+            transport.key.auth_type_by_format =
+                Some(json!({"openai:embedding": "bearer", "openai:rerank": "bearer"}));
+            assert_eq!(
+                resolve_same_format_provider_direct_auth(
+                    &behavior,
+                    &transport,
+                    SameFormatProviderFamily::Standard,
+                    api_format,
+                ),
+                Some(("authorization".to_string(), "Bearer secret".to_string()))
+            );
+        }
     }
 
     #[test]
@@ -2339,6 +2442,42 @@ mod tests {
                 && edit.action
                     == SameFormatProviderCompatibilityEditAction::ProviderCompatibilityRewrite
         }));
+    }
+
+    #[test]
+    fn modern_vertex_gemini_keeps_function_response_ids_and_continuation_token() {
+        for model in ["gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon"] {
+            let body = json!({
+                "contents":[{"role":"user","parts":[{"functionResponse":{
+                    "id":"call-1", "name":"lookup", "response":{"ok":true}
+                }}]}],
+                "continuationToken":"opaque-continuation"
+            });
+            let output = build_same_format_provider_request_body_with_compatibility_report(
+                SameFormatProviderRequestBodyInput {
+                    body_json: &body,
+                    mapped_model: model,
+                    client_api_format: "gemini:generate_content",
+                    provider_api_format: "gemini:generate_content",
+                    source_model: Some(model),
+                    family: SameFormatProviderFamily::Gemini,
+                    body_rules: None,
+                    request_headers: None,
+                    upstream_is_stream: false,
+                    force_body_stream_field: false,
+                    kiro_auth_config: None,
+                    is_claude_code: false,
+                    is_vertex: true,
+                    enable_model_directives: false,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                output.body["contents"][0]["parts"][0]["functionResponse"]["id"],
+                "call-1"
+            );
+            assert_eq!(output.body["continuationToken"], "opaque-continuation");
+        }
     }
 
     #[test]

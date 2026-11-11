@@ -662,16 +662,16 @@ export const getStatusColorClass = (status: string) => {
   return classes[status] || 'status-available'
 }
 
-// 展示状态：进行中态优先（包括 started 但未 finished 的中间态），再按 HTTP 状态码兜底
+// 展示状态：可靠终态错误信号优先，其次进行中态，再按 HTTP 状态码兜底
 export function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   if (!attempt) return 'available'
   const code = attempt.status_code
   const isTerminalSuccessCode = typeof code === 'number' && code >= 200 && code < 300
+  const imageFailed = attempt.image_progress?.phase?.trim().toLowerCase() === 'failed' ||
+    attempt.extra_data?.image_progress?.phase?.trim().toLowerCase() === 'failed'
 
   if (attempt.status === 'success') {
-    if (typeof code === 'number' && !isTerminalSuccessCode) {
-      return 'failed'
-    }
+    if (typeof code === 'number' && !isTerminalSuccessCode) return 'failed'
     return 'success'
   }
   if (
@@ -682,6 +682,9 @@ export function getDisplayStatus(attempt: CandidateRecord | null | undefined): s
   ) {
     return attempt.status
   }
+  if ((attempt.status === 'pending' || attempt.status === 'streaming') && imageFailed) {
+    return 'failed'
+  }
   const hasFinished = Boolean(attempt.finished_at)
   const isExplicitPending = (attempt.status === 'pending' || attempt.status === 'streaming') && !hasFinished
   const isImplicitPending = Boolean(
@@ -690,9 +693,7 @@ export function getDisplayStatus(attempt: CandidateRecord | null | undefined): s
       !['failed', 'cancelled', 'skipped', 'stream_interrupted'].includes(attempt.status),
   )
 
-  if (isExplicitPending || isImplicitPending) {
-    return 'pending'
-  }
+  if (isExplicitPending || isImplicitPending) return 'pending'
   if (typeof code === 'number') {
     if (isTerminalSuccessCode) return 'success'
     if (code >= 300) return 'failed'

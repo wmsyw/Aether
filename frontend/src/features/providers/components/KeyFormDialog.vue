@@ -161,11 +161,20 @@
                 @click.stop
               >
                 <button
+                  type="button"
+                  class="flex items-center gap-1 text-[10px] leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :class="getFormatAuthType(format) === null ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+                  :aria-pressed="getFormatAuthType(format) === null"
+                  @click="setFormatAuthType(format, null)"
+                >
+                  {{ t('ui.default844b8cc') }}
+                </button>
+                <button
                   v-for="opt in authTypeOptions.filter(o => isRawSecretAuthType(o.value))"
                   :key="opt.value"
                   type="button"
-                  class="flex items-center gap-1 text-[10px] leading-none transition-colors"
-                  :class="getFormatAuthType(format) === opt.value ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+                  class="flex items-center gap-1 text-[10px] leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :aria-pressed="getFormatAuthType(format) === opt.value"
                   @click="setFormatAuthType(format, opt.value as RawSecretAuthType)"
                 >
                   <span
@@ -451,7 +460,12 @@ function getVertexAllowedFormatsByAuth(authType: ProviderKeyFormAuthType): Set<s
     return new Set(['gemini:generate_content', 'gemini:embedding'])
   }
   if (authType === 'service_account') {
-    return new Set(['gemini:generate_content', 'gemini:embedding', 'claude:messages'])
+    return new Set([
+      'gemini:generate_content',
+      'gemini:embedding',
+      'gemini:interactions',
+      'claude:messages',
+    ])
   }
   return new Set()
 }
@@ -494,7 +508,8 @@ function sanitizeAuthTypeByFormat(
     const normalizedFormat = normalizeApiFormat(format)
     if (!selected.has(normalizedFormat)) continue
     const normalizedAuthType = normalizeRawSecretAuthType(rawAuthType)
-    if (!normalizedAuthType || normalizedAuthType === authType) continue
+    // Explicit choices differ from endpoint defaults even when they match the key's auth type.
+    if (!normalizedAuthType) continue
     sanitized[normalizedFormat] = normalizedAuthType
   }
   return sanitized
@@ -566,22 +581,20 @@ const authSecretRequiredMark = computed(() => {
   return ''
 })
 
-function getFormatAuthType(format: string): ProviderKeyFormAuthType {
-  if (!isRawSecretAuthType(form.value.auth_type)) {
-    return form.value.auth_type
-  }
-  return form.value.auth_type_by_format[normalizeApiFormat(format)] || form.value.auth_type
+function getFormatAuthType(format: string): RawSecretAuthType | null {
+  if (!isRawSecretAuthType(form.value.auth_type)) return null
+  return form.value.auth_type_by_format[normalizeApiFormat(format)] || null
 }
 
 function canOverrideFormatAuth(format: string): boolean {
   return isRawSecretAuthType(form.value.auth_type) && form.value.api_formats.includes(format) && formatSupportsAuthOverride(format)
 }
 
-function setFormatAuthType(format: string, authType: RawSecretAuthType) {
+function setFormatAuthType(format: string, authType: RawSecretAuthType | null) {
   if (!isRawSecretAuthType(form.value.auth_type)) return
   const normalizedFormat = normalizeApiFormat(format)
   const next = { ...form.value.auth_type_by_format }
-  if (authType === form.value.auth_type) {
+  if (authType === null) {
     delete next[normalizedFormat]
   } else {
     next[normalizedFormat] = authType

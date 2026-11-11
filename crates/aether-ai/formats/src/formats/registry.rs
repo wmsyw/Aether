@@ -122,7 +122,7 @@ pub fn convert_request_pure_with_context(
     let pure_ctx = ctx.without_runtime_request_edits();
     let source = parse_format(source_format)?;
     let target = parse_format(target_format)?;
-    let normalized_body = normalize_openai_responses_to_chat_body(source, target, body)?;
+    let normalized_body = normalize_openai_responses_additional_tools(source, target, body)?;
     let request = parse_request(source_format, &normalized_body, &pure_ctx)?;
     validate_openai_responses_target_contract(target_format, &normalized_body)?;
     validate_request_conversion(
@@ -161,7 +161,7 @@ pub fn convert_request(
         None
     };
     let body = expanded_body.as_ref().unwrap_or(body);
-    let normalized_body = normalize_openai_responses_to_chat_body(source, target, body)?;
+    let normalized_body = normalize_openai_responses_additional_tools(source, target, body)?;
     validate_openai_responses_target_contract(target_format, &normalized_body)?;
     let mut request = parse_request(source_format, &normalized_body, ctx)?;
     validate_runtime_request_conversion(
@@ -181,7 +181,7 @@ pub fn convert_request(
     emit_request_inner(target_format, &request, ctx)
 }
 
-fn normalize_openai_responses_to_chat_body(
+fn normalize_openai_responses_additional_tools(
     source: FormatId,
     target: FormatId,
     body: &Value,
@@ -189,8 +189,10 @@ fn normalize_openai_responses_to_chat_body(
     if !matches!(
         source,
         FormatId::OpenAiResponses | FormatId::OpenAiResponsesCompact
-    ) || target != FormatId::OpenAiChat
-    {
+    ) || !matches!(
+        target,
+        FormatId::OpenAiChat | FormatId::GeminiGenerateContent
+    ) {
         return Ok(body.clone());
     }
 
@@ -1609,6 +1611,8 @@ fn validate_request_extension_namespace(
         for key in object.keys() {
             if openai_responses_custom_tool_key_is_cross_format_safe(
                 source, target, location, namespace, object, key,
+            ) || openai_responses_reasoning_transport_key_is_cross_format_safe(
+                source, target, location, namespace, object, key,
             ) || request_extension_key_is_cross_format_safe(
                 source, target, location, namespace, key,
             ) {
@@ -1649,6 +1653,30 @@ fn openai_responses_custom_tool_key_is_cross_format_safe(
         && matches!(key, "type" | "name" | "description" | "format" | "custom")
 }
 
+fn openai_responses_reasoning_transport_key_is_cross_format_safe(
+    source: FormatId,
+    target: FormatId,
+    location: &str,
+    namespace: &str,
+    extension: &Map<String, Value>,
+    key: &str,
+) -> bool {
+    // Responses reasoning input items synthesize this provenance marker in the
+    // canonical thinking block. Chat carries the reasoning text and any opaque
+    // encrypted content itself, so the marker stays transport-only.
+    location == "messages[].content[]"
+        && matches!(
+            (source, target),
+            (
+                FormatId::OpenAiResponses | FormatId::OpenAiResponsesCompact,
+                FormatId::OpenAiChat
+            )
+        )
+        && matches!(namespace, "openai_responses" | "openai_cli")
+        && key == "item_type"
+        && extension.get("item_type").and_then(Value::as_str) == Some("reasoning")
+}
+
 fn request_extension_key_is_cross_format_safe(
     source: FormatId,
     target: FormatId,
@@ -1656,6 +1684,34 @@ fn request_extension_key_is_cross_format_safe(
     namespace: &str,
     key: &str,
 ) -> bool {
+    // Responses reasoning items carry this internal marker for the response
+    // serializer. Chat consumes the marker rather than forwarding it.
+    if location == "messages[].content[]"
+        && matches!(
+            (source, target),
+            (
+                FormatId::OpenAiResponses | FormatId::OpenAiResponsesCompact,
+                FormatId::OpenAiChat
+            )
+        )
+        && namespace == "openai"
+        && key == "omit_reasoning_parts"
+    {
+        return true;
+    }
+    if location == "messages[]"
+        && matches!(
+            (source, target),
+            (
+                FormatId::OpenAiResponses | FormatId::OpenAiResponsesCompact,
+                FormatId::OpenAiChat
+            )
+        )
+        && matches!(namespace, "openai_responses" | "openai_cli")
+        && matches!(key, "id" | "status")
+    {
+        return true;
+    }
     if matches!(
         source,
         FormatId::OpenAiResponses | FormatId::OpenAiResponsesCompact
@@ -3523,7 +3579,7 @@ fn normalize_known_format(format: &str) -> Option<FormatId> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::{
         convert_request, convert_request_pure, convert_request_pure_with_context, convert_response,
@@ -4857,6 +4913,73 @@ mod tests {
     }
 
     #[test]
+    fn pre_call_gemini_signature_carrier_survives_interleaved_reasoning_text() {
+        // Clients replay reasoning text between the carrier and its call in either
+        // order; the text must not overwrite the pending signature.
+        let carrier = |signature: &str| {
+            crate::formats::openai::responses::encode_gemini_tool_signature_carrier_with_direction(
+                signature,
+                crate::formats::openai::responses::GeminiToolSignatureCarrierDirection::Next,
+            )
+            .expect("signature carrier")
+        };
+        let thought = |text: &str| {
+            json!({
+                "type": "reasoning",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": text}]
+            })
+        };
+        let body = json!({
+            "model": "gemini-3-flash-preview",
+            "input": [
+                {"role": "user", "content": "go"},
+                {"type": "reasoning", "summary": [], "encrypted_content": carrier("sig-a")},
+                thought("plan a"),
+                {"type": "function_call", "call_id": "call_a", "name": "read",
+                 "arguments": "{\"path\":\"a\"}"},
+                {"type": "function_call_output", "call_id": "call_a", "output": "A"},
+                thought("plan b"),
+                {"type": "reasoning", "summary": [], "encrypted_content": carrier("sig-b")},
+                {"type": "function_call", "call_id": "call_b", "name": "read",
+                 "arguments": "{\"path\":\"b\"}"},
+                {"type": "function_call_output", "call_id": "call_b", "output": "B"}
+            ]
+        });
+
+        let converted = convert_request(
+            "openai:responses",
+            "gemini:generate_content",
+            &body,
+            &FormatContext::default(),
+        )
+        .expect("interleaved carriers should convert");
+        let parts = converted["contents"]
+            .as_array()
+            .expect("contents")
+            .iter()
+            .flat_map(|content| content["parts"].as_array().expect("parts"))
+            .collect::<Vec<_>>();
+        let calls = parts
+            .iter()
+            .filter(|part| part.get("functionCall").is_some())
+            .map(|part| {
+                (
+                    part["functionCall"]["id"].as_str().unwrap(),
+                    part["thoughtSignature"].as_str().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, vec![("call_a", "sig-a"), ("call_b", "sig-b")]);
+        let thoughts = parts
+            .iter()
+            .filter(|part| part["thought"] == true)
+            .map(|part| part["text"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(thoughts, vec!["plan a", "plan b"]);
+    }
+
+    #[test]
     fn pure_gemini_to_openai_responses_blocks_thought_part_loss() {
         let body = json!({
             "contents": [{
@@ -5089,6 +5212,210 @@ mod tests {
         assert_eq!(converted["model"], "gpt-source");
         assert_eq!(converted["messages"][0]["content"], "hello");
         assert!(converted.get("client_metadata").is_none());
+    }
+
+    #[test]
+    fn openai_responses_message_identity_and_status_are_ignored_for_chat() {
+        let body = json!({
+            "model": "gpt-source",
+            "input": [
+                {
+                    "type": "message",
+                    "id": "msg_user",
+                    "status": "completed",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                },
+                {
+                    "type": "message",
+                    "id": "msg_assistant",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "world"}]
+                }
+            ]
+        });
+
+        let pure = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect("message identity and status should not block Chat conversion")
+            .value;
+        let runtime = convert_request(
+            "openai:responses",
+            "openai:chat",
+            &body,
+            &FormatContext::default(),
+        )
+        .expect("runtime message identity and status should not block Chat conversion");
+
+        assert_eq!(pure, runtime);
+        assert_eq!(pure["messages"][0]["content"], "hello");
+        assert_eq!(pure["messages"][1]["content"], "world");
+        for message in pure["messages"]
+            .as_array()
+            .expect("converted Chat messages")
+        {
+            assert!(message.get("id").is_none());
+            assert!(message.get("status").is_none());
+        }
+    }
+
+    #[test]
+    fn openai_responses_reasoning_input_item_converts_to_chat() {
+        // Upstream #902 scenario: a real Responses reasoning input item must not
+        // be blocked by the provenance marker synthesized for it during parsing.
+        let body = json!({
+            "model": "gpt-source",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_reasoning",
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": "thinking"}]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "world"}]
+                }
+            ]
+        });
+
+        for source in ["openai:responses", "openai:responses:compact"] {
+            let pure = convert_request_pure(source, "openai:chat", &body)
+                .expect("Responses reasoning history should convert to Chat")
+                .value;
+            let runtime = convert_request(source, "openai:chat", &body, &FormatContext::default())
+                .expect("runtime Responses reasoning history should convert to Chat");
+
+            assert_eq!(pure, runtime, "source: {source}");
+            let rendered = pure.to_string();
+            assert!(
+                !rendered.contains("omit_reasoning_parts"),
+                "source: {source}"
+            );
+            assert!(!rendered.contains("item_type"), "source: {source}");
+            assert_eq!(pure["messages"][0]["content"], "hello", "source: {source}");
+            assert_eq!(pure["messages"][1]["content"], "world", "source: {source}");
+            // The summary text is meaningful content and survives as Chat
+            // reasoning_content instead of being dropped with the transport data.
+            assert_eq!(
+                pure["messages"][1]["reasoning_content"], "thinking",
+                "source: {source}"
+            );
+            assert!(
+                pure["messages"][1].get("reasoning_parts").is_none(),
+                "summary text must not be duplicated as thinking parts; source: {source}"
+            );
+            for message in pure["messages"]
+                .as_array()
+                .expect("converted Chat messages")
+            {
+                assert!(message.get("id").is_none(), "source: {source}");
+                assert!(message.get("status").is_none(), "source: {source}");
+            }
+        }
+    }
+
+    #[test]
+    fn openai_responses_encrypted_reasoning_input_item_keeps_opaque_content_for_chat() {
+        // This is opaque provider state, not an Aether Gemini signature carrier:
+        // Chat must keep it instead of decoding or silently discarding it.
+        let body = json!({
+            "model": "gpt-source",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_reasoning",
+                    "status": "completed",
+                    "summary": [],
+                    "encrypted_content": "opaque-openai-reasoning-state"
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "world"}]
+                }
+            ]
+        });
+
+        let pure = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect("opaque reasoning state should survive Chat conversion")
+            .value;
+        let runtime = convert_request(
+            "openai:responses",
+            "openai:chat",
+            &body,
+            &FormatContext::default(),
+        )
+        .expect("runtime opaque reasoning state should survive Chat conversion");
+
+        assert_eq!(pure, runtime);
+        assert_eq!(pure["messages"][1]["content"], "world");
+        assert_eq!(
+            pure["messages"][1]["reasoning_parts"],
+            json!([{"type": "redacted_thinking", "data": "opaque-openai-reasoning-state"}])
+        );
+    }
+
+    #[test]
+    fn openai_responses_reasoning_unrelated_metadata_still_blocks_chat() {
+        let body = json!({
+            "model": "gpt-source",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_reasoning",
+                    "summary": [{"type": "summary_text", "text": "thinking"}],
+                    "future_reasoning_transport": {"keep": true}
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "world"}]
+                }
+            ]
+        });
+
+        let error = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect_err("unrelated reasoning metadata must stay fail-closed");
+
+        assert!(matches!(
+            error,
+            super::FormatError::LossyConversionBlocked { ref field, .. }
+                if field == "messages[].content[].openai_responses.future_reasoning_transport"
+        ));
+    }
+
+    #[test]
+    fn openai_responses_unrelated_message_metadata_still_blocks_chat() {
+        let body = json!({
+            "model": "gpt-source",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+                "future_transport": {"keep": true}
+            }]
+        });
+
+        let error = convert_request_pure("openai:responses", "openai:chat", &body)
+            .expect_err("unrelated message metadata must stay fail-closed");
+
+        assert!(matches!(
+            error,
+            super::FormatError::LossyConversionBlocked { ref field, .. }
+                if field.starts_with("messages[].openai_responses.future_transport")
+        ));
     }
 
     #[test]
@@ -5436,6 +5763,66 @@ mod tests {
             assert_eq!(converted["tools"][2]["function"]["name"], "existing");
             assert_eq!(converted["messages"][0]["role"], "user");
             assert_eq!(converted["messages"].as_array().map(Vec::len), Some(1));
+        }
+    }
+
+    #[test]
+    fn openai_responses_additional_tools_prefix_maps_to_gemini_tools() {
+        let body = json!({
+            "model": "gemini-3.7-flash",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{
+                        "type": "function",
+                        "name": "lookup",
+                        "description": "Look up a value",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"]
+                        }
+                    }]
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+            ],
+            "tools": [{"type": "web_search"}]
+        });
+
+        for converted in [
+            convert_request_pure("openai:responses", "gemini:generate_content", &body)
+                .expect("pure conversion should map additional tools")
+                .value,
+            convert_request(
+                "openai:responses",
+                "gemini:generate_content",
+                &body,
+                &FormatContext::default(),
+            )
+            .expect("runtime conversion should map additional tools"),
+        ] {
+            let tools = converted["tools"]
+                .as_array()
+                .expect("Gemini tools should be present");
+            let declarations = tools
+                .iter()
+                .filter_map(|tool| tool.get("functionDeclarations"))
+                .filter_map(Value::as_array)
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(declarations.len(), 1, "{tools:?}");
+            assert_eq!(declarations[0]["name"], "lookup");
+            assert!(
+                tools.iter().any(|tool| tool.get("googleSearch").is_some()),
+                "built-in search should survive the Gemini conversion: {tools:?}"
+            );
+            assert_eq!(
+                converted["toolConfig"]["includeServerSideToolInvocations"],
+                true
+            );
+            assert_eq!(converted["contents"].as_array().map(Vec::len), Some(1));
+            assert_eq!(converted["contents"][0]["parts"][0]["text"], "hello");
         }
     }
 

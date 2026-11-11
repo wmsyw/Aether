@@ -290,6 +290,14 @@ function lastUpdatePayload() {
   return calls[calls.length - 1][1] as Record<string, unknown>
 }
 
+function formatAuthButtons(root: HTMLElement) {
+  const choice = root.querySelector<HTMLButtonElement>('button[aria-pressed]')
+  if (!choice?.parentElement) throw new Error('Missing format auth choices')
+  const buttons = choice.parentElement.querySelectorAll<HTMLButtonElement>('button')
+  expect(buttons).toHaveLength(3)
+  return { default: buttons[0]!, api_key: buttons[1]!, bearer: buttons[2]! }
+}
+
 beforeEach(() => {
   endpointMocks.addProviderKey.mockReset()
   endpointMocks.updateProviderKey.mockReset()
@@ -489,5 +497,108 @@ describe('provider key concurrent_limit form behavior', () => {
     expect(payload.concurrent_limit).toBe(0)
     expect(typeof payload.concurrent_limit).toBe('number')
     expect(payload.rpm_limit).toBe(11)
+  })
+})
+
+describe('provider key explicit format auth persistence', () => {
+  it.each([
+    ['openai:embedding', 'api_key'],
+    ['openai:embedding', 'bearer'],
+    ['openai:rerank', 'api_key'],
+    ['openai:rerank', 'bearer'],
+  ] as const)('keeps an explicit %s %s choice through add, reload and edit save', async (format, authType) => {
+    const props = {
+      open: true,
+      endpoint: null,
+      providerId: 'provider-1',
+      providerType: 'custom',
+      availableApiFormats: [format],
+    }
+    const root = mountDialog(KeyFormDialog, { ...props, editingKey: null })
+    await settle()
+
+    const choices = formatAuthButtons(root)
+    expect(choices.default.getAttribute('aria-pressed')).toBe('true')
+    updateInput(root.querySelector<HTMLInputElement>('input[id^="key-name-"]')!, 'Embedding key')
+    updateInput(root.querySelector<HTMLInputElement>('input[id^="api-key-"]')!, 'test-only-secret')
+    choices[authType].click()
+    await settle()
+
+    expect(choices[authType].getAttribute('aria-pressed')).toBe('true')
+    expect(choices.default.getAttribute('aria-pressed')).toBe('false')
+    await submit(root)
+
+    expect(endpointMocks.addProviderKey).toHaveBeenCalledOnce()
+    const payload = endpointMocks.addProviderKey.mock.calls[0]![1]
+    expect(payload.auth_type).toBe('api_key')
+    expect(payload.auth_type_by_format).toEqual({ [format]: authType })
+    // Reopen from the serialized form payload, not a canned API response.
+    const persisted = createProviderKey(JSON.parse(JSON.stringify(payload)))
+    const reopened = mountDialog(KeyFormDialog, { ...props, editingKey: persisted })
+    await settle()
+
+    expect(formatAuthButtons(reopened)[authType].getAttribute('aria-pressed')).toBe('true')
+    expect(formatAuthButtons(reopened).default.getAttribute('aria-pressed')).toBe('false')
+    await submit(reopened)
+    expect(lastUpdatePayload().auth_type_by_format).toEqual({ [format]: authType })
+  })
+
+  it.each(['api_key', 'bearer'] as const)('hydrates explicit %s when it matches the key auth type', async (authType) => {
+    const root = mountDialog(KeyFormDialog, {
+      open: true,
+      endpoint: null,
+      providerId: 'provider-1',
+      providerType: 'custom',
+      availableApiFormats: ['openai:embedding'],
+      editingKey: createProviderKey({
+        api_formats: ['openai:embedding'],
+        auth_type: authType,
+        auth_type_by_format: { 'openai:embedding': authType },
+      }),
+    })
+    await settle()
+
+    const choices = formatAuthButtons(root)
+    expect(choices[authType].getAttribute('aria-pressed')).toBe('true')
+    expect(choices.default.getAttribute('aria-pressed')).toBe('false')
+    await submit(root)
+    expect(lastUpdatePayload().auth_type_by_format).toEqual({ 'openai:embedding': authType })
+  })
+
+  it.each(['openai:embedding', 'openai:rerank'])('clears an explicit %s choice only when Default is selected', async (format) => {
+    const props = {
+      open: true,
+      endpoint: null,
+      providerId: 'provider-1',
+      providerType: 'custom',
+      availableApiFormats: [format],
+    }
+    const root = mountDialog(KeyFormDialog, {
+      ...props,
+      editingKey: createProviderKey({
+        api_formats: [format],
+        auth_type_by_format: { [format]: 'api_key' },
+      }),
+    })
+    await settle()
+
+    const choices = formatAuthButtons(root)
+    expect(choices.api_key.getAttribute('aria-pressed')).toBe('true')
+    choices.default.click()
+    await settle()
+    expect(choices.default.getAttribute('aria-pressed')).toBe('true')
+    expect(choices.api_key.getAttribute('aria-pressed')).toBe('false')
+    expect(choices.bearer.getAttribute('aria-pressed')).toBe('false')
+    await submit(root)
+
+    const payload = lastUpdatePayload()
+    expect(payload.auth_type_by_format).toBeNull()
+    const persisted = createProviderKey(JSON.parse(JSON.stringify(payload)))
+    const reopened = mountDialog(KeyFormDialog, { ...props, editingKey: persisted })
+    await settle()
+
+    expect(formatAuthButtons(reopened).default.getAttribute('aria-pressed')).toBe('true')
+    await submit(reopened)
+    expect(lastUpdatePayload().auth_type_by_format).toBeNull()
   })
 })

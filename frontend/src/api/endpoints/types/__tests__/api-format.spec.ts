@@ -5,6 +5,7 @@ import {
   apiFormatPermissionCovers,
   formatApiFormat,
   formatApiFormatShort,
+  formatSupportsAuthOverride,
   groupApiFormats,
   normalizeApiFormatAlias,
   sortApiFormats,
@@ -161,6 +162,14 @@ describe('api format display helpers', () => {
       API_FORMATS.GEMINI_EMBEDDING,
     ])
   })
+  it('allows auth overrides for OpenAI embedding and rerank only', () => {
+    expect(formatSupportsAuthOverride(API_FORMATS.OPENAI)).toBe(false)
+    expect(formatSupportsAuthOverride(API_FORMATS.OPENAI_RESPONSES)).toBe(false)
+    expect(formatSupportsAuthOverride(API_FORMATS.OPENAI_EMBEDDING)).toBe(true)
+    expect(formatSupportsAuthOverride(API_FORMATS.OPENAI_RERANK)).toBe(true)
+    expect(formatSupportsAuthOverride(API_FORMATS.GEMINI_EMBEDDING)).toBe(true)
+  })
+
 
   it('groups embedding api formats by provider family', () => {
     expect(groupApiFormats([

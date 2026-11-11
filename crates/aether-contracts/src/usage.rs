@@ -27,6 +27,8 @@ pub struct StandardizedUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_source: Option<UsageTokenSource>,
     pub input_tokens: i64,
+    /// Billable output tokens, including reasoning. `reasoning_tokens` is a breakdown of this
+    /// total, not an additional charge component.
     pub output_tokens: i64,
     pub cache_creation_tokens: i64,
     pub cache_creation_ephemeral_5m_tokens: i64,

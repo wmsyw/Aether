@@ -3217,8 +3217,14 @@ async fn execute_execution_runtime_sync_impl(
                 )
                 .await;
                 if let Some(snapshot) = local_task_snapshot {
-                    let _ = state.upsert_video_task_snapshot(&snapshot).await?;
+                    let stored = state.upsert_video_task_snapshot(&snapshot).await?;
                     state.video_tasks.record_snapshot(snapshot);
+                    if let Some(stored) = stored {
+                        // The pending usage row for this create was submitted immediately above;
+                        // an upstream that completes inside the create response must settle it
+                        // here because the poller never claims a terminal task.
+                        crate::async_task::finalize_video_task_if_terminal(state, &stored).await;
+                    }
                 }
                 match report_mode {
                     VideoTaskSyncReportMode::InlineSync => {

@@ -7,7 +7,7 @@ use aether_contracts::tunnel::{
     TUNNEL_RELAY_AUTH_SENDER_HEADER, TUNNEL_RELAY_AUTH_SIGNATURE_HEADER,
     TUNNEL_RELAY_AUTH_TIMESTAMP_HEADER, TUNNEL_RELAY_OWNER_INSTANCE_HEADER,
 };
-use aether_data::repository::proxy_nodes::ProxyNodeReadRepository;
+use aether_data::repository::proxy_nodes::{ProxyNodeMetricsStep, ProxyNodeReadRepository};
 use axum::body::Body;
 use axum::routing::{any, post};
 use axum::{extract::Request, Json, Router};
@@ -420,7 +420,12 @@ async fn gateway_handles_internal_tunnel_heartbeat_locally_with_loopback() {
         "window_failed_requests": 1,
         "window_dns_failures": 2,
         "window_stream_errors": 3,
-        "proxy_metadata": {"arch": "arm64"},
+        "proxy_metadata": {
+            "arch": "arm64",
+            "heartbeat_session_id": "spoofed-session",
+            "heartbeat_id": 1,
+            "tunnel_metrics": {"ws_in_bytes": 1_500}
+        },
         "proxy_version": "2.0.0"
     });
     let anonymous = client
@@ -490,6 +495,20 @@ async fn gateway_handles_internal_tunnel_heartbeat_locally_with_loopback() {
     assert_eq!(node.failed_requests, 1);
     assert_eq!(node.dns_failures, 2);
     assert_eq!(node.stream_errors, 3);
+    let metadata = node
+        .proxy_metadata
+        .as_ref()
+        .expect("heartbeat metadata should persist");
+    assert_eq!(metadata.get("arch"), Some(&json!("arm64")));
+    assert_eq!(
+        metadata.get("heartbeat_session_id"),
+        Some(&json!("session-77"))
+    );
+    assert_eq!(metadata.get("heartbeat_id"), Some(&json!(77)));
+    assert_eq!(
+        metadata.pointer("/tunnel_metrics/ws_in_bytes"),
+        Some(&json!(1_500))
+    );
 
     let replay = json!({
         "node_id": "node-123",
@@ -567,6 +586,338 @@ async fn gateway_rejects_internal_tunnel_heartbeat_without_heartbeat_id() {
     .expect("request should succeed");
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_heartbeat_cursor_keeps_interleaved_session_metrics_isolated() {
+    let repository = Arc::new(InMemoryProxyNodeRepository::seed(vec![
+        with_tunnel_control_plane_key(sample_proxy_node("node-123"), TUNNEL_CONTROL_PLANE_TEST_PSK),
+    ]));
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_proxy_node_repository_for_tests(
+                Arc::clone(&repository),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+
+    let metrics = |ws_in_bytes: u64,
+                   ws_out_bytes: u64,
+                   ws_in_frames: u64,
+                   ws_out_frames: u64,
+                   errors: &[u64]| {
+        json!({
+            "tunnel_metrics": {
+                "ws_in_bytes": ws_in_bytes,
+                "ws_out_bytes": ws_out_bytes,
+                "ws_in_frames": ws_in_frames,
+                "ws_out_frames": ws_out_frames,
+                "error_events_total": errors.len() as u64
+            },
+            "recent_tunnel_errors": errors
+                .iter()
+                .map(|timestamp| json!({
+                    "timestamp_unix_secs": timestamp,
+                    "category": "session_interleave",
+                    "message": format!("event-{timestamp}")
+                }))
+                .collect::<Vec<_>>()
+        })
+    };
+    let heartbeats = [
+        (
+            "session-a",
+            1,
+            metrics(1_000, 2_000, 10, 20, &[1, 2, 3, 4, 5]),
+        ),
+        (
+            "session-a",
+            2,
+            metrics(1_500, 2_400, 15, 23, &[1, 2, 3, 4, 5, 6, 7]),
+        ),
+        ("session-b", 1, metrics(50, 60, 2, 3, &[100])),
+        (
+            "session-a",
+            3,
+            metrics(2_000, 3_000, 20, 30, &[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        ),
+    ];
+
+    for (session_id, heartbeat_id, proxy_metadata) in heartbeats {
+        let body = json!({
+            "node_id": "node-123",
+            "heartbeat_session_id": session_id,
+            "heartbeat_id": heartbeat_id,
+            "proxy_metadata": proxy_metadata
+        });
+        let response = authenticated_tunnel_control_plane_request(
+            &client,
+            format!("{gateway_url}{TUNNEL_HEARTBEAT_PATH}"),
+            TUNNEL_HEARTBEAT_PATH,
+            "node-123",
+            &body,
+        )
+        .send()
+        .await
+        .expect("heartbeat request should succeed");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "heartbeat {session_id}/{heartbeat_id} should be accepted"
+        );
+    }
+
+    let buckets = repository
+        .list_proxy_node_metrics("node-123", ProxyNodeMetricsStep::OneMinute, 0, u64::MAX, 16)
+        .await
+        .expect("metrics should read");
+    assert_eq!(
+        buckets
+            .iter()
+            .map(|bucket| bucket.ws_in_bytes_delta)
+            .sum::<i64>(),
+        500
+    );
+    assert_eq!(
+        buckets
+            .iter()
+            .map(|bucket| bucket.ws_out_bytes_delta)
+            .sum::<i64>(),
+        400
+    );
+    assert_eq!(
+        buckets
+            .iter()
+            .map(|bucket| bucket.ws_in_frames_delta)
+            .sum::<i64>(),
+        5
+    );
+    assert_eq!(
+        buckets
+            .iter()
+            .map(|bucket| bucket.ws_out_frames_delta)
+            .sum::<i64>(),
+        3
+    );
+    assert_eq!(
+        buckets
+            .iter()
+            .map(|bucket| bucket.error_events_delta)
+            .sum::<i64>(),
+        2
+    );
+
+    let events = repository
+        .list_proxy_node_events("node-123", 16)
+        .await
+        .expect("events should read");
+    assert_eq!(
+        events.len(),
+        2,
+        "only the advancing same-session heartbeat should report recent errors"
+    );
+    let mut details = events
+        .iter()
+        .filter_map(|event| event.detail.as_deref())
+        .collect::<Vec<_>>();
+    details.sort_unstable();
+    assert_eq!(
+        details,
+        vec![
+            "[session_interleave] event-6",
+            "[session_interleave] event-7"
+        ]
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_heartbeat_without_metadata_preserves_snapshot_and_metrics_baseline() {
+    let scenario_node = |node_id: &str| {
+        let mut node = with_tunnel_control_plane_key(
+            sample_proxy_node(node_id),
+            TUNNEL_CONTROL_PLANE_TEST_PSK,
+        );
+        let metadata = node
+            .proxy_metadata
+            .as_mut()
+            .expect("seeded metadata should exist")
+            .as_object_mut()
+            .expect("seeded metadata should be an object");
+        metadata.insert("arch".to_string(), json!("arm64"));
+        metadata.insert("heartbeat_session_id".to_string(), json!("session-metrics"));
+        metadata.insert("heartbeat_id".to_string(), json!(1));
+        metadata.insert(
+            "tunnel_metrics".to_string(),
+            json!({
+                "connect_errors": 0,
+                "disconnects": 0,
+                "error_events_total": 0,
+                "ws_in_bytes": 1_000,
+                "ws_out_bytes": 2_000,
+                "ws_in_frames": 10,
+                "ws_out_frames": 20,
+                "heartbeat_rtt_last_ms": 5
+            }),
+        );
+        node
+    };
+    let scenarios = [
+        ("node-absent-metadata", false),
+        ("node-null-metadata", true),
+    ];
+    let repository = Arc::new(InMemoryProxyNodeRepository::seed(
+        scenarios.iter().map(|(node_id, _)| scenario_node(node_id)),
+    ));
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_proxy_node_repository_for_tests(
+                Arc::clone(&repository),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+
+    for (node_id, explicit_null) in scenarios {
+        let mut heartbeat = json!({
+            "node_id": node_id,
+            "heartbeat_session_id": "session-metrics",
+            "heartbeat_id": 2,
+            "active_connections": 1
+        });
+        if explicit_null {
+            heartbeat["proxy_metadata"] = json!(null);
+        }
+        let response = authenticated_tunnel_control_plane_request(
+            &client,
+            format!("{gateway_url}{TUNNEL_HEARTBEAT_PATH}"),
+            TUNNEL_HEARTBEAT_PATH,
+            node_id,
+            &heartbeat,
+        )
+        .send()
+        .await
+        .expect("metadata-less heartbeat should complete");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "metadata-less heartbeat for {node_id} should be accepted"
+        );
+
+        let node = repository
+            .find_proxy_node(node_id)
+            .await
+            .expect("node lookup should succeed")
+            .expect("node should exist");
+        let metadata = node
+            .proxy_metadata
+            .as_ref()
+            .expect("seeded metadata should persist");
+        assert_eq!(
+            metadata.get("arch"),
+            Some(&json!("arm64")),
+            "metadata-less heartbeat must not erase runtime metadata for {node_id}"
+        );
+        assert_eq!(
+            metadata.get("heartbeat_session_id"),
+            Some(&json!("session-metrics"))
+        );
+        assert_eq!(
+            metadata.get("heartbeat_id"),
+            Some(&json!(1)),
+            "a heartbeat without a metrics snapshot must not advance the cursor for {node_id}"
+        );
+        assert_eq!(
+            metadata.pointer("/tunnel_metrics/ws_in_bytes"),
+            Some(&json!(1_000))
+        );
+
+        let advanced = json!({
+            "node_id": node_id,
+            "heartbeat_session_id": "session-metrics",
+            "heartbeat_id": 3,
+            "active_connections": 1,
+            "proxy_metadata": {
+                "arch": "arm64",
+                "tunnel_metrics": {
+                    "connect_errors": 0,
+                    "disconnects": 0,
+                    "error_events_total": 0,
+                    "ws_in_bytes": 1_500,
+                    "ws_out_bytes": 2_500,
+                    "ws_in_frames": 15,
+                    "ws_out_frames": 25,
+                    "heartbeat_rtt_last_ms": 5
+                }
+            }
+        });
+        let response = authenticated_tunnel_control_plane_request(
+            &client,
+            format!("{gateway_url}{TUNNEL_HEARTBEAT_PATH}"),
+            TUNNEL_HEARTBEAT_PATH,
+            node_id,
+            &advanced,
+        )
+        .send()
+        .await
+        .expect("metrics heartbeat should complete");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let node = repository
+            .find_proxy_node(node_id)
+            .await
+            .expect("node lookup should succeed")
+            .expect("node should exist");
+        let metadata = node
+            .proxy_metadata
+            .as_ref()
+            .expect("metrics metadata should persist");
+        assert_eq!(metadata.get("heartbeat_id"), Some(&json!(3)));
+        assert_eq!(
+            metadata.pointer("/tunnel_metrics/ws_in_bytes"),
+            Some(&json!(1_500))
+        );
+
+        let buckets = repository
+            .list_proxy_node_metrics(node_id, ProxyNodeMetricsStep::OneMinute, 0, u64::MAX, 64)
+            .await
+            .expect("metrics should read");
+        assert_eq!(
+            buckets
+                .iter()
+                .map(|bucket| bucket.ws_in_bytes_delta)
+                .sum::<i64>(),
+            500,
+            "the next metrics heartbeat must advance from the preserved snapshot for {node_id}"
+        );
+        assert_eq!(
+            buckets
+                .iter()
+                .map(|bucket| bucket.ws_out_bytes_delta)
+                .sum::<i64>(),
+            500
+        );
+        assert_eq!(
+            buckets
+                .iter()
+                .map(|bucket| bucket.ws_in_frames_delta)
+                .sum::<i64>(),
+            5
+        );
+        assert_eq!(
+            buckets
+                .iter()
+                .map(|bucket| bucket.ws_out_frames_delta)
+                .sum::<i64>(),
+            5
+        );
+    }
 
     gateway_handle.abort();
 }

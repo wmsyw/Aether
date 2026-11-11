@@ -25,6 +25,12 @@ use crate::formats::shared::AiSurfaceFinalizeError;
 
 const PROVIDER_STREAM_FINISH_ERROR_MESSAGE: &str =
     "Upstream stream ended with finish reason: error";
+/// Canonical terminal reason for a response the provider itself cancelled.
+///
+/// Unlike `error`, cancellation is a provider-owned terminal event: partial
+/// output and reported usage stay valid, but the response never completed.
+const CANONICAL_CANCELLED_FINISH_REASON: &str = "cancelled";
+const PROVIDER_STREAM_CANCELLED_MESSAGE: &str = "Upstream response was cancelled before completion";
 
 #[derive(Default)]
 pub struct StreamingStandardFormatMatrix {
@@ -125,10 +131,22 @@ impl StreamingStandardFormatMatrix {
         };
         let mut out = Vec::new();
         for frame in frames {
+            let provider_cancelled = matches!(
+                &frame.event,
+                CanonicalStreamEvent::Finish {
+                    finish_reason: Some(finish_reason),
+                    ..
+                } if canonical_stream_finish_reason_is_cancelled(finish_reason)
+            );
+            if provider_cancelled {
+                self.terminated = true;
+                out.extend(client.emit_provider_cancelled(frame)?);
+                break;
+            }
             if let CanonicalStreamEvent::Finish {
-                finish_reason: Some(ref finish_reason),
+                finish_reason: Some(finish_reason),
                 ..
-            } = frame.event
+            } = &frame.event
             {
                 if !canonical_stream_finish_reason_is_supported(finish_reason) {
                     self.terminated = true;
@@ -714,6 +732,35 @@ impl ClientStreamEmitter {
         self.emit_error(error_body)
     }
 
+    /// Emits the terminal a client format can express for a provider-side
+    /// cancellation.
+    ///
+    /// OpenAI Responses has a native `response.cancelled` terminal, so the
+    /// client keeps the reported usage and partial output. Chat, Claude and
+    /// Gemini have no cancelled finish value in their documented enums;
+    /// inventing one would be invalid protocol, and `stop`/`end_turn`/`STOP`
+    /// would fabricate success. They receive the established terminal error
+    /// shape for their format instead, carrying the cancellation cause.
+    fn emit_provider_cancelled(
+        &mut self,
+        frame: CanonicalStreamFrame,
+    ) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
+        if let ClientStreamEmitter::OpenAIResponses(state) = self {
+            if let CanonicalStreamEvent::Finish { usage, .. } = &frame.event {
+                return state.emit_provider_cancelled(usage.as_ref());
+            }
+        }
+        let Some(error_body) = build_core_error_body_for_client_format(
+            self.api_format(),
+            PROVIDER_STREAM_CANCELLED_MESSAGE,
+            Some("provider_cancelled"),
+            LocalCoreSyncErrorKind::ServerError,
+        ) else {
+            return Ok(Vec::new());
+        };
+        self.emit_error(error_body)
+    }
+
     fn api_format(&self) -> &'static str {
         match self {
             ClientStreamEmitter::OpenAIChat(_) => "openai:chat",
@@ -724,11 +771,18 @@ impl ClientStreamEmitter {
     }
 }
 
+fn canonical_stream_finish_reason_is_cancelled(finish_reason: &str) -> bool {
+    finish_reason
+        .trim()
+        .eq_ignore_ascii_case(CANONICAL_CANCELLED_FINISH_REASON)
+}
+
 fn canonical_stream_finish_reason_is_supported(finish_reason: &str) -> bool {
-    matches!(
-        finish_reason.trim(),
-        "stop" | "length" | "tool_calls" | "function_call" | "content_filter"
-    )
+    canonical_stream_finish_reason_is_cancelled(finish_reason)
+        || matches!(
+            finish_reason.trim(),
+            "stop" | "length" | "tool_calls" | "function_call" | "content_filter"
+        )
 }
 
 fn build_client_error_body_for_line(report_context: &Value, line: &[u8]) -> Option<Value> {
@@ -2705,6 +2759,162 @@ mod tests {
         assert!(!sse.contains("event: response.completed\n"));
     }
 
+    /// 真实的 Responses 取消流：partial 输出必须保住。Responses 客户端得到原生
+    /// `response.cancelled`（带 reported usage）；其它格式没有官方的 cancelled
+    /// 终态枚举，因此走各自协议的终态错误形状，既不伪造 `stop`/`end_turn`/`STOP`
+    /// 的成功，也不发明非法枚举值，更不退化成 `unsupported_finish_reason`。
+    #[test]
+    fn transforms_cancelled_responses_terminal_without_fabricating_completion() {
+        let cases: [(&str, &[&str]); 4] = [
+            (
+                "openai:responses",
+                &[
+                    "event: response.cancelled\n",
+                    "\"status\":\"cancelled\"",
+                    "\"input_tokens\":26",
+                    "\"output_tokens\":13",
+                    "\"reasoning_tokens\":3",
+                    "\"cached_tokens\":7",
+                    "\"cache_write_tokens\":6",
+                ],
+            ),
+            (
+                "openai:chat",
+                &[
+                    "data: {\"error\":",
+                    "\"code\":\"provider_cancelled\"",
+                    "Upstream response was cancelled before completion",
+                ],
+            ),
+            (
+                "claude:messages",
+                &[
+                    "event: error\n",
+                    "\"code\":\"provider_cancelled\"",
+                    "Upstream response was cancelled before completion",
+                ],
+            ),
+            (
+                "gemini:generate_content",
+                &[
+                    "data: {\"error\":",
+                    "\"status\":\"INTERNAL\"",
+                    "Upstream response was cancelled before completion",
+                ],
+            ),
+        ];
+
+        for (client_api_format, markers) in cases {
+            let context = report_context("openai:responses", client_api_format);
+            let mut matrix = StreamingStandardFormatMatrix::default();
+            let mut output = Vec::new();
+            for event in [
+                json!({
+                    "type": "response.created",
+                    "response": {"id": "resp_cancelled_convert", "model": "gpt-5.5"},
+                }),
+                json!({
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_cancelled_convert",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "Partial answer",
+                }),
+                json!({
+                    "type": "response.cancelled",
+                    "response": {
+                        "id": "resp_cancelled_convert",
+                        "model": "gpt-5.5",
+                        "status": "cancelled",
+                        "output": [{
+                            "id": "msg_cancelled_convert",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Partial answer"}],
+                        }],
+                        "usage": {
+                            "input_tokens": 26,
+                            "input_tokens_details": {"cached_tokens": 7, "cache_write_tokens": 6},
+                            "output_tokens": 13,
+                            "output_tokens_details": {"reasoning_tokens": 3},
+                            "total_tokens": 39,
+                        },
+                    },
+                }),
+            ] {
+                output.extend(
+                    matrix
+                        .transform_line(&context, data_line(event))
+                        .expect("a cancelled Responses terminal must convert"),
+                );
+            }
+            output.extend(matrix.finish(&context).expect("the stream should finish"));
+            let sse = String::from_utf8(output).expect("sse should be utf8");
+
+            assert!(
+                sse.contains("Partial answer"),
+                "{client_api_format}: partial output must survive: {sse}"
+            );
+            for marker in markers.iter().copied() {
+                assert!(
+                    sse.contains(marker),
+                    "{client_api_format}: missing {marker}: {sse}"
+                );
+            }
+            assert!(
+                !sse.contains("unsupported_finish_reason"),
+                "{client_api_format}: cancellation is not an unsupported finish: {sse}"
+            );
+            assert!(
+                !sse.contains("Unsupported provider stream finish reason"),
+                "{client_api_format}: cancellation is not a conversion error: {sse}"
+            );
+            assert!(
+                !sse.contains("\"finish_reason\":\"stop\""),
+                "{client_api_format}: cancellation must not become a successful stop: {sse}"
+            );
+            assert!(
+                !sse.contains("\"stop_reason\":\"end_turn\""),
+                "{client_api_format}: cancellation must not become end_turn: {sse}"
+            );
+            assert!(
+                !sse.contains("\"finishReason\":\"STOP\""),
+                "{client_api_format}: cancellation must not become STOP: {sse}"
+            );
+            assert!(
+                !sse.contains("\"finish_reason\":\"cancelled\"")
+                    && !sse.contains("\"stop_reason\":\"cancelled\"")
+                    && !sse.contains("\"finishReason\":\"CANCELLED\""),
+                "{client_api_format}: cancellation must not invent a finish enum value: {sse}"
+            );
+            // Closed output items legitimately carry `status: "completed"`;
+            // only the event's own terminal/response root must never claim a
+            // completed response. Assert on parsed events, not source text.
+            let events = json_data_events(sse.as_bytes());
+            assert!(
+                events.iter().all(|event| {
+                    event.get("type").and_then(Value::as_str) != Some("response.completed")
+                        && event.pointer("/response/status").and_then(Value::as_str)
+                            != Some("completed")
+                }),
+                "{client_api_format}: cancellation must not become a completed response: {sse}"
+            );
+            if client_api_format == "openai:responses" {
+                let terminal = events
+                    .iter()
+                    .find(|event| {
+                        event.get("type").and_then(Value::as_str) == Some("response.cancelled")
+                    })
+                    .expect("the Responses client must receive response.cancelled");
+                assert_eq!(
+                    terminal.pointer("/response/status").and_then(Value::as_str),
+                    Some("cancelled"),
+                    "{client_api_format}: {sse}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn rewrites_gemini_inline_image_streams_to_claude_image_blocks() {
         let report_context = report_context("gemini:generate_content", "claude:messages");
@@ -3386,6 +3596,59 @@ mod structured_entry_tests {
             "a legitimate incomplete is not a parser error: {:?}",
             summary.parser_error
         );
+    }
+
+    /// 供应商自己声明的取消（`response.cancelled` / `status: cancelled`）是终态，
+    /// 不是不支持的 finish reason：partial 输出与 usage 必须原样保留，摘要里
+    /// 只能出现 `cancelled`，不能出现 `unsupported provider stream finish reason`。
+    #[test]
+    fn a_provider_cancelled_terminal_agrees_across_both_entries() {
+        let events = vec![
+            created(),
+            text_delta("Partial answer"),
+            json!({
+                "type": "response.cancelled",
+                "response": {
+                    "id": "resp_diff",
+                    "model": "gpt-5-codex",
+                    "status": "cancelled",
+                    "output": [{
+                        "id": "msg_diff",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Partial answer"}],
+                    }],
+                    "usage": {
+                        "input_tokens": 26,
+                        "input_tokens_details": {"cached_tokens": 7, "cache_write_tokens": 6},
+                        "output_tokens": 13,
+                        "output_tokens_details": {"reasoning_tokens": 3},
+                        "total_tokens": 39,
+                    },
+                },
+            }),
+        ];
+        assert_entries_agree("a provider-cancelled terminal", &events);
+        let summary = summary_via_push_event(&events);
+        assert!(summary.observed_finish);
+        assert_eq!(summary.finish_reason.as_deref(), Some("cancelled"));
+        assert!(
+            summary.parser_error.is_none(),
+            "a provider cancellation is not a parser error: {:?}",
+            summary.parser_error
+        );
+        assert_eq!(summary.response_id.as_deref(), Some("resp_diff"));
+        assert_eq!(summary.model.as_deref(), Some("gpt-5-codex"));
+        let usage = summary
+            .standardized_usage
+            .as_ref()
+            .expect("a cancelled terminal keeps its reported usage");
+        assert_eq!(usage.input_tokens, 26);
+        assert_eq!(usage.output_tokens, 13);
+        assert_eq!(usage.reasoning_tokens, 3);
+        assert_eq!(usage.cache_read_tokens, 7);
+        assert_eq!(usage.cache_creation_tokens, 6);
+        assert_eq!(usage.dimensions.get("total_tokens"), Some(&json!(39)));
     }
 
     #[test]

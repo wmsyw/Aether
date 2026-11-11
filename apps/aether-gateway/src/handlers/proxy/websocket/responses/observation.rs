@@ -22,6 +22,8 @@ use serde_json::Value;
 use crate::ai_serving::api::StreamingStandardTerminalObserver;
 use aether_contracts::ExecutionStreamTerminalSummary;
 
+use super::request::MAX_RESPONSES_WEBSOCKET_RESPONSE_ID_BYTES;
+
 /// 包一层 [`StreamingStandardTerminalObserver`]，只暴露结构化入口。
 ///
 /// 存在的意义是让「WS 不再拼 SSE」成为类型层面的事实：这里没有任何接受字节的
@@ -29,6 +31,13 @@ use aether_contracts::ExecutionStreamTerminalSummary;
 #[derive(Default)]
 pub(super) struct ResponsesStructuredTerminalObserver {
     inner: StreamingStandardTerminalObserver,
+    /// Provider-assigned response identity observed on any `response.*` event.
+    ///
+    /// `response.queued` carries the ID the provider will use for the whole
+    /// response, but the canonical terminal summary does not materialize for
+    /// it. Cancellation validation must therefore see identity independently
+    /// of whether a usage summary exists.
+    latest_response_id: Option<String>,
 }
 
 impl ResponsesStructuredTerminalObserver {
@@ -37,6 +46,11 @@ impl ResponsesStructuredTerminalObserver {
     /// 第一个被拒绝的事件就停止推进并把摘要标成 parser_error：解析器的状态机是
     /// 有顺序的，跳过一个事件继续喂后面的只会得到更没意义的摘要。
     pub(super) fn observe_events(&mut self, report_context: &Value, events: &[&Value]) {
+        for event in events {
+            if let Some(response_id) = provider_response_identity(event) {
+                self.latest_response_id = Some(response_id.to_string());
+            }
+        }
         for event in events
             .iter()
             .copied()
@@ -53,6 +67,21 @@ impl ResponsesStructuredTerminalObserver {
         self.inner.disable_with_error(parser_error);
     }
 
+    pub(super) fn response_id(&self) -> Option<&str> {
+        // Provider-announced identity only. The canonical summary may carry a
+        // synthetic fallback id (for example `resp-local-stream`) that no
+        // provider ever sent, and a client must not be able to cancel against
+        // it.
+        self.latest_response_id.as_deref()
+    }
+
+    /// 结算时只调用一次的终态收尾。
+    ///
+    /// canonical 解析器在「已经收到过事件、但没有供应商终态」时会补一个合成
+    /// 的 EOF finish（`observed_finish = true`，与 HTTP 观测路径共享同一行为），
+    /// 所以这个摘要里的 `observed_finish` 不能反推「供应商发过终态」。WS 的取消
+    /// 校验只依赖 [`Self::response_id`] 的供应商身份，不依赖该摘要；调用方也不
+    /// 要在观测过程中提前调用本方法，否则会把未结束的流收尾成假终态。
     pub(super) fn finish(&mut self, report_context: &Value) -> ExecutionStreamTerminalSummary {
         match self.inner.finish(report_context) {
             Ok(Some(summary)) => summary,
@@ -85,6 +114,27 @@ fn event_is_relevant_to_terminal_observation(event: &Value) -> bool {
                 | "error"
         )
     )
+}
+
+/// Extracts the provider-assigned response identity from a `response.*`
+/// lifecycle event.
+///
+/// The relay must validate `response.cancel.response_id` against the identity
+/// the provider itself announced. `response.queued` is the first such frame
+/// and does not produce a canonical terminal summary, so identity is read
+/// here for every response event instead of from the usage summary.
+fn provider_response_identity(event: &Value) -> Option<&str> {
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    if !event_type.starts_with("response.") {
+        return None;
+    }
+    let response_id = event
+        .pointer("/response/id")
+        .or_else(|| event.get("response_id"))
+        .and_then(Value::as_str)?;
+    (!response_id.trim().is_empty()
+        && response_id.len() <= MAX_RESPONSES_WEBSOCKET_RESPONSE_ID_BYTES)
+        .then_some(response_id)
 }
 
 #[cfg(test)]
@@ -127,6 +177,56 @@ mod tests {
         assert_eq!(usage.input_tokens, 9);
         assert_eq!(usage.output_tokens, 4);
         assert!(summary.parser_error.is_none());
+    }
+
+    #[test]
+    fn queued_response_identity_is_tracked_without_a_terminal_summary() {
+        let context = report_context();
+        // The canonical Responses parser only materializes identity from a
+        // nested response object. A queued event that carries identity at the
+        // top level still must reach cancel validation.
+        let queued = json!({
+            "type": "response.queued",
+            "response_id": "resp_queued",
+            "status": "queued",
+            "model": "m",
+        });
+
+        let mut observer = ResponsesStructuredTerminalObserver::default();
+        assert_eq!(observer.response_id(), None);
+        observer.observe_events(&context, &[&queued]);
+
+        assert_eq!(observer.response_id(), Some("resp_queued"));
+        let summary = observer.finish(&context);
+        // `finish` is the settlement-time auto-finisher, and the canonical
+        // parser synthesizes an EOF `stop` for an already-started stream (the
+        // same behavior the HTTP observation path has), so the summary's
+        // `observed_finish` is not evidence that the provider emitted a
+        // terminal event. What consumers rely on is narrower: a queued-only
+        // observation must not fabricate billable usage, and the
+        // provider-announced ID used by cancel validation must survive
+        // settlement.
+        assert!(summary.standardized_usage.is_none());
+        assert_eq!(observer.response_id(), Some("resp_queued"));
+    }
+
+    #[test]
+    fn response_identity_ignores_malformed_and_non_response_events() {
+        let context = report_context();
+        let events = [
+            json!({"type": "response.queued", "response": {"id": "resp_nested"}}),
+            json!({"type": "response.created", "response": {"id": "resp_first"}}),
+            json!({"type": "response.output_text.delta", "response_id": "resp_delta"}),
+            json!({"type": "response.in_progress", "response": {"id": "   "}}),
+            json!({"type": "response.created", "response": {"id": "x".repeat(257)}}),
+            json!({"type": "error", "response_id": "resp_error"}),
+        ];
+        let borrowed: Vec<&serde_json::Value> = events.iter().collect();
+
+        let mut observer = ResponsesStructuredTerminalObserver::default();
+        observer.observe_events(&context, &borrowed);
+
+        assert_eq!(observer.response_id(), Some("resp_delta"));
     }
 
     /// 批量帧里的多个事件按顺序喂入，usage 不能因为批量而丢失。

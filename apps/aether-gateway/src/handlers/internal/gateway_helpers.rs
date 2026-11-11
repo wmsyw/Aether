@@ -310,8 +310,13 @@ pub(crate) async fn maybe_build_internal_finalize_video_response(
                 local_task_snapshot,
             } = outcome;
             if let Some(snapshot) = local_task_snapshot {
-                let _ = state.upsert_video_task_snapshot(&snapshot).await?;
+                let stored = state.upsert_video_task_snapshot(&snapshot).await?;
                 state.video_tasks.record_snapshot(snapshot);
+                if let Some(stored) = stored {
+                    // An upstream that completes inside the create response must settle the
+                    // create's deferred usage row here; the poller never claims a terminal task.
+                    crate::async_task::finalize_video_task_if_terminal(state, &stored).await;
+                }
             }
             match report_mode {
                 crate::video_tasks::VideoTaskSyncReportMode::InlineSync => {

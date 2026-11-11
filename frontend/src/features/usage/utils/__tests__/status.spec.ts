@@ -98,6 +98,53 @@ describe('usage status helpers', () => {
     expect(isUsageRecordFailed(record)).toBe(true)
   })
 
+  it('keeps active HTTP 200 rows active without a reliable terminal signal', () => {
+    for (const status of ['pending', 'streaming'] as const) {
+      const record = buildUsageRecord({
+        status,
+        status_code: 200,
+        first_byte_time_ms: 120,
+        error_message: 'retained from an earlier retry',
+      })
+      expect(isUsageRecordFailed(record)).toBe(false)
+      expect(resolveDisplayRequestStatus(record)).toBe(status)
+      expect(resolveTimelineFinalStatus({ requestStatus: status, statusCode: 200 })).toBe(status)
+    }
+    expect(resolveTimelineFinalStatus({
+      requestStatus: 'pending', statusCode: 200, traceFinalStatus: 'success',
+    })).toBe('pending')
+  })
+
+  it('keeps a recovered completed request authoritative over stale image and error signals', () => {
+    const record = buildUsageRecord({
+      status: 'completed',
+      status_code: 200,
+      image_progress: { phase: 'failed' },
+      error_message: 'retained from failed attempt',
+    })
+    expect(resolveDisplayRequestStatus(record)).toBe('completed')
+    expect(isUsageRecordFailed(record)).toBe(false)
+    expect(isUsageRecordSuccessful(record)).toBe(true)
+    expect(resolveTimelineFinalStatus({
+      requestStatus: record.status,
+      statusCode: record.status_code,
+      traceFinalStatus: 'failed',
+      hasPendingCandidates: true,
+    })).toBe('success')
+  })
+  it('treats active stream records with 2xx transport and an image failure as failed', () => {
+    const record = buildUsageRecord({
+      status: 'streaming',
+      status_code: 200,
+      image_progress: { phase: 'failed' },
+      first_byte_time_ms: 120,
+    })
+
+    expect(resolveDisplayRequestStatus(record)).toBe('failed')
+    expect(isUsageRecordFailed(record)).toBe(true)
+  })
+
+
   it('treats failed image progress as failed before the usage record finalizes', () => {
     const record = buildUsageRecord({
       status: 'streaming',
@@ -148,23 +195,26 @@ describe('usage status helpers', () => {
     })).toBe('failed')
   })
 
-  it('keeps active request lifecycle status authoritative over detail status code inference', () => {
+  it('treats a terminal failed trace as final for an active request without a live candidate', () => {
     expect(resolveTimelineFinalStatus({
       requestStatus: 'streaming',
       statusCode: 200,
-    })).toBe('streaming')
-
-    expect(resolveTimelineFinalStatus({
-      requestStatus: 'streaming',
-      statusCode: 503,
       traceFinalStatus: 'failed',
+      hasPendingCandidates: false,
+    })).toBe('failed')
+
+    expect(resolveTimelineFinalStatus({
+      requestStatus: 'streaming',
+      statusCode: 200,
+      traceFinalStatus: 'failed',
+      hasPendingCandidates: true,
     })).toBe('streaming')
 
     expect(resolveTimelineFinalStatus({
-      requestStatus: 'pending',
+      requestStatus: 'completed',
       statusCode: 200,
-      traceFinalStatus: 'success',
-    })).toBe('pending')
+      traceFinalStatus: 'failed',
+    })).toBe('success')
   })
 
   it('uses explicit has_fallback flag for transfer filtering', () => {

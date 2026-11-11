@@ -260,11 +260,12 @@ const isParticipatedCandidate = (candidate: CandidateRecord): boolean => {
 }
 
 const isLiveCandidate = (candidate: CandidateRecord): boolean => {
+  if (candidate.finished_at || getDisplayStatus(candidate) === 'failed') return false
   if (candidate.status === 'streaming') return true
   return candidate.status === 'pending' && Boolean(candidate.started_at)
 }
 
-// 计算最终状态：优先检查真正已启动的进行中状态，再使用外部状态码
+// 请求显式终态优先；无真正进行中的候选时，使用追踪终态。
 const computedFinalStatus = computed(() => {
   const hasPending = trace.value?.candidates?.some(isLiveCandidate)
   return resolveTimelineFinalStatus({

@@ -38,7 +38,7 @@ impl BillingPricingConfigurationError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BillingPricingResolution {
     pub requested_processing_tier: Option<String>,
     pub actual_processing_tier: Option<String>,
@@ -48,6 +48,12 @@ pub struct BillingPricingResolution {
     pub processing_tier_price_multiplier: Option<f64>,
     pub price_per_request: Option<f64>,
     pub price_per_request_source: Option<BillingPricingSource>,
+    /// `config.billing.video` for the model, provider override taking precedence.
+    ///
+    /// Video pricing lives in the model config rather than in `tiered_pricing`,
+    /// because it is keyed by rendered resolution instead of token counts.
+    #[serde(default)]
+    pub video_pricing: Option<Value>,
 }
 
 impl BillingPricingResolution {
@@ -133,6 +139,7 @@ impl BillingModelPricingSnapshot {
             processing_tier_price_multiplier,
             price_per_request,
             price_per_request_source,
+            video_pricing: self.resolve_video_pricing(),
         }
     }
 
@@ -173,6 +180,7 @@ impl BillingModelPricingSnapshot {
             processing_tier_price_multiplier,
             price_per_request,
             price_per_request_source,
+            video_pricing: self.resolve_video_pricing(),
         })
     }
 
@@ -235,6 +243,7 @@ impl BillingModelPricingSnapshot {
             processing_tier_price_multiplier,
             price_per_request,
             price_per_request_source,
+            video_pricing: self.resolve_video_pricing(),
         })
     }
 
@@ -430,6 +439,24 @@ impl BillingModelPricingSnapshot {
                 self.default_price_per_request
                     .map(|price| (price, BillingPricingSource::GlobalDefault))
             })
+    }
+
+    /// Reads `config.billing.video`, letting a provider-level model config
+    /// override the global model config, matching how `tiered_pricing` resolves.
+    pub fn resolve_video_pricing(&self) -> Option<Value> {
+        fn video_section(config: Option<&Value>) -> Option<Value> {
+            let video = config?.get("billing")?.get("video")?;
+            // An empty provider table is the legacy representation for "inherit
+            // the global price table" and must not shadow it.
+            video
+                .get("price_per_second_by_resolution")?
+                .as_object()
+                .filter(|table| !table.is_empty())?;
+            Some(video.clone())
+        }
+
+        video_section(self.model_config.as_ref())
+            .or_else(|| video_section(self.global_model_config.as_ref()))
     }
 
     pub fn is_free_tier(&self) -> bool {
@@ -1475,6 +1502,55 @@ mod tests {
         );
         assert_eq!(priority.processing_tier_price_multiplier, Some(2.5));
     }
+    #[test]
+    fn video_pricing_prefers_the_provider_config_then_the_global_config() {
+        let provider_video = json!({"price_per_second_by_resolution": {"720p": 2.0}});
+        let global_video = json!({"price_per_second_by_resolution": {"720p": 9.0}});
+        let mut pricing = snapshot(None, None);
+        pricing.global_model_config = Some(json!({"billing": {"video": global_video}}));
+        pricing.model_config = Some(json!({"billing": {"video": provider_video.clone()}}));
+        assert_eq!(pricing.resolve_video_pricing(), Some(provider_video));
+
+        // A provider config without its own video section inherits the global one.
+        pricing.model_config = Some(json!({"billing": {"tiered_pricing": {}}}));
+        assert_eq!(
+            pricing.resolve_video_pricing(),
+            Some(json!({"price_per_second_by_resolution": {"720p": 9.0}}))
+        );
+        // An empty provider price table inherits too, matching tiered pricing.
+        pricing.model_config = Some(json!({
+            "billing": {"video": {"price_per_second_by_resolution": {}}}
+        }));
+        assert_eq!(
+            pricing.resolve_video_pricing(),
+            Some(json!({"price_per_second_by_resolution": {"720p": 9.0}}))
+        );
+        // A malformed (non-object) section is not pricing configuration.
+        pricing.model_config = Some(json!({"billing": {"video": "720p"}}));
+        assert_eq!(
+            pricing.resolve_video_pricing(),
+            Some(json!({"price_per_second_by_resolution": {"720p": 9.0}}))
+        );
+    }
+
+    #[test]
+    fn resolution_carries_video_pricing_through_every_resolution_path() {
+        let video = json!({"price_per_second_by_resolution": {"1080p": 3.0}});
+        let mut pricing = snapshot(None, None);
+        pricing.global_model_config = Some(json!({"billing": {"video": video.clone()}}));
+
+        for resolution in [
+            pricing.resolve_pricing(None, None),
+            pricing.resolve_pricing_checked(None, None).unwrap(),
+        ] {
+            assert_eq!(resolution.video_pricing, Some(video.clone()));
+        }
+        let candidates = pricing
+            .resolve_authorization_pricing_candidates(None)
+            .unwrap()
+            .expect("standard catalog candidate");
+        assert_eq!(candidates[0].video_pricing, Some(video));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1496,6 +1572,12 @@ pub struct BillingUsageInput {
     pub image_size: Option<String>,
     pub image_quality: Option<String>,
     pub image_output_format: Option<String>,
+    /// Resolution the provider actually rendered, e.g. `720p` or `1280x720`.
+    #[serde(default)]
+    pub video_resolution: Option<String>,
+    /// Duration the provider actually rendered, in whole seconds.
+    #[serde(default)]
+    pub video_duration_seconds: i64,
     pub cache_ttl_minutes: Option<i64>,
 }
 
@@ -1541,6 +1623,8 @@ impl BillingUsageInput {
             image_size: None,
             image_quality: None,
             image_output_format: None,
+            video_resolution: None,
+            video_duration_seconds: 0,
             cache_ttl_minutes: None,
         }
     }

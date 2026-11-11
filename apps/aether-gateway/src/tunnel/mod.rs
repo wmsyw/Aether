@@ -19,7 +19,8 @@ use aether_contracts::tunnel::{
     TUNNEL_RELAY_OWNER_INSTANCE_HEADER,
 };
 use aether_data::repository::proxy_nodes::{
-    ProxyNodeHeartbeatMutation, ProxyNodeTunnelStatusMutation, StoredProxyNode,
+    attach_heartbeat_cursor, ProxyNodeHeartbeatMutation, ProxyNodeTunnelStatusMutation,
+    StoredProxyNode,
 };
 use aether_gateway_tunnel::EmbeddedTunnelDefaults;
 use aether_runtime::MetricSample;
@@ -2581,6 +2582,11 @@ async fn apply_embedded_tunnel_heartbeat(
         ));
     }
     let claim = claim.expect("fresh heartbeat claim should be present");
+    let proxy_metadata = attach_heartbeat_cursor(
+        payload.proxy_metadata,
+        &payload.heartbeat_session_id,
+        payload.heartbeat_id,
+    );
     let mutation = ProxyNodeHeartbeatMutation {
         node_id: node_id.clone(),
         expected_tunnel_generation: Some(authenticated_generation.to_string()),
@@ -2591,7 +2597,7 @@ async fn apply_embedded_tunnel_heartbeat(
         failed_requests_delta: payload.window_failed_requests.or(payload.failed_requests),
         dns_failures_delta: payload.window_dns_failures.or(payload.dns_failures),
         stream_errors_delta: payload.window_stream_errors.or(payload.stream_errors),
-        proxy_metadata: payload.proxy_metadata,
+        proxy_metadata,
         proxy_version: payload.proxy_version,
     };
 
@@ -3376,7 +3382,12 @@ mod tests {
                 "failed_requests": 1,
                 "dns_failures": 2,
                 "stream_errors": 3,
-                "proxy_metadata": {"arch": "arm64"},
+                "proxy_metadata": {
+                    "arch": "arm64",
+                    "heartbeat_session_id": "spoofed-session",
+                    "heartbeat_id": 1,
+                    "tunnel_metrics": {"ws_in_bytes": 1500}
+                },
                 "proxy_version": "2.0.0"
             }"#,
         )
@@ -3403,12 +3414,23 @@ mod tests {
         assert_eq!(node.failed_requests, 1);
         assert_eq!(node.dns_failures, 2);
         assert_eq!(node.stream_errors, 3);
+        let metadata = node
+            .proxy_metadata
+            .as_ref()
+            .expect("metadata should persist");
         assert_eq!(
-            node.proxy_metadata
-                .as_ref()
-                .and_then(|value| value.get("version"))
-                .and_then(serde_json::Value::as_str),
+            metadata.get("version").and_then(serde_json::Value::as_str),
             Some("2.0.0")
+        );
+        assert_eq!(metadata.get("arch"), Some(&json!("arm64")));
+        assert_eq!(
+            metadata.get("heartbeat_session_id"),
+            Some(&json!("session-1"))
+        );
+        assert_eq!(metadata.get("heartbeat_id"), Some(&json!(42)));
+        assert_eq!(
+            metadata.pointer("/tunnel_metrics/ws_in_bytes"),
+            Some(&json!(1_500))
         );
     }
 

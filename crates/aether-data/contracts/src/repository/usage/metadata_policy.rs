@@ -25,12 +25,69 @@ const UPSTREAM_IS_STREAM_KEY: &str = "upstream_is_stream";
 const PLAN_USAGE_RESERVATION_TOKEN_KEY: &str = "plan_usage_reservation_token";
 const BODY_SIZE_BASIS: &str = "serialized gateway request bodies after normalization";
 pub const CANCELLED_REQUEST_FEE_METADATA_KEY: &str = "cancelled_request_fee";
+pub const PROVIDER_CANCELLED_USAGE_METADATA_KEY: &str = "provider_cancelled_usage";
 
 pub fn cancelled_request_fee_is_billable(metadata: Option<&Value>) -> bool {
     metadata
         .and_then(|metadata| metadata.get(CANCELLED_REQUEST_FEE_METADATA_KEY))
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+pub fn provider_cancelled_usage_is_billable(metadata: Option<&Value>) -> bool {
+    metadata.is_some_and(|metadata| {
+        metadata
+            .get(PROVIDER_CANCELLED_USAGE_METADATA_KEY)
+            .and_then(Value::as_bool)
+            == Some(true)
+            && metadata
+                .get(USAGE_AVAILABLE_METADATA_KEY)
+                .and_then(Value::as_bool)
+                != Some(false)
+            && metadata
+                .get(USAGE_PRICING_AVAILABLE_METADATA_KEY)
+                .and_then(Value::as_bool)
+                != Some(false)
+    })
+}
+
+pub fn cancelled_usage_is_billable(metadata: Option<&Value>) -> bool {
+    cancelled_request_fee_is_billable(metadata) || provider_cancelled_usage_is_billable(metadata)
+}
+
+/// Removes the provider-cancelled billing authorization from caller metadata.
+///
+/// The marker is only meaningful when a trusted terminal builder inserts it
+/// after the transport observed a provider-declared cancellation together with
+/// reported usage. Report context, public usage seeds and payload capture
+/// metadata are all caller-controlled, so every boundary that merges them must
+/// strip the marker before a trusted builder decides whether to re-apply it.
+pub fn strip_provider_cancelled_usage_authorization(metadata: &mut Option<Value>) {
+    if let Some(object) = metadata.as_mut().and_then(Value::as_object_mut) {
+        object.remove(PROVIDER_CANCELLED_USAGE_METADATA_KEY);
+    }
+}
+
+/// Applies the provider-cancelled billing authorization to trusted terminal
+/// metadata.
+///
+/// Only a builder holding an observed provider cancellation fact may call this.
+/// Arbitrary caller-supplied metadata must never be able to reach it.
+pub fn authorize_provider_cancelled_usage_metadata(metadata: &mut Option<Value>) {
+    match metadata {
+        Some(Value::Object(object)) => {
+            object.insert(
+                PROVIDER_CANCELLED_USAGE_METADATA_KEY.to_string(),
+                Value::Bool(true),
+            );
+        }
+        _ => {
+            *metadata = Some(Value::Object(Map::from_iter([(
+                PROVIDER_CANCELLED_USAGE_METADATA_KEY.to_string(),
+                Value::Bool(true),
+            )])));
+        }
+    }
 }
 
 /// Projects request metadata onto the persistence contract. Unknown fields and malformed values
@@ -181,6 +238,10 @@ pub fn sanitize_usage_request_metadata_object(source: &Map<String, Value>) -> Op
         "transport_error",
         "is_free_tier",
         CANCELLED_REQUEST_FEE_METADATA_KEY,
+        // Retained so a trusted terminal builder's authorization survives the
+        // persistence projection. Caller-controlled seeds strip it first; see
+        // `strip_provider_cancelled_usage_authorization`.
+        PROVIDER_CANCELLED_USAGE_METADATA_KEY,
         USAGE_AVAILABLE_METADATA_KEY,
         CHAT_PII_REDACTION_METADATA_KEY,
         USAGE_PRICING_AVAILABLE_METADATA_KEY,
@@ -885,6 +946,21 @@ fn project_dimensions(value: &Value) -> Option<Value> {
         "cache_creation_ephemeral_5m_tokens",
         "cache_creation_ephemeral_1h_tokens",
         "cache_read_tokens",
+        "input_text_tokens",
+        "input_image_tokens",
+        "input_audio_tokens",
+        "input_video_tokens",
+        "input_document_tokens",
+        "output_text_tokens",
+        "output_image_tokens",
+        "output_audio_tokens",
+        "output_video_tokens",
+        "output_document_tokens",
+        "cache_read_text_tokens",
+        "cache_read_image_tokens",
+        "cache_read_audio_tokens",
+        "cache_read_video_tokens",
+        "cache_read_document_tokens",
         "request_count",
         "image_count",
         "image_count_unmetered",
@@ -894,10 +970,16 @@ fn project_dimensions(value: &Value) -> Option<Value> {
         "cache_creation_ephemeral_1h_ttl_minutes",
         "image_pixels",
         "windsurf_generator_entry_count",
+        "video_duration_seconds",
+        "video_seconds_unmetered",
     ] {
         insert_u64(source, &mut target, key);
     }
-    for key in ["cache_storage_token_hours", "image_output_price_per_image"] {
+    for key in [
+        "cache_storage_token_hours",
+        "image_output_price_per_image",
+        "video_price_per_second",
+    ] {
         insert_nonnegative_number(source, &mut target, key);
     }
     for key in [
@@ -933,7 +1015,12 @@ fn project_dimensions(value: &Value) -> Option<Value> {
         "image_output_format",
         sanitize_image_output_format,
     );
-    for key in ["image_size", "image_price_key", "image_output_price_bucket"] {
+    for key in [
+        "image_size",
+        "image_price_key",
+        "image_output_price_bucket",
+        "video_resolution",
+    ] {
         insert_dimension_token(source, &mut target, key);
     }
     (!target.is_empty()).then_some(Value::Object(target))
@@ -1103,6 +1190,7 @@ fn project_cost_breakdown(value: &Value) -> Option<Value> {
         "cache_read_cost",
         "image_output_cost",
         "request_cost",
+        "video_cost",
     ] {
         insert_nonnegative_number(source, &mut target, key);
     }
@@ -1606,6 +1694,119 @@ mod tests {
             "provider_response_model": "x".repeat(257)
         })))
         .is_none());
+    }
+
+    #[test]
+    fn persistence_projection_preserves_gemini_modality_token_dimensions() {
+        let dimensions = json!({
+            "input_text_tokens": 31,
+            "input_image_tokens": 258,
+            "input_audio_tokens": 80,
+            "input_video_tokens": 64,
+            "input_document_tokens": 128,
+            "output_text_tokens": 12,
+            "output_image_tokens": 1024,
+            "output_audio_tokens": 40,
+            "output_video_tokens": 32,
+            "output_document_tokens": 16,
+            "cache_read_text_tokens": 20,
+            "cache_read_image_tokens": 256,
+            "cache_read_audio_tokens": 60,
+            "cache_read_video_tokens": 48,
+            "cache_read_document_tokens": 96
+        });
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "dimensions": dimensions,
+            "billing_dimensions": dimensions,
+            "settlement_snapshot": {"resolved_dimensions": dimensions}
+        })))
+        .expect("modality token dimensions should remain");
+
+        assert_eq!(metadata["dimensions"], dimensions);
+        assert_eq!(metadata["billing_dimensions"], dimensions);
+        assert_eq!(
+            metadata["settlement_snapshot"]["resolved_dimensions"],
+            dimensions
+        );
+    }
+
+    #[test]
+    fn persistence_projection_preserves_video_dimensions_and_drops_arbitrary_video_data() {
+        let dimensions = json!({
+            "video_resolution": " 720P ",
+            "video_duration_seconds": 5,
+            "video_seconds_unmetered": 5,
+            "video_price_per_second": 2.5,
+            // Arbitrary task data must never ride into the audit row.
+            "video_url": "https://example.com/private.mp4",
+            "video_prompt": "secret prompt"
+        });
+        let token = "550e8400-e29b-41d4-a716-446655440000";
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "dimensions": dimensions,
+            "billing_dimensions": dimensions,
+            "settlement_snapshot": {
+                "resolved_dimensions": dimensions,
+                "cost_breakdown": {"video_cost": 12.5}
+            },
+            "billing_snapshot": {"cost_breakdown": {"video_cost": 12.5}},
+            "video_url": "https://example.com/private.mp4",
+            "plan_usage_reservation_token": token,
+            "billing_multiplier_snapshot": {
+                "version": 1,
+                "factors": {"routing_group": 0.5},
+                "multiplier": 0.5
+            }
+        })))
+        .expect("video dimensions should remain");
+
+        for bag in [
+            &metadata["dimensions"],
+            &metadata["billing_dimensions"],
+            &metadata["settlement_snapshot"]["resolved_dimensions"],
+        ] {
+            assert_eq!(bag["video_resolution"], "720p");
+            assert_eq!(bag["video_duration_seconds"], 5);
+            assert_eq!(bag["video_seconds_unmetered"], 5);
+            assert_eq!(bag["video_price_per_second"], 2.5);
+            assert!(bag.get("video_url").is_none());
+            assert!(bag.get("video_prompt").is_none());
+        }
+        assert!(metadata.get("video_url").is_none());
+        assert_eq!(
+            metadata["billing_snapshot"]["cost_breakdown"]["video_cost"],
+            12.5
+        );
+        assert_eq!(
+            metadata["settlement_snapshot"]["cost_breakdown"]["video_cost"],
+            12.5
+        );
+        assert_eq!(metadata["plan_usage_reservation_token"], token);
+        assert_eq!(metadata["billing_multiplier_snapshot"]["multiplier"], 0.5);
+
+        // A later terminal video event can add dimensions but never replaces the
+        // admission multiplier or reservation owner captured at request start.
+        let previous = json!({
+            "plan_usage_reservation_token": token,
+            "billing_multiplier_snapshot": {
+                "version": 1,
+                "factors": {"routing_group": 0.25},
+                "multiplier": 0.25
+            }
+        });
+        let preserved = preserve_usage_routing_group_snapshot(
+            Some(json!({
+                "dimensions": {
+                    "video_resolution": "720p",
+                    "video_duration_seconds": 5
+                }
+            })),
+            Some(&previous),
+        )
+        .expect("preserved metadata");
+        assert_eq!(preserved["billing_multiplier_snapshot"]["multiplier"], 0.25);
+        assert_eq!(preserved["plan_usage_reservation_token"], token);
+        assert_eq!(preserved["dimensions"]["video_duration_seconds"], 5);
     }
 
     #[test]

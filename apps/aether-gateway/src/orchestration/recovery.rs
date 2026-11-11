@@ -118,7 +118,10 @@ const fn decision_from_classification(
         LocalFailoverClassification::StopStatusCode
         | LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
-        | LocalFailoverClassification::StopCyberPolicy => LocalFailoverDecision::StopLocalFailover,
+        | LocalFailoverClassification::StopCyberPolicy
+        | LocalFailoverClassification::StopContextOverflow => {
+            LocalFailoverDecision::StopLocalFailover
+        }
         LocalFailoverClassification::RetrySuccessPattern
         | LocalFailoverClassification::RetryStatusCode
         | LocalFailoverClassification::RetryUpstreamFailure => {
@@ -179,17 +182,20 @@ mod tests {
     }
 
     #[test]
-    fn recovery_retries_default_client_error_without_custom_rule() {
-        assert_eq!(
-            recover_local_failover_decision(
-                &LocalFailoverPolicy::default(),
-                LocalFailoverInput::new(
-                    400,
-                    Some("{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long\"}}")
-                )
+    fn recovery_stops_context_overflow_without_custom_rule() {
+        let analysis = analyze_local_failover(
+            &LocalFailoverPolicy::default(),
+            LocalFailoverInput::new(
+                400,
+                Some("{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long\"}}")
             ),
-            LocalFailoverDecision::RetryNextCandidate
         );
+
+        assert_eq!(
+            analysis.classification,
+            LocalFailoverClassification::StopContextOverflow
+        );
+        assert_eq!(analysis.decision, LocalFailoverDecision::StopLocalFailover);
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use aether_data_contracts::repository::billing::StoredBillingModelContext;
 use aether_data_contracts::repository::usage::{
-    extract_provider_cache_ttl_minutes_from_metadata, resolve_provider_cache_ttl_minutes,
-    resolve_provider_service_tier_from_request_capture, CANCELLED_REQUEST_FEE_METADATA_KEY,
-    USAGE_AVAILABLE_METADATA_KEY, USAGE_PRICING_AVAILABLE_METADATA_KEY,
+    extract_provider_cache_ttl_minutes_from_metadata, provider_cancelled_usage_is_billable,
+    resolve_provider_cache_ttl_minutes, resolve_provider_service_tier_from_request_capture,
+    CANCELLED_REQUEST_FEE_METADATA_KEY, USAGE_AVAILABLE_METADATA_KEY,
+    USAGE_PRICING_AVAILABLE_METADATA_KEY,
 };
 use aether_data_contracts::DataLayerError;
 use aether_usage_runtime::{UsageEvent, UsageEventType};
@@ -251,11 +252,19 @@ fn calculate_billing_computation(
         image_size: usage_event_dimension_string(&event.data, "image_size"),
         image_quality: usage_event_dimension_string(&event.data, "image_quality"),
         image_output_format: usage_event_dimension_string(&event.data, "image_output_format"),
+        // Only a completed request renders video seconds worth charging; failed,
+        // cancelled and deleted tasks must never pick up a duration fee.
+        video_resolution: usage_event_dimension_string(&event.data, "video_resolution"),
+        video_duration_seconds: if matches!(event.event_type, UsageEventType::Completed) {
+            usage_event_dimension_i64(&event.data, "video_duration_seconds").unwrap_or_default()
+        } else {
+            0
+        },
         cache_ttl_minutes: usage_event_provider_cache_ttl_minutes(&event.data)
             .or(pricing.provider_api_key_cache_ttl_minutes),
     };
 
-    if cancelled {
+    if cancelled && !provider_cancelled_usage_is_billable(event.data.request_metadata.as_ref()) {
         input.input_tokens = 0;
         input.output_tokens = 0;
         input.cache_creation_tokens = 0;
@@ -265,8 +274,24 @@ fn calculate_billing_computation(
         input.image_count = 0;
     }
 
+    let mut dimensions: std::collections::BTreeMap<String, Value> = event
+        .data
+        .request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("dimensions"))
+        .and_then(Value::as_object)
+        .map(|dimensions| {
+            dimensions
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if cancelled && !provider_cancelled_usage_is_billable(event.data.request_metadata.as_ref()) {
+        dimensions = std::collections::BTreeMap::new();
+    }
     BillingService::new()
-        .calculate(pricing, &input)
+        .calculate_with_usage_dimensions(pricing, &input, &dimensions)
         .map_err(|err| {
             DataLayerError::UnexpectedValue(format!("billing calculation failed: {err}"))
         })
@@ -339,6 +364,21 @@ fn usage_event_dimension_string(
     )
 }
 
+fn usage_event_dimension_i64(
+    data: &aether_usage_runtime::UsageEventData,
+    dimension_key: &str,
+) -> Option<i64> {
+    metadata_dimension_i64(data.request_metadata.as_ref(), "dimensions", dimension_key).or_else(
+        || {
+            metadata_dimension_i64(
+                data.request_metadata.as_ref(),
+                "billing_dimensions",
+                dimension_key,
+            )
+        },
+    )
+}
+
 fn metadata_dimension_string(
     metadata: Option<&Value>,
     bag_key: &str,
@@ -386,6 +426,7 @@ fn apply_billing_computation(
 ) -> Result<(), DataLayerError> {
     let cancelled = matches!(event.event_type, UsageEventType::Cancelled);
     if cancelled
+        && !provider_cancelled_usage_is_billable(event.data.request_metadata.as_ref())
         && !computation
             .pricing_resolution
             .price_per_request
@@ -396,7 +437,12 @@ fn apply_billing_computation(
     event.data.total_cost_usd = Some(computation.cost_result.cost);
     event.data.actual_total_cost_usd = Some(computation.actual_total_cost);
     merge_billing_snapshot_metadata(&mut event.data.request_metadata, pricing, &computation)?;
-    if cancelled {
+    if cancelled
+        && computation
+            .pricing_resolution
+            .price_per_request
+            .is_some_and(|price| price > 0.0)
+    {
         if let Some(metadata) = event
             .data
             .request_metadata
@@ -570,6 +616,65 @@ mod tests {
         }
     }
 
+    fn wire_video_billing_lookup(video: Value) -> TestLookup {
+        TestLookup {
+            name_context: Some(
+                StoredBillingModelContext::new(
+                    "provider-wire".to_string(),
+                    Some("pay_as_you_go".to_string()),
+                    Some("key-wire".to_string()),
+                    None,
+                    Some(5),
+                    "global-model-wire".to_string(),
+                    "wire-video".to_string(),
+                    Some(json!({"billing": {"video": video}})),
+                    None,
+                    None,
+                    Some("model-wire".to_string()),
+                    Some("wire-video".to_string()),
+                    None,
+                    None,
+                    None,
+                )
+                .expect("wire video billing context"),
+            ),
+            model_id_context: None,
+        }
+    }
+
+    fn wire_video_event(request_id: &str, event_type: UsageEventType) -> UsageEvent {
+        let status_code = match event_type {
+            UsageEventType::Completed => 200,
+            UsageEventType::Failed => 500,
+            UsageEventType::Cancelled => 499,
+            UsageEventType::Pending | UsageEventType::Streaming => 200,
+        };
+        UsageEvent::new(
+            event_type,
+            request_id,
+            UsageEventData {
+                user_id: Some("user-wire".to_string()),
+                api_key_id: Some("key-wire".to_string()),
+                provider_name: "OpenAI".to_string(),
+                provider_id: Some("provider-wire".to_string()),
+                provider_api_key_id: Some("key-wire".to_string()),
+                model: "wire-video".to_string(),
+                target_model: Some("wire-video".to_string()),
+                request_type: Some("video".to_string()),
+                api_format: Some("openai:video".to_string()),
+                endpoint_api_format: Some("openai:video".to_string()),
+                status_code: Some(status_code),
+                request_metadata: Some(json!({
+                    "dimensions": {
+                        "video_resolution": "720P",
+                        "video_duration_seconds": 5
+                    }
+                })),
+                ..UsageEventData::default()
+            },
+        )
+    }
+
     fn wire_billing_event(request_id: &str) -> UsageEvent {
         UsageEvent::new(
             UsageEventType::Completed,
@@ -647,6 +752,7 @@ mod tests {
                         | "plan_usage_reservation_token"
                         | "plan_usage_reservation_deferred"
                         | "cancelled_request_fee"
+                        | "provider_cancelled_usage"
                         | "dimensions"
                         | "billing_dimensions"
                         | "billing_snapshot"
@@ -765,6 +871,89 @@ mod tests {
             "priority"
         );
         assert!(queued.data.total_cost_usd.unwrap() > 0.0);
+    }
+
+    #[tokio::test]
+    async fn completed_video_seconds_bill_once_while_failed_and_cancelled_do_not() {
+        let lookup =
+            wire_video_billing_lookup(json!({"price_per_second_by_resolution": {"720p": 2.0}}));
+
+        let mut completed = wire_video_event("wire-video-completed", UsageEventType::Completed);
+        enrich_usage_event_with_billing(&lookup, &mut completed)
+            .await
+            .expect("video billing should succeed");
+        assert_eq!(completed.data.total_cost_usd, Some(10.0));
+        assert_eq!(completed.data.actual_total_cost_usd, Some(10.0));
+        let metadata = completed.data.request_metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["billing_dimensions"]["video_seconds_unmetered"], 5);
+        assert_eq!(
+            metadata["billing_dimensions"]["video_price_per_second"],
+            2.0
+        );
+
+        let mut failed = wire_video_event("wire-video-failed", UsageEventType::Failed);
+        enrich_usage_event_with_billing(&lookup, &mut failed)
+            .await
+            .expect("failed video billing should succeed");
+        assert_eq!(failed.data.total_cost_usd, Some(0.0));
+
+        let mut cancelled = wire_video_event("wire-video-cancelled", UsageEventType::Cancelled);
+        enrich_usage_event_with_billing(&lookup, &mut cancelled)
+            .await
+            .expect("cancelled video billing should succeed");
+        // The established unbillable-cancellation representation is an explicit
+        // zero cost, not unknown: the cancellation is known to owe nothing, and
+        // no seconds fee may be attached.
+        assert_eq!(
+            cancelled.data.total_cost_usd,
+            Some(0.0),
+            "an unbillable cancellation must not pick up a seconds fee"
+        );
+        assert_eq!(cancelled.data.actual_total_cost_usd, Some(0.0));
+        assert!(
+            cancelled
+                .data
+                .request_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("billing_snapshot"))
+                .is_none(),
+            "an unbillable cancellation must not persist a seconds billing snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn wire_billing_merges_measured_modality_dimensions_without_overriding_canonical_tokens()
+    {
+        let lookup = wire_billing_lookup(
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 5.0,
+                    "output_price_per_1m": 30.0
+                }]
+            })),
+            None,
+        );
+        let mut event = wire_billing_event("wire-modality-dimensions");
+        event.data.request_metadata.as_mut().unwrap()["dimensions"] = json!({
+            "input_audio_tokens": 700,
+            "output_image_tokens": 80,
+            "input_tokens": 999_999,
+            "input_price_per_1m": 0.0
+        });
+
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .expect("billing should succeed");
+
+        let metadata = event.data.request_metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["billing_dimensions"]["input_audio_tokens"], 700);
+        assert_eq!(metadata["billing_dimensions"]["output_image_tokens"], 80);
+        assert_eq!(metadata["billing_dimensions"]["input_tokens"], 1_000);
+        assert_eq!(
+            metadata["settlement_snapshot"]["resolved_dimensions"]["input_tokens"],
+            1_000
+        );
     }
 
     #[tokio::test]
@@ -1858,6 +2047,61 @@ mod tests {
                 .and_then(Value::as_f64),
             Some(0.082)
         );
+    }
+
+    #[tokio::test]
+    async fn provider_cancelled_usage_bills_reported_tokens_after_wire_projection() {
+        let lookup = wire_billing_lookup(
+            Some(json!({"tiers": [{"up_to": null, "input_price_per_1m": 3.0,
+                "output_price_per_1m": 15.0, "cache_read_price_per_1m": 0.3}]})),
+            None,
+        );
+        let mut event = wire_billing_event("provider-cancelled-reported-usage");
+        event.event_type = UsageEventType::Cancelled;
+        event.data.status_code = Some(499);
+        event.data.input_tokens = Some(1_000);
+        event.data.output_tokens = Some(500);
+        event.data.total_tokens = Some(1_500);
+        event.data.cache_read_input_tokens = Some(0);
+        event.data.request_metadata = Some(json!({"provider_cancelled_usage": true}));
+
+        let queued = assert_wire_billing_equivalent(&lookup, event).await;
+
+        assert!((queued.data.total_cost_usd.unwrap() - 0.0105).abs() < 1e-12);
+        assert!((queued.data.actual_total_cost_usd.unwrap() - 0.0105).abs() < 1e-12);
+        assert_eq!(queued.event_type, UsageEventType::Cancelled);
+        let metadata = queued.data.request_metadata.as_ref().unwrap();
+        assert_eq!(metadata["billing_dimensions"]["input_tokens"], 1_000);
+        assert_eq!(metadata["billing_dimensions"]["output_tokens"], 500);
+        assert_eq!(metadata["provider_cancelled_usage"], true);
+        assert!(metadata.get("cancelled_request_fee").is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_cancelled_usage_keeps_measured_modality_dimensions() {
+        let lookup = wire_billing_lookup(
+            Some(json!({"tiers": [{"up_to": null, "input_price_per_1m": 5.0,
+                "output_price_per_1m": 30.0}]})),
+            None,
+        );
+        let mut event = wire_billing_event("provider-cancelled-modality-dimensions");
+        event.event_type = UsageEventType::Cancelled;
+        event.data.status_code = Some(499);
+        event.data.request_metadata.as_mut().unwrap()["provider_cancelled_usage"] = json!(true);
+        event.data.request_metadata.as_mut().unwrap()["dimensions"] = json!({
+            "input_audio_tokens": 700,
+            "output_image_tokens": 80
+        });
+
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .expect("cancelled usage with a provider terminal should stay priced");
+
+        let metadata = event.data.request_metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["billing_dimensions"]["input_audio_tokens"], 700);
+        assert_eq!(metadata["billing_dimensions"]["output_image_tokens"], 80);
+        assert_eq!(metadata["billing_dimensions"]["input_tokens"], 1_000);
+        assert!(event.data.total_cost_usd.unwrap() > 0.0);
     }
 
     #[tokio::test]

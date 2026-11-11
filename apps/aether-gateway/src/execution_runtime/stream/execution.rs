@@ -127,12 +127,12 @@ use crate::execution_runtime::{
 use crate::log_ids::short_request_id;
 use crate::orchestration::{
     apply_local_execution_effect, build_local_error_flow_metadata, classify_failure_disposition,
-    spawn_local_oauth_success_effect, trace_upstream_response_body, with_error_flow_report_context,
-    with_upstream_response_report_context, FailureDisposition, FailureTokenAction,
-    LocalAdaptiveRateLimitEffect, LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect,
-    LocalExecutionEffect, LocalExecutionEffectContext, LocalFailoverAnalysis,
-    LocalHealthFailureEffect, LocalHealthSuccessEffect, LocalOAuthInvalidationEffect,
-    LocalOAuthSuccessEffect, LocalPoolErrorEffect,
+    release_local_pool_key_lease, spawn_local_oauth_success_effect, trace_upstream_response_body,
+    with_error_flow_report_context, with_upstream_response_report_context, FailureDisposition,
+    FailureTokenAction, LocalAdaptiveRateLimitEffect, LocalAdaptiveSuccessEffect,
+    LocalAttemptFailureEffect, LocalExecutionEffect, LocalExecutionEffectContext,
+    LocalFailoverAnalysis, LocalHealthFailureEffect, LocalHealthSuccessEffect,
+    LocalOAuthInvalidationEffect, LocalOAuthSuccessEffect, LocalPoolErrorEffect,
 };
 use crate::provider_pool_demand::{
     acquire_provider_pool_execution_guard, ProviderPoolInFlightAdmission, ProviderPoolInFlightGuard,
@@ -162,6 +162,15 @@ use crate::{
 /// transport reaches a terminal state.
 const STREAM_ATTEMPT_CANCELLED_ERROR_TYPE: &str = "local_stream_attempt_cancelled";
 const STREAM_ATTEMPT_CANCELLED_ERROR_MESSAGE: &str = "Local stream attempt was dropped before terminal finalization, usually because the client disconnected or the request task was cancelled.";
+
+/// The provider's own terminal declared this response cancelled.
+///
+/// Cancellation is neither a success nor a provider failure: usage already
+/// reported stays billable, the candidate is recorded as cancelled, and no
+/// health/adaptive/pool success is projected.
+const PROVIDER_CANCELLED_STATUS_CODE: u16 = 499;
+const PROVIDER_CANCELLED_ERROR_TYPE: &str = "provider_cancelled";
+const PROVIDER_CANCELLED_ERROR_MESSAGE: &str = "provider cancelled the response";
 
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const SSE_KEEPALIVE_BYTES: &[u8] = b": aether-keepalive\n\n";
@@ -588,14 +597,36 @@ async fn record_stream_terminal_usage(
     report_context: Option<&serde_json::Value>,
     payload: &GatewayStreamReportRequest,
     cancelled: bool,
+    provider_cancelled: bool,
 ) {
     crate::execution_runtime::mark_stream_candidate_watchdog_terminal_started();
-    let analytics_context = crate::usage::reporting::failure::stream_analytics_context(
-        report_context,
-        payload,
-        cancelled,
-    );
-    let context_seed = build_terminal_usage_context_seed(plan, analytics_context.as_ref());
+    let analytics_context = if provider_cancelled {
+        crate::usage::reporting::failure::with_analytics_failure(
+            report_context,
+            "upstream",
+            "stream_read",
+            "provider_cancelled",
+        )
+    } else {
+        crate::usage::reporting::failure::stream_analytics_context(
+            report_context,
+            payload,
+            cancelled,
+        )
+    };
+    let mut context_seed = build_terminal_usage_context_seed(plan, analytics_context.as_ref());
+    // Reported usage from a provider-declared cancellation stays billable.
+    // This is the only trusted path: the marker is stripped from report
+    // context and public seeds, so the fact must come from the observed
+    // terminal summary itself.
+    if provider_cancelled
+        && payload
+            .terminal_summary
+            .as_ref()
+            .is_some_and(|summary| summary.observed_finish && summary.standardized_usage.is_some())
+    {
+        context_seed.authorize_provider_cancelled_usage();
+    }
     let payload_seed = build_stream_terminal_usage_payload_seed(payload);
     state
         .usage_runtime
@@ -603,7 +634,7 @@ async fn record_stream_terminal_usage(
             state.usage_lifecycle_data_state().as_ref(),
             context_seed,
             payload_seed,
-            cancelled,
+            cancelled || provider_cancelled,
         )
         .await;
 }
@@ -1362,6 +1393,24 @@ fn stream_terminal_summary_represents_failure_with_requirement(
                 Some(summary),
                 requires_observed_terminal_event,
             )
+    })
+}
+
+/// The provider's own terminal capped the response off as `cancelled`.
+///
+/// A cancelled terminal is observed but never completed: it must not project
+/// success, and it must not be treated as a provider failure either. Usage the
+/// provider already reported stays billable through the trusted
+/// provider-cancelled authorization when the same summary carries it.
+fn stream_terminal_summary_provider_cancelled(
+    summary: Option<&ExecutionStreamTerminalSummary>,
+) -> bool {
+    summary.is_some_and(|summary| {
+        summary.observed_finish
+            && summary
+                .finish_reason
+                .as_deref()
+                .is_some_and(|reason| reason.trim().eq_ignore_ascii_case("cancelled"))
     })
 }
 
@@ -2425,6 +2474,7 @@ impl DirectPassthroughFinalizerCore {
                 usage_payload.report_context.as_ref(),
                 &usage_payload,
                 true,
+                false,
             )
             .await;
             record_local_request_candidate_status(
@@ -2469,6 +2519,13 @@ impl DirectPassthroughFinalizerCore {
                 stream_terminal_summary.as_ref(),
                 requires_observed_terminal_event,
             );
+        let provider_cancelled =
+            stream_terminal_summary_provider_cancelled(stream_terminal_summary.as_ref());
+        let terminal_status_code = if provider_cancelled {
+            PROVIDER_CANCELLED_STATUS_CODE
+        } else {
+            status_code
+        };
         let stream_failed = stream_terminal_summary_represents_failure_with_requirement(
             stream_terminal_summary.as_ref(),
             requires_observed_terminal_event,
@@ -2504,7 +2561,7 @@ impl DirectPassthroughFinalizerCore {
             trace_id.clone(),
             report_kind.unwrap_or_default(),
             report_context_for_payload,
-            status_code,
+            terminal_status_code,
             headers,
             &provider_buffered_body,
             provider_body_truncated,
@@ -2524,7 +2581,17 @@ impl DirectPassthroughFinalizerCore {
                 error_message = stream_terminal_error_message.as_deref().unwrap_or_default(),
                 "gateway direct passthrough stream ended with a failed terminal state"
             );
-        } else {
+        }
+        if provider_cancelled {
+            release_local_pool_key_lease(
+                &state,
+                LocalExecutionEffectContext {
+                    plan: &plan,
+                    report_context: usage_payload.report_context.as_ref(),
+                },
+            )
+            .await;
+        } else if !stream_failed {
             apply_local_execution_effect(
                 &state,
                 LocalExecutionEffectContext {
@@ -2561,6 +2628,7 @@ impl DirectPassthroughFinalizerCore {
             usage_payload.report_context.as_ref(),
             &usage_payload,
             false,
+            provider_cancelled,
         )
         .await;
         record_local_request_candidate_status(
@@ -2568,13 +2636,17 @@ impl DirectPassthroughFinalizerCore {
             &plan,
             usage_payload.report_context.as_ref(),
             SchedulerRequestCandidateStatusUpdate {
-                status: if stream_failed {
+                status: if provider_cancelled {
+                    RequestCandidateStatus::Cancelled
+                } else if stream_failed {
                     RequestCandidateStatus::Failed
                 } else {
                     RequestCandidateStatus::Success
                 },
-                status_code: Some(status_code),
-                error_type: if stream_failed {
+                status_code: Some(terminal_status_code),
+                error_type: if provider_cancelled {
+                    Some(PROVIDER_CANCELLED_ERROR_TYPE.to_string())
+                } else if stream_failed {
                     if missing_observed_finish {
                         Some("stream_missing_terminal_event".to_string())
                     } else {
@@ -2583,9 +2655,13 @@ impl DirectPassthroughFinalizerCore {
                 } else {
                     None
                 },
-                error_message: stream_failed
-                    .then_some(stream_terminal_error_message)
-                    .flatten(),
+                error_message: if provider_cancelled {
+                    Some(PROVIDER_CANCELLED_ERROR_MESSAGE.to_string())
+                } else {
+                    stream_failed
+                        .then_some(stream_terminal_error_message)
+                        .flatten()
+                },
                 latency_ms: usage_payload
                     .telemetry
                     .as_ref()
@@ -3620,6 +3696,7 @@ async fn execute_stream_from_direct_passthrough(
                 usage_payload.report_context.as_ref(),
                 &usage_payload,
                 true,
+                false,
             )
             .await;
             record_local_request_candidate_status(
@@ -3699,6 +3776,13 @@ async fn execute_stream_from_direct_passthrough(
                 stream_terminal_summary.as_ref(),
                 requires_observed_terminal_event,
             );
+        let provider_cancelled =
+            stream_terminal_summary_provider_cancelled(stream_terminal_summary.as_ref());
+        let terminal_status_code = if provider_cancelled {
+            PROVIDER_CANCELLED_STATUS_CODE
+        } else {
+            status_code
+        };
         let stream_failed = stream_terminal_summary_represents_failure_with_requirement(
             stream_terminal_summary.as_ref(),
             requires_observed_terminal_event,
@@ -3734,7 +3818,7 @@ async fn execute_stream_from_direct_passthrough(
             trace_id_owned.clone(),
             report_kind_owned.unwrap_or_default(),
             report_context_for_payload,
-            status_code,
+            terminal_status_code,
             headers_for_report,
             &provider_buffered_body,
             provider_body_truncated,
@@ -3754,7 +3838,17 @@ async fn execute_stream_from_direct_passthrough(
                 error_message = stream_terminal_error_message.as_deref().unwrap_or_default(),
                 "gateway direct passthrough stream ended with a failed terminal state"
             );
-        } else {
+        }
+        if provider_cancelled {
+            release_local_pool_key_lease(
+                &state_for_report,
+                LocalExecutionEffectContext {
+                    plan: &plan_for_report,
+                    report_context: usage_payload.report_context.as_ref(),
+                },
+            )
+            .await;
+        } else if !stream_failed {
             apply_local_execution_effect(
                 &state_for_report,
                 LocalExecutionEffectContext {
@@ -3791,6 +3885,7 @@ async fn execute_stream_from_direct_passthrough(
             usage_payload.report_context.as_ref(),
             &usage_payload,
             false,
+            provider_cancelled,
         )
         .await;
         record_local_request_candidate_status(
@@ -3798,13 +3893,17 @@ async fn execute_stream_from_direct_passthrough(
             &plan_for_report,
             usage_payload.report_context.as_ref(),
             SchedulerRequestCandidateStatusUpdate {
-                status: if stream_failed {
+                status: if provider_cancelled {
+                    RequestCandidateStatus::Cancelled
+                } else if stream_failed {
                     RequestCandidateStatus::Failed
                 } else {
                     RequestCandidateStatus::Success
                 },
-                status_code: Some(status_code),
-                error_type: if stream_failed {
+                status_code: Some(terminal_status_code),
+                error_type: if provider_cancelled {
+                    Some(PROVIDER_CANCELLED_ERROR_TYPE.to_string())
+                } else if stream_failed {
                     if missing_observed_finish {
                         Some("stream_missing_terminal_event".to_string())
                     } else {
@@ -3813,9 +3912,13 @@ async fn execute_stream_from_direct_passthrough(
                 } else {
                     None
                 },
-                error_message: stream_failed
-                    .then_some(stream_terminal_error_message)
-                    .flatten(),
+                error_message: if provider_cancelled {
+                    Some(PROVIDER_CANCELLED_ERROR_MESSAGE.to_string())
+                } else {
+                    stream_failed
+                        .then_some(stream_terminal_error_message)
+                        .flatten()
+                },
                 latency_ms: usage_payload
                     .telemetry
                     .as_ref()
@@ -5523,7 +5626,12 @@ impl ClientVisibleStreamCompletionTracker {
 fn is_terminal_sse_event_type(event_type: &str) -> bool {
     matches!(
         event_type,
-        "message_stop" | "response.completed" | "response.failed" | "response.incomplete" | "error"
+        "message_stop"
+            | "response.completed"
+            | "response.cancelled"
+            | "response.failed"
+            | "response.incomplete"
+            | "error"
     )
 }
 
@@ -8290,6 +8398,7 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                 usage_payload.report_context.as_ref(),
                 &usage_payload,
                 true,
+                false,
             )
             .await;
             record_local_request_candidate_status(
@@ -8369,6 +8478,13 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                 stream_terminal_summary.as_ref(),
                 requires_observed_terminal_event,
             );
+        let provider_cancelled =
+            stream_terminal_summary_provider_cancelled(stream_terminal_summary.as_ref());
+        let terminal_status_code = if provider_cancelled {
+            PROVIDER_CANCELLED_STATUS_CODE
+        } else {
+            status_code
+        };
 
         let should_submit_report = report_kind_owned.is_some();
         let terminal_telemetry = Some(build_terminal_stream_telemetry(
@@ -8405,7 +8521,7 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             trace_id_owned.clone(),
             report_kind_owned.unwrap_or_default(),
             report_context_for_payload,
-            status_code,
+            terminal_status_code,
             headers_for_report,
             &provider_buffered_body,
             provider_body_truncated,
@@ -8425,7 +8541,17 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                 error_message = stream_terminal_error_message.as_deref().unwrap_or_default(),
                 "gateway stream ended with a failed terminal state"
             );
-        } else {
+        }
+        if provider_cancelled {
+            release_local_pool_key_lease(
+                &state_for_report,
+                LocalExecutionEffectContext {
+                    plan: &plan_for_report,
+                    report_context: usage_payload.report_context.as_ref(),
+                },
+            )
+            .await;
+        } else if !stream_failed {
             apply_local_execution_effect(
                 &state_for_report,
                 LocalExecutionEffectContext {
@@ -8462,6 +8588,7 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             usage_payload.report_context.as_ref(),
             &usage_payload,
             false,
+            provider_cancelled,
         )
         .await;
         record_local_request_candidate_status(
@@ -8469,13 +8596,17 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             &plan_for_report,
             usage_payload.report_context.as_ref(),
             SchedulerRequestCandidateStatusUpdate {
-                status: if stream_failed {
+                status: if provider_cancelled {
+                    RequestCandidateStatus::Cancelled
+                } else if stream_failed {
                     RequestCandidateStatus::Failed
                 } else {
                     RequestCandidateStatus::Success
                 },
-                status_code: Some(status_code),
-                error_type: if stream_failed {
+                status_code: Some(terminal_status_code),
+                error_type: if provider_cancelled {
+                    Some(PROVIDER_CANCELLED_ERROR_TYPE.to_string())
+                } else if stream_failed {
                     if missing_observed_finish {
                         Some("stream_missing_terminal_event".to_string())
                     } else {
@@ -8484,9 +8615,13 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                 } else {
                     None
                 },
-                error_message: stream_failed
-                    .then_some(stream_terminal_error_message)
-                    .flatten(),
+                error_message: if provider_cancelled {
+                    Some(PROVIDER_CANCELLED_ERROR_MESSAGE.to_string())
+                } else {
+                    stream_failed
+                        .then_some(stream_terminal_error_message)
+                        .flatten()
+                },
                 latency_ms: usage_payload
                     .telemetry
                     .as_ref()
@@ -8632,6 +8767,7 @@ mod tests {
         stream_chunk_contains_sse_done, stream_requires_observed_terminal_event,
         stream_terminal_summary_missing_observed_finish,
         stream_terminal_summary_missing_observed_finish_with_requirement,
+        stream_terminal_summary_provider_cancelled,
         stream_terminal_summary_represents_failure_with_requirement,
         wrap_non_json_binary_stream_error_for_client, ClientVisibleStreamCompletionTracker,
         DirectPassthroughFinalizer, DirectPassthroughFinalizerCore,
@@ -12330,6 +12466,39 @@ mod tests {
     }
 
     #[test]
+    fn provider_cancelled_terminal_requires_an_observed_provider_cancel() {
+        assert!(stream_terminal_summary_provider_cancelled(Some(
+            &ExecutionStreamTerminalSummary {
+                finish_reason: Some("cancelled".to_string()),
+                observed_finish: true,
+                ..ExecutionStreamTerminalSummary::default()
+            }
+        )));
+        assert!(stream_terminal_summary_provider_cancelled(Some(
+            &ExecutionStreamTerminalSummary {
+                finish_reason: Some("Cancelled".to_string()),
+                observed_finish: true,
+                ..ExecutionStreamTerminalSummary::default()
+            }
+        )));
+        assert!(!stream_terminal_summary_provider_cancelled(Some(
+            &ExecutionStreamTerminalSummary {
+                finish_reason: Some("cancelled".to_string()),
+                observed_finish: false,
+                ..ExecutionStreamTerminalSummary::default()
+            }
+        )));
+        assert!(!stream_terminal_summary_provider_cancelled(Some(
+            &ExecutionStreamTerminalSummary {
+                finish_reason: Some("stop".to_string()),
+                observed_finish: true,
+                ..ExecutionStreamTerminalSummary::default()
+            }
+        )));
+        assert!(!stream_terminal_summary_provider_cancelled(None));
+    }
+
+    #[test]
     fn requires_terminal_event_for_openai_responses_streams() {
         assert!(stream_requires_observed_terminal_event(
             "openai:responses",
@@ -15043,6 +15212,308 @@ mod tests {
                 "upstream frame stream should stop when the client disconnects"
             );
         }
+    }
+
+    fn http_provider_cancelled_stream_plan(request_id: &str) -> ExecutionPlan {
+        ExecutionPlan {
+            request_id: request_id.to_string(),
+            candidate_id: Some(format!("candidate-{request_id}")),
+            provider_name: Some("OpenAI".to_string()),
+            provider_id: "provider-http-provider-cancelled".to_string(),
+            endpoint_id: "endpoint-http-provider-cancelled".to_string(),
+            key_id: "key-http-provider-cancelled".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/v1/responses".to_string(),
+            headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
+            content_type: Some("application/json".to_string()),
+            content_encoding: None,
+            body: RequestBody::from_json(json!({
+                "model": "gpt-5.5",
+                "input": "cancel this response",
+                "stream": true
+            })),
+            stream: true,
+            client_api_format: "openai:responses".to_string(),
+            provider_api_format: "openai:responses".to_string(),
+            model_name: Some("gpt-5.5".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        }
+    }
+
+    fn http_provider_cancelled_test_finalizer(
+        state: AppState,
+        request_id: &str,
+    ) -> DirectPassthroughFinalizer {
+        let plan = http_provider_cancelled_stream_plan(request_id);
+        let lifecycle_seed = aether_usage_runtime::build_lifecycle_usage_seed(&plan, None);
+        let report_context = json!({
+            "provider_api_format": "openai:responses",
+            "client_api_format": "openai:responses",
+            "api_key_id": "api-key-http-provider-cancelled",
+            "model": "gpt-5.5",
+            "mapped_model": "gpt-5.5",
+            "scheduler_affinity_policy": {"scheduling_mode": "cache_affinity"},
+        });
+        DirectPassthroughFinalizer::new(DirectPassthroughFinalizerCore {
+            state,
+            trace_id: format!("trace-{request_id}"),
+            report_kind: Some("openai_responses_sync_finalize".to_string()),
+            report_context: Some(report_context),
+            lifecycle_seed,
+            direct_stream_finalize_kind: Some("openai_responses_sync_finalize".to_string()),
+            stream_started_at: Instant::now(),
+            stage_trace: RequestStageTrace::from_env(),
+            request_diagnostics: None,
+            request_id_for_log: request_id.to_string(),
+            candidate_id: plan.candidate_id.clone(),
+            request_candidate_status_snapshot: None,
+            deferred_request_candidate_status_record: None,
+            candidate_started_unix_secs: crate::clock::current_unix_ms(),
+            status_code: 200,
+            headers: BTreeMap::from([(
+                "content-type".to_string(),
+                "text/event-stream".to_string(),
+            )]),
+            stream_usage_report_context: Some(json!({
+                "provider_api_format": "openai:responses",
+                "client_api_format": "openai:responses",
+            })),
+            stream_usage_observer: Some(super::StreamingStandardTerminalObserver::default()),
+            stream_usage_observer_buffered: super::StreamUsageObservationBuffer::new(
+                super::DEFAULT_USAGE_RESPONSE_BODY_CAPTURE_LIMIT_BYTES,
+            ),
+            provider_error_inspection: ProviderStreamErrorInspection::default(),
+            max_stream_body_buffer_bytes: super::DEFAULT_USAGE_RESPONSE_BODY_CAPTURE_LIMIT_BYTES,
+            provider_buffered_body: super::StreamBodyCapture::default(),
+            buffered_body: super::StreamBodyCapture::default(),
+            provider_body_truncated: false,
+            client_body_truncated: false,
+            client_stream_completion_tracker: ClientVisibleStreamCompletionTracker::default(),
+            requires_anthropic_message_stop: false,
+            client_visible_stream_completed: false,
+            usage_stream_telemetry: None,
+            telemetry: Some(ExecutionTelemetry {
+                ttfb_ms: Some(4),
+                elapsed_ms: Some(9),
+                upstream_bytes: Some(96),
+            }),
+            provider_stream_bytes: 0,
+            client_stream_bytes: 1,
+            last_client_chunk_elapsed_ms: 0,
+            pending_recorded: false,
+            stream_started_recorded: false,
+            terminal_failure: None,
+            _provider_pool_in_flight_guard: None,
+            _upstream_target_permit: None,
+            plan,
+        })
+    }
+
+    fn http_provider_cancelled_sse(terminal: Value) -> Bytes {
+        let deltas = [
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp-http-provider-cancelled",
+                    "model": "gpt-5.5",
+                    "status": "in_progress",
+                },
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-http-provider-cancelled",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Partial answer",
+            }),
+        ];
+        let mut body = String::new();
+        for event in deltas.into_iter().chain(std::iter::once(terminal)) {
+            body.push_str(&format!("data: {event}\n\n"));
+        }
+        Bytes::from(body)
+    }
+
+    /// HTTP inline finalizer, provider-declared cancellation:
+    ///
+    /// - the candidate terminal is `Cancelled` at 499 with `provider_cancelled`,
+    /// - the usage terminal is `Cancelled` and keeps the provider-reported
+    ///   tokens/cache usage while staying billable (`pending`, trusted
+    ///   `provider_cancelled_usage` authorization),
+    /// - no success health/adaptive/pool effect runs. The completed control
+    ///   proves the scheduler-affinity observable is live, so the cancellation
+    ///   assertion cannot pass vacuously.
+    #[tokio::test]
+    async fn http_provider_cancelled_finalizer_records_cancelled_499_billable_usage_without_success_effects(
+    ) {
+        const REQUEST_ID: &str = "req-http-provider-cancelled-finalizer";
+        let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+        let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
+        let state = AppState::new()
+            .expect("app state should build")
+            .with_data_state_for_tests(
+                crate::data::GatewayDataState::with_request_candidate_and_usage_repository_for_tests(
+                    Arc::clone(&request_candidate_repository),
+                    Arc::clone(&usage_repository),
+                ),
+            )
+            .with_usage_runtime_for_tests(UsageRuntimeConfig {
+                enabled: true,
+                ..UsageRuntimeConfig::default()
+            });
+
+        let cancelled_sse = http_provider_cancelled_sse(json!({
+            "type": "response.cancelled",
+            "response": {
+                "id": "resp-http-provider-cancelled",
+                "model": "gpt-5.5",
+                "status": "cancelled",
+                "output": [{
+                    "id": "msg-http-provider-cancelled",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Partial answer"}],
+                }],
+                "usage": {
+                    "input_tokens": 26,
+                    "input_tokens_details": {"cached_tokens": 7, "cache_write_tokens": 6},
+                    "output_tokens": 13,
+                    "output_tokens_details": {"reasoning_tokens": 3},
+                    "total_tokens": 39,
+                },
+            },
+        }));
+        let mut finalizer = http_provider_cancelled_test_finalizer(state.clone(), REQUEST_ID);
+        let observed_at = Instant::now();
+        for chunk in cancelled_sse.chunks(37) {
+            finalizer.observe_upstream_chunk(&Bytes::copy_from_slice(chunk), observed_at);
+        }
+        finalizer.finalize(false).await;
+
+        let candidate = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let candidates = request_candidate_repository
+                    .list_by_request_id(REQUEST_ID)
+                    .await
+                    .expect("request candidates should read");
+                if candidates
+                    .first()
+                    .is_some_and(|candidate| candidate.status == RequestCandidateStatus::Cancelled)
+                {
+                    break candidates;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("provider cancellation should settle the candidate as cancelled");
+        assert_eq!(
+            candidate[0].status_code,
+            Some(super::PROVIDER_CANCELLED_STATUS_CODE)
+        );
+        assert_eq!(
+            candidate[0].error_type.as_deref(),
+            Some(super::PROVIDER_CANCELLED_ERROR_TYPE)
+        );
+        assert_eq!(
+            candidate[0].error_message.as_deref(),
+            Some(super::PROVIDER_CANCELLED_ERROR_MESSAGE)
+        );
+
+        let stored_usage = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let usage = usage_repository
+                    .find_by_request_id(REQUEST_ID)
+                    .await
+                    .expect("usage should read");
+                if usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.status == "cancelled")
+                {
+                    break usage.expect("cancelled usage should exist");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("provider cancellation should record cancelled usage");
+        assert_eq!(
+            stored_usage.status_code,
+            Some(super::PROVIDER_CANCELLED_STATUS_CODE)
+        );
+        assert_eq!(stored_usage.input_tokens, 26);
+        assert_eq!(stored_usage.output_tokens, 13);
+        assert_eq!(stored_usage.total_tokens, 39);
+        assert_eq!(stored_usage.cache_read_input_tokens, 7);
+        assert_eq!(stored_usage.cache_creation_input_tokens, 6);
+        assert_eq!(
+            stored_usage
+                .request_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("provider_cancelled_usage")),
+            Some(&json!(true)),
+            "only the trusted observed cancellation may authorize cancelled billing"
+        );
+        // The trusted authorization keeps cancelled usage billable. A test
+        // state without a pricing catalog may explicitly mark pricing (or
+        // usage) unavailable, which voids the charge even with the marker;
+        // anything else must stay `pending`, never silently void.
+        if stored_usage.billing_status == "void" {
+            let metadata = stored_usage.request_metadata.as_ref();
+            assert!(
+                metadata
+                    .and_then(|metadata| metadata.get("usage_pricing_available"))
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                    || metadata
+                        .and_then(|metadata| metadata.get("usage_available"))
+                        .and_then(Value::as_bool)
+                        == Some(false),
+                "cancelled usage may only be void when usage/pricing is explicitly unavailable"
+            );
+        } else {
+            assert_eq!(
+                stored_usage.billing_status, "pending",
+                "reported usage from a provider-declared cancellation stays billable"
+            );
+        }
+        assert!(
+            state
+                .list_scheduler_affinity_entries(crate::scheduler::affinity::SCHEDULER_AFFINITY_TTL)
+                .is_empty(),
+            "provider cancellation must not project a health/adaptive success effect"
+        );
+
+        // Control: the same harness with a completed terminal must project the
+        // success health effect, otherwise the emptiness assertion above could
+        // pass without observing anything.
+        let completed_sse = http_provider_cancelled_sse(json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp-http-provider-completed-control",
+                "model": "gpt-5.5",
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 2,
+                    "total_tokens": 7,
+                },
+            },
+        }));
+        let mut control = http_provider_cancelled_test_finalizer(
+            state.clone(),
+            "req-http-provider-completed-control",
+        );
+        control.observe_upstream_chunk(&completed_sse, Instant::now());
+        control.finalize(false).await;
+        assert!(
+            !state
+                .list_scheduler_affinity_entries(crate::scheduler::affinity::SCHEDULER_AFFINITY_TTL)
+                .is_empty(),
+            "the completed control must project the success health effect"
+        );
     }
 
     #[tokio::test]

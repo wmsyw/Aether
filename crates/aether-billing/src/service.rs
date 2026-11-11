@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 
 use crate::default_rule::{
     explicit_image_output_price_default, explicit_image_output_price_entries,
-    explicit_image_output_price_ranges, normalize_task_type, DefaultBillingRuleGenerator,
+    explicit_image_output_price_ranges, normalize_task_type, per_second_video_billing_applies,
+    resolve_video_price_per_second, DefaultBillingRuleGenerator,
 };
 use crate::precision::quantize_cost;
 use crate::pricing::{
@@ -36,13 +37,23 @@ impl BillingService {
         pricing: &BillingModelPricingSnapshot,
         input: &BillingUsageInput,
     ) -> Result<BillingComputation, ExpressionEvaluationError> {
+        self.calculate_with_usage_dimensions(pricing, input, &BTreeMap::new())
+    }
+
+    /// Adds measured modality counts without overriding canonical pricing inputs.
+    pub fn calculate_with_usage_dimensions(
+        &self,
+        pricing: &BillingModelPricingSnapshot,
+        input: &BillingUsageInput,
+        usage_dimensions: &BTreeMap<String, Value>,
+    ) -> Result<BillingComputation, ExpressionEvaluationError> {
         let pricing_resolution = pricing
             .resolve_pricing_checked(
                 input.requested_processing_tier.as_deref(),
                 input.actual_processing_tier.as_deref(),
             )
             .map_err(|err| ExpressionEvaluationError::Failed(err.to_string()))?;
-        self.calculate_with_resolution(pricing, input, pricing_resolution)
+        self.calculate_with_resolution(pricing, input, pricing_resolution, Some(usage_dimensions))
     }
 
     pub fn estimate_authorization_cost_upper_bound(
@@ -134,8 +145,12 @@ impl BillingService {
 
                 // Validate the selected catalog and its finite coverage using the same path as
                 // settlement before evaluating every reachable tier as an upper-bound candidate.
-                let selected =
-                    self.calculate_with_resolution(pricing, scenario, pricing_resolution.clone())?;
+                let selected = self.calculate_with_resolution(
+                    pricing,
+                    scenario,
+                    pricing_resolution.clone(),
+                    None,
+                )?;
                 if !billing_computation_is_bounded(&selected) {
                     if !is_requested_catalog
                         && billing_computation_is_outside_catalog_context(&selected)
@@ -147,7 +162,7 @@ impl BillingService {
 
                 for candidate in pricing_candidates {
                     let computation =
-                        self.calculate_with_resolution(pricing, scenario, candidate)?;
+                        self.calculate_with_resolution(pricing, scenario, candidate, None)?;
                     if !billing_computation_is_bounded(&computation) {
                         return Ok(None);
                     }
@@ -163,6 +178,7 @@ impl BillingService {
         pricing: &BillingModelPricingSnapshot,
         input: &BillingUsageInput,
         pricing_resolution: BillingPricingResolution,
+        usage_dimensions: Option<&BTreeMap<String, Value>>,
     ) -> Result<BillingComputation, ExpressionEvaluationError> {
         if pricing_resolution.requires_actual_processing_tier() {
             return Ok(no_rule_computation(
@@ -194,7 +210,16 @@ impl BillingService {
             || input.output_tokens > 0
             || input.cache_creation_tokens > 0
             || input.cache_read_tokens > 0;
-        if has_token_usage {
+        // Per-second video billing supplies its own price dimension and zeroes
+        // every token rate at rule level, so an empty tier catalog is expected
+        // for an actual video task and must not be read as a missing price.
+        // Chat and image usage on the same model still require token pricing.
+        let bills_video_by_seconds = per_second_video_billing_applies(
+            pricing_resolution.video_pricing.as_ref(),
+            &input.task_type,
+            input.api_format.as_deref(),
+        );
+        if has_token_usage && !bills_video_by_seconds {
             if let Some(pricing_config) = pricing_resolution.tiered_pricing.as_ref() {
                 let tiers = pricing_config
                     .get("tiers")
@@ -229,10 +254,18 @@ impl BillingService {
             }
         }
 
+        // The generator's contract only knows the task type, so resolve the API
+        // format fallback here: a video endpoint without a request type still
+        // bills by seconds rather than falling back to token pricing.
+        let rule_task_type = if bills_video_by_seconds {
+            "video"
+        } else {
+            input.task_type.as_str()
+        };
         let Some(rule) = DefaultBillingRuleGenerator::generate_for_pricing(
             &pricing.global_model_name,
             &pricing_resolution,
-            &input.task_type,
+            rule_task_type,
         ) else {
             return Ok(no_rule_computation(
                 pricing,
@@ -242,7 +275,10 @@ impl BillingService {
             ));
         };
 
-        let dims = build_dimensions(input, &pricing_resolution);
+        let mut dims = build_dimensions(input, &pricing_resolution);
+        if let Some(measured) = usage_dimensions {
+            apply_measured_usage_dimensions(&mut dims, input, measured);
+        }
         let result = self.engine.evaluate(
             &rule.expression,
             Some(&rule.variables),
@@ -463,6 +499,25 @@ fn build_dimensions(
     let pricing_config = pricing.tiered_pricing.as_ref();
     let image_output_pricing = image_output_pricing_state(pricing_config);
     let image_output_resolution = resolve_image_output_price_resolution(pricing_config, input);
+    // Video pricing is keyed by rendered resolution, so it lives in the model
+    // config rather than the token tier catalog. A model can offer both video
+    // and chat/image pricing, so seconds only attach to an actual video task.
+    let video_pricing_config = pricing.video_pricing.as_ref();
+    let per_second_video = per_second_video_billing_applies(
+        video_pricing_config,
+        &input.task_type,
+        input.api_format.as_deref(),
+    );
+    let video_price_per_second = if per_second_video {
+        resolve_video_price_per_second(video_pricing_config, input.video_resolution.as_deref())
+    } else {
+        0.0
+    };
+    let video_seconds_unmetered = if per_second_video {
+        input.video_duration_seconds.max(0)
+    } else {
+        0
+    };
 
     let mut out = BTreeMap::from([
         ("input_tokens".to_string(), json!(normalized_input_tokens)),
@@ -519,6 +574,18 @@ fn build_dimensions(
         (
             "image_output_price_per_image".to_string(),
             json!(image_output_resolution.price_per_image),
+        ),
+        (
+            "video_seconds_unmetered".to_string(),
+            json!(video_seconds_unmetered),
+        ),
+        (
+            "video_price_per_second".to_string(),
+            json!(video_price_per_second),
+        ),
+        (
+            "video_duration_seconds".to_string(),
+            json!(input.video_duration_seconds.max(0)),
         ),
         (
             "total_input_context".to_string(),
@@ -604,6 +671,46 @@ fn build_dimensions(
         out.insert("image_output_format".to_string(), json!(output_format));
     }
     out
+}
+
+const MODALITY_DIMENSIONS: [&str; 5] = ["text", "image", "audio", "video", "document"];
+
+/// Merges measured per-modality counts into pricing dimensions without letting them
+/// replace canonical token or price inputs. A prefix group whose non-negative values
+/// add up to more than the canonical reported total is rejected as a whole: billing
+/// expressions that sum modalities must never exceed the canonical token count.
+fn apply_measured_usage_dimensions(
+    dimensions: &mut BTreeMap<String, Value>,
+    input: &BillingUsageInput,
+    measured: &BTreeMap<String, Value>,
+) {
+    for prefix in ["input", "output", "cache_read"] {
+        let canonical_total = match prefix {
+            "output" => input.output_tokens,
+            "cache_read" => input.cache_read_tokens,
+            _ => input.input_tokens,
+        }
+        .max(0);
+        let mut group = Vec::new();
+        let mut group_total = 0i64;
+        for modality in MODALITY_DIMENSIONS {
+            let field = format!("{prefix}_{modality}_tokens");
+            let Some(tokens) = measured.get(&field).and_then(Value::as_i64) else {
+                continue;
+            };
+            if tokens < 0 {
+                continue;
+            }
+            group_total = group_total.saturating_add(tokens);
+            group.push((field, tokens));
+        }
+        if group_total > canonical_total {
+            continue;
+        }
+        for (field, tokens) in group {
+            dimensions.entry(field).or_insert_with(|| json!(tokens));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -913,6 +1020,65 @@ mod tests {
         BillingSnapshotStatus, BillingUsageInput,
     };
 
+    #[test]
+    fn measured_modality_dimensions_do_not_override_canonical_tokens_or_prices() {
+        let input = BillingUsageInput {
+            input_tokens: 1000,
+            output_tokens: 100,
+            api_format: Some("gemini:generate_content".to_string()),
+            ..BillingUsageInput::new("chat")
+        };
+        let measured = std::collections::BTreeMap::from([
+            ("input_audio_tokens".to_string(), json!(700)),
+            ("output_image_tokens".to_string(), json!(80)),
+            ("input_tokens".to_string(), json!(999999)),
+            ("input_price_per_1m".to_string(), json!(0)),
+            ("output_audio_tokens".to_string(), json!(-1)),
+        ]);
+        let service = BillingService::new();
+        let base = service.calculate(&pricing(), &input).unwrap();
+        let result = service
+            .calculate_with_usage_dimensions(&pricing(), &input, &measured)
+            .unwrap();
+        assert_eq!(base.actual_total_cost, result.actual_total_cost);
+        let dims = result.cost_result.snapshot.resolved_dimensions;
+        assert_eq!(dims["input_audio_tokens"], 700);
+        assert_eq!(dims["output_image_tokens"], 80);
+        assert_eq!(dims["input_tokens"], 1000);
+        assert!(!dims.contains_key("output_audio_tokens"));
+    }
+
+    #[test]
+    fn measured_modality_groups_over_canonical_totals_are_rejected() {
+        let input = BillingUsageInput {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            cache_read_tokens: 50,
+            api_format: Some("gemini:generate_content".to_string()),
+            ..BillingUsageInput::new("chat")
+        };
+        let measured = std::collections::BTreeMap::from([
+            ("input_text_tokens".to_string(), json!(700)),
+            ("input_audio_tokens".to_string(), json!(400)),
+            ("output_image_tokens".to_string(), json!(60)),
+            ("output_audio_tokens".to_string(), json!(60)),
+            ("cache_read_text_tokens".to_string(), json!(50)),
+        ]);
+        let service = BillingService::new();
+        let base = service.calculate(&pricing(), &input).unwrap();
+        let result = service
+            .calculate_with_usage_dimensions(&pricing(), &input, &measured)
+            .unwrap();
+        let dims = result.cost_result.snapshot.resolved_dimensions;
+        assert!(!dims.contains_key("input_text_tokens"));
+        assert!(!dims.contains_key("input_audio_tokens"));
+        assert!(!dims.contains_key("output_image_tokens"));
+        assert!(!dims.contains_key("output_audio_tokens"));
+        assert_eq!(dims["cache_read_text_tokens"], 50);
+        assert_eq!(dims["input_tokens"], 950);
+        assert_eq!(base.actual_total_cost, result.actual_total_cost);
+    }
+
     fn pricing() -> BillingModelPricingSnapshot {
         BillingModelPricingSnapshot {
             provider_id: "provider-1".to_string(),
@@ -1005,6 +1171,8 @@ mod tests {
                     image_size: None,
                     image_quality: None,
                     image_output_format: None,
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )
@@ -1037,6 +1205,8 @@ mod tests {
                     image_size: None,
                     image_quality: None,
                     image_output_format: None,
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )
@@ -1081,6 +1251,8 @@ mod tests {
                     image_size: None,
                     image_quality: None,
                     image_output_format: None,
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )
@@ -1864,6 +2036,8 @@ mod tests {
                     image_size: Some("1024x1024".to_string()),
                     image_quality: Some("medium".to_string()),
                     image_output_format: Some("png".to_string()),
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: None,
                 },
             )
@@ -1930,6 +2104,8 @@ mod tests {
                     image_size: Some("1024x1024".to_string()),
                     image_quality: Some("medium".to_string()),
                     image_output_format: Some("png".to_string()),
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: None,
                 },
             )
@@ -1983,6 +2159,8 @@ mod tests {
                     image_size: Some("1024x1024".to_string()),
                     image_quality: Some("medium".to_string()),
                     image_output_format: Some("png".to_string()),
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: None,
                 },
             )
@@ -2032,6 +2210,8 @@ mod tests {
                     image_size: Some("1024x1024".to_string()),
                     image_quality: Some("medium".to_string()),
                     image_output_format: Some("png".to_string()),
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: None,
                 },
             )
@@ -2094,6 +2274,8 @@ mod tests {
                     image_size: Some("1024x1024".to_string()),
                     image_quality: Some("medium".to_string()),
                     image_output_format: Some("png".to_string()),
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: None,
                 },
             )
@@ -2161,6 +2343,8 @@ mod tests {
                     image_size: Some("1536 x 1024".to_string()),
                     image_quality: Some("medium".to_string()),
                     image_output_format: Some("png".to_string()),
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: None,
                 },
             )
@@ -2261,6 +2445,8 @@ mod tests {
                     image_size: None,
                     image_quality: None,
                     image_output_format: None,
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: Some(5),
                 },
             )
@@ -2336,6 +2522,8 @@ mod tests {
                     image_size: None,
                     image_quality: None,
                     image_output_format: None,
+                    video_resolution: None,
+                    video_duration_seconds: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )
@@ -2357,5 +2545,443 @@ mod tests {
                 .get("cache_read_price_per_1m"),
             Some(&json!(0.25))
         );
+    }
+
+    fn video_pricing(
+        video: serde_json::Value,
+        token_tiers: Option<serde_json::Value>,
+    ) -> BillingModelPricingSnapshot {
+        BillingModelPricingSnapshot {
+            provider_api_key_rate_multipliers: None,
+            global_model_name: "seedance".to_string(),
+            global_model_config: Some(json!({"billing": {"video": video}})),
+            default_price_per_request: None,
+            default_tiered_pricing: token_tiers,
+            ..pricing()
+        }
+    }
+
+    fn video_usage(resolution: Option<&str>, duration_seconds: i64) -> BillingUsageInput {
+        BillingUsageInput {
+            video_resolution: resolution.map(ToOwned::to_owned),
+            video_duration_seconds: duration_seconds,
+            api_format: Some("openai:video".to_string()),
+            ..BillingUsageInput::new("video")
+        }
+    }
+
+    #[test]
+    fn completed_video_prices_exactly_duration_times_resolution_rate() {
+        let pricing = video_pricing(
+            json!({
+                "price_per_second_by_resolution": {
+                    "720p": 2.5,
+                    "1280x720": 3.0
+                }
+            }),
+            None,
+        );
+        let result = BillingService::new()
+            .calculate(&pricing, &video_usage(Some("1280X720"), 6))
+            .expect("video billing should calculate");
+
+        assert_eq!(result.cost_result.status, BillingSnapshotStatus::Complete);
+        assert_eq!(result.cost_result.cost, 18.0);
+        assert_eq!(result.actual_total_cost, 18.0);
+        assert_eq!(
+            result.cost_result.snapshot.cost_breakdown.get("video_cost"),
+            Some(&18.0)
+        );
+
+        // Portrait and landscape spellings share the configured pixel row.
+        let portrait = BillingService::new()
+            .calculate(&pricing, &video_usage(Some("720x1280"), 6))
+            .expect("portrait video billing should calculate");
+        assert_eq!(portrait.cost_result.cost, 18.0);
+    }
+
+    #[test]
+    fn missing_video_resolution_price_never_infers_a_charge() {
+        let pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            None,
+        );
+        for resolution in [Some("1080p"), None, Some("   ")] {
+            let result = BillingService::new()
+                .calculate(&pricing, &video_usage(resolution, 5))
+                .expect("unpriced video should still calculate");
+            assert_eq!(result.cost_result.status, BillingSnapshotStatus::Complete);
+            assert_eq!(result.cost_result.cost, 0.0, "{resolution:?}");
+            assert_eq!(result.actual_total_cost, 0.0);
+            assert_eq!(
+                result
+                    .cost_result
+                    .snapshot
+                    .resolved_dimensions
+                    .get("video_price_per_second"),
+                Some(&json!(0.0))
+            );
+        }
+    }
+
+    #[test]
+    fn configured_video_seconds_scales_with_immutable_duration() {
+        let pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            None,
+        );
+        let result = BillingService::new()
+            .calculate(&pricing, &video_usage(Some("720p"), 5))
+            .expect("video billing should calculate");
+
+        assert_eq!(result.cost_result.cost, 10.0);
+        assert_eq!(
+            result
+                .cost_result
+                .snapshot
+                .resolved_dimensions
+                .get("video_seconds_unmetered"),
+            Some(&json!(5))
+        );
+        assert_eq!(
+            result
+                .cost_result
+                .snapshot
+                .resolved_dimensions
+                .get("video_duration_seconds"),
+            Some(&json!(5))
+        );
+    }
+
+    #[test]
+    fn per_second_video_never_double_charges_reported_tokens() {
+        let pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 3.0,
+                    "output_price_per_1m": 15.0
+                }]
+            })),
+        );
+        let input = BillingUsageInput {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            ..video_usage(Some("720p"), 5)
+        };
+        let result = BillingService::new()
+            .calculate(&pricing, &input)
+            .expect("video billing should calculate");
+
+        assert_eq!(result.cost_result.status, BillingSnapshotStatus::Complete);
+        assert_eq!(result.cost_result.cost, 10.0);
+        assert_eq!(
+            result.cost_result.snapshot.cost_breakdown.get("input_cost"),
+            Some(&0.0)
+        );
+        assert_eq!(
+            result
+                .cost_result
+                .snapshot
+                .cost_breakdown
+                .get("output_cost"),
+            Some(&0.0)
+        );
+        assert_eq!(
+            result.cost_result.snapshot.cost_breakdown.get("video_cost"),
+            Some(&10.0)
+        );
+    }
+
+    #[test]
+    fn video_dimensions_do_not_change_existing_token_pricing() {
+        let pricing = video_pricing(
+            json!({}),
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 3.0,
+                    "output_price_per_1m": 15.0
+                }]
+            })),
+        );
+        let input = BillingUsageInput {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            api_format: Some("openai:chat".to_string()),
+            video_resolution: Some("720p".to_string()),
+            video_duration_seconds: 5,
+            ..BillingUsageInput::new("chat")
+        };
+        let result = BillingService::new()
+            .calculate(&pricing, &input)
+            .expect("token billing should calculate");
+
+        // The snapshot has no video price table, so duration is not priced and
+        // the token result matches the pre-video behavior.
+        assert_eq!(result.cost_result.cost, 0.0105);
+        assert_eq!(result.actual_total_cost, 0.0105);
+        assert_eq!(
+            result
+                .cost_result
+                .snapshot
+                .resolved_dimensions
+                .get("video_seconds_unmetered"),
+            Some(&json!(0))
+        );
+        assert_eq!(
+            result.cost_result.snapshot.cost_breakdown.get("video_cost"),
+            Some(&0.0)
+        );
+    }
+
+    #[test]
+    fn video_table_on_multimodal_model_bills_chat_and_image_normally() {
+        let pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 3.0,
+                    "output_price_per_1m": 15.0,
+                    "cache_creation_price_per_1m": 3.75,
+                    "cache_read_price_per_1m": 0.3
+                }],
+                "image_output_price_default": 0.04
+            })),
+        );
+
+        // Chat usage keeps token and cache pricing even when it reports
+        // video-shaped dimensions; the request type, not the duration, selects
+        // the mode.
+        let chat = BillingUsageInput {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cache_creation_tokens: 100,
+            cache_read_tokens: 200,
+            video_resolution: Some("720p".to_string()),
+            video_duration_seconds: 5,
+            api_format: Some("openai:chat".to_string()),
+            ..BillingUsageInput::new("chat")
+        };
+        let chat = BillingService::new()
+            .calculate(&pricing, &chat)
+            .expect("chat billing should calculate");
+        assert_eq!(chat.cost_result.status, BillingSnapshotStatus::Complete);
+        assert_eq!(chat.cost_result.cost, 0.010035);
+        let chat_breakdown = &chat.cost_result.snapshot.cost_breakdown;
+        assert_eq!(chat_breakdown.get("input_cost"), Some(&0.0021));
+        assert_eq!(chat_breakdown.get("output_cost"), Some(&0.0075));
+        assert_eq!(
+            chat_breakdown.get("cache_creation_uncategorized_cost"),
+            Some(&0.000375)
+        );
+        assert_eq!(chat_breakdown.get("cache_read_cost"), Some(&0.00006));
+        assert_eq!(chat_breakdown.get("video_cost"), Some(&0.0));
+        assert_eq!(
+            chat.cost_result
+                .snapshot
+                .resolved_dimensions
+                .get("video_seconds_unmetered"),
+            Some(&json!(0))
+        );
+        assert_eq!(
+            chat.cost_result
+                .snapshot
+                .resolved_dimensions
+                .get("video_price_per_second"),
+            Some(&json!(0.0))
+        );
+
+        // Image usage keeps its configured per-image and token prices and pays
+        // no seconds.
+        let image = BillingUsageInput {
+            input_tokens: 1_000,
+            image_count: 1,
+            image_size: Some("1024x1024".to_string()),
+            image_quality: Some("high".to_string()),
+            video_resolution: Some("720p".to_string()),
+            video_duration_seconds: 5,
+            api_format: Some("openai:image".to_string()),
+            ..BillingUsageInput::new("image")
+        };
+        let image = BillingService::new()
+            .calculate(&pricing, &image)
+            .expect("image billing should calculate");
+        assert_eq!(image.cost_result.status, BillingSnapshotStatus::Complete);
+        assert_eq!(image.cost_result.cost, 0.043);
+        assert_eq!(
+            image.cost_result.snapshot.cost_breakdown.get("input_cost"),
+            Some(&0.003)
+        );
+        assert_eq!(
+            image
+                .cost_result
+                .snapshot
+                .cost_breakdown
+                .get("image_output_cost"),
+            Some(&0.04)
+        );
+        assert_eq!(
+            image.cost_result.snapshot.cost_breakdown.get("video_cost"),
+            Some(&0.0)
+        );
+    }
+
+    #[test]
+    fn video_endpoint_without_request_type_still_bills_seconds() {
+        let pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 3.0,
+                    "output_price_per_1m": 15.0
+                }]
+            })),
+        );
+        // A projection may lose the request type; the video endpoint kind still
+        // selects seconds pricing instead of falling back to token pricing.
+        let input = BillingUsageInput {
+            input_tokens: 1_000,
+            video_resolution: Some("720p".to_string()),
+            video_duration_seconds: 5,
+            api_format: Some("openai:video".to_string()),
+            ..BillingUsageInput::new("chat")
+        };
+        let result = BillingService::new()
+            .calculate(&pricing, &input)
+            .expect("video billing should calculate");
+
+        assert_eq!(result.cost_result.status, BillingSnapshotStatus::Complete);
+        assert_eq!(result.cost_result.cost, 10.0);
+        assert_eq!(
+            result.cost_result.snapshot.cost_breakdown.get("input_cost"),
+            Some(&0.0)
+        );
+    }
+
+    #[test]
+    fn per_second_video_charges_only_seconds_and_the_request_fee() {
+        let mut pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 3.0,
+                    "output_price_per_1m": 15.0,
+                    "cache_creation_price_per_1m": 3.75,
+                    "cache_read_price_per_1m": 0.3
+                }]
+            })),
+        );
+        pricing.default_price_per_request = Some(0.25);
+
+        let input = BillingUsageInput {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cache_creation_tokens: 300,
+            cache_creation_ephemeral_5m_tokens: 200,
+            cache_creation_ephemeral_1h_tokens: 100,
+            cache_read_tokens: 400,
+            ..video_usage(Some("720p"), 5)
+        };
+        let result = BillingService::new()
+            .calculate(&pricing, &input)
+            .expect("video billing should calculate");
+
+        assert_eq!(result.cost_result.status, BillingSnapshotStatus::Complete);
+        assert_eq!(result.cost_result.cost, 10.25);
+        assert_eq!(result.actual_total_cost, 10.25);
+        for key in [
+            "input_cost",
+            "output_cost",
+            "cache_creation_uncategorized_cost",
+            "cache_creation_ephemeral_5m_cost",
+            "cache_creation_ephemeral_1h_cost",
+            "cache_read_cost",
+        ] {
+            assert_eq!(
+                result.cost_result.snapshot.cost_breakdown.get(key),
+                Some(&0.0),
+                "{key} must not charge reported tokens on top of seconds"
+            );
+        }
+        assert_eq!(
+            result.cost_result.snapshot.cost_breakdown.get("video_cost"),
+            Some(&10.0)
+        );
+        assert_eq!(
+            result
+                .cost_result
+                .snapshot
+                .cost_breakdown
+                .get("request_cost"),
+            Some(&0.25)
+        );
+        let variables = &result.cost_result.snapshot.resolved_variables;
+        for key in [
+            "input_price_per_1m",
+            "output_price_per_1m",
+            "cache_creation_price_per_1m",
+            "cache_creation_ephemeral_5m_price_per_1m",
+            "cache_creation_ephemeral_1h_price_per_1m",
+            "cache_read_price_per_1m",
+        ] {
+            assert_eq!(
+                variables.get(key),
+                Some(&json!(0.0)),
+                "{key} must be zeroed for a per-second video"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_video_without_billable_seconds_never_falls_back_to_tokens() {
+        let pricing = video_pricing(
+            json!({"price_per_second_by_resolution": {"720p": 2.0}}),
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 3.0,
+                    "output_price_per_1m": 15.0,
+                    "cache_creation_price_per_1m": 3.75,
+                    "cache_read_price_per_1m": 0.3
+                }]
+            })),
+        );
+
+        // A completed video may report zero/missing duration, and a resolution
+        // the operator never priced yields no seconds charge; neither case may
+        // fall back to token or cache pricing.
+        for (resolution, duration) in [(Some("720p"), 0), (None, 5), (Some("1080p"), 5)] {
+            let input = BillingUsageInput {
+                input_tokens: 1_000,
+                output_tokens: 500,
+                cache_creation_tokens: 300,
+                cache_read_tokens: 400,
+                ..video_usage(resolution, duration)
+            };
+            let result = BillingService::new()
+                .calculate(&pricing, &input)
+                .expect("video billing should calculate");
+
+            assert_eq!(result.cost_result.status, BillingSnapshotStatus::Complete);
+            assert_eq!(result.cost_result.cost, 0.0, "{resolution:?}");
+            for key in [
+                "input_cost",
+                "output_cost",
+                "cache_creation_uncategorized_cost",
+                "cache_read_cost",
+                "video_cost",
+            ] {
+                assert_eq!(
+                    result.cost_result.snapshot.cost_breakdown.get(key),
+                    Some(&0.0),
+                    "{resolution:?} {duration}s {key}"
+                );
+            }
+        }
     }
 }

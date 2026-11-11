@@ -608,7 +608,7 @@ describe('HorizontalRequestTimeline', () => {
     expect(nodeDot?.classList.contains('status-success')).toBe(false)
   })
 
-  it('keeps emitted trace state active while the request lifecycle is still streaming', async () => {
+  it('emits failed for a terminal HTTP 200 stream failure with no live candidate', async () => {
     const onTraceState = vi.fn()
     const trace = buildTrace([
       buildCandidate({
@@ -619,7 +619,8 @@ describe('HorizontalRequestTimeline', () => {
         key_name: 'Stale Key',
         candidate_index: 0,
         status: 'failed',
-        status_code: 503,
+        status_code: 200,
+        finished_at: '2026-05-06T12:00:01.000Z',
       }),
     ])
     trace.final_status = 'failed'
@@ -633,8 +634,56 @@ describe('HorizontalRequestTimeline', () => {
 
     const lastCall = onTraceState.mock.calls[onTraceState.mock.calls.length - 1]?.[0]
     expect(lastCall).toMatchObject({
-      finalStatus: 'streaming',
+      finalStatus: 'failed',
     })
+  })
+
+  it('keeps a live recovery candidate active despite an earlier failed trace', async () => {
+    const onTraceState = vi.fn()
+    const trace = buildTrace([
+      buildCandidate({ status: 'failed', status_code: 503 }),
+      buildCandidate({
+        id: 'cand-recovery',
+        candidate_index: 1,
+        provider_id: 'provider-recovery',
+        status: 'streaming',
+        status_code: 200,
+        error_message: 'retained retry diagnostic',
+        finished_at: undefined,
+      }),
+    ])
+    trace.final_status = 'failed'
+    mountTimeline(trace, { requestStatus: 'streaming', overrideStatusCode: 200, onTraceState })
+    await nextTick()
+
+    expect(onTraceState.mock.calls[onTraceState.mock.calls.length - 1]?.[0]).toMatchObject({ finalStatus: 'streaming' })
+    expect([...document.querySelectorAll('.node-dot')].some(dot => dot.classList.contains('status-pending'))).toBe(true)
+  })
+
+  it('keeps a completed request successful with a stale failed trace', async () => {
+    const onTraceState = vi.fn()
+    const trace = buildTrace([buildCandidate({ status: 'failed', status_code: 200 })])
+    trace.final_status = 'failed'
+    mountTimeline(trace, { requestStatus: 'completed', overrideStatusCode: 200, onTraceState })
+    await nextTick()
+
+    expect(onTraceState.mock.calls[onTraceState.mock.calls.length - 1]?.[0]).toMatchObject({ finalStatus: 'success' })
+  })
+
+  it('does not treat failed image progress over HTTP 200 as a live candidate', async () => {
+    const onTraceState = vi.fn()
+    const trace = buildTrace([buildCandidate({
+      status: 'streaming',
+      status_code: 200,
+      finished_at: undefined,
+      image_progress: { phase: 'failed' },
+    })])
+    trace.final_status = 'failed'
+    const root = mountTimeline(trace, { requestStatus: 'streaming', overrideStatusCode: 200, onTraceState })
+    await nextTick()
+
+    expect(root.querySelector('.node-dot')?.classList.contains('status-failed')).toBe(true)
+    expect(onTraceState.mock.calls[onTraceState.mock.calls.length - 1]?.[0]).toMatchObject({ finalStatus: 'failed' })
   })
 
   it('shows request path from request metadata', async () => {

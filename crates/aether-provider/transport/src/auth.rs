@@ -320,6 +320,60 @@ pub fn resolve_local_openai_bearer_auth(
     Some(("authorization".to_string(), bearer_auth_value(secret)))
 }
 
+/// OpenAI-compatible embedding/rerank endpoints historically authenticate with
+/// `Authorization: Bearer` regardless of the key's default auth type. Honor an
+/// explicit per-format override, but keep the bearer default when none is set.
+pub fn resolve_local_openai_embedding_rerank_auth(
+    transport: &GatewayProviderTransportSnapshot,
+    provider_api_format: &str,
+) -> Option<(String, String)> {
+    resolve_local_explicit_format_override_auth(transport, provider_api_format)
+        .or_else(|| resolve_local_openai_bearer_auth(transport))
+}
+
+/// Standard auth for an OpenAI-compatible format with its historical default
+/// preserved. An explicit per-format override wins; otherwise the key's
+/// standard auth type (including endpoint-format overrides) applies.
+pub fn resolve_local_standard_auth_with_format_override(
+    transport: &GatewayProviderTransportSnapshot,
+    provider_api_format: &str,
+) -> Option<(String, String)> {
+    resolve_local_explicit_format_override_auth(transport, provider_api_format)
+        .or_else(|| resolve_local_standard_auth(transport))
+}
+
+fn resolve_local_explicit_format_override_auth(
+    transport: &GatewayProviderTransportSnapshot,
+    provider_api_format: &str,
+) -> Option<(String, String)> {
+    match explicit_local_auth_type_override_for_format(transport, provider_api_format).as_deref() {
+        Some("api_key") => resolved_local_secret(transport)
+            .map(|secret| ("x-api-key".to_string(), secret.to_string())),
+        Some("bearer") => resolved_local_secret(transport)
+            .map(|secret| ("authorization".to_string(), bearer_auth_value(secret))),
+        _ => None,
+    }
+}
+
+fn explicit_local_auth_type_override_for_format(
+    transport: &GatewayProviderTransportSnapshot,
+    api_format: &str,
+) -> Option<String> {
+    let overrides = transport
+        .key
+        .auth_type_by_format
+        .as_ref()
+        .and_then(serde_json::Value::as_object)?;
+    let normalized_api_format = aether_ai_formats::normalize_api_format_alias(api_format);
+    overrides
+        .get(&normalized_api_format)
+        .or_else(|| overrides.get(api_format.trim()))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| matches!(value.as_str(), "api_key" | "bearer"))
+}
+
 pub fn resolve_local_standard_auth(
     transport: &GatewayProviderTransportSnapshot,
 ) -> Option<(String, String)> {
@@ -394,7 +448,8 @@ mod tests {
     use super::{
         build_claude_passthrough_headers, build_complete_passthrough_headers,
         build_complete_passthrough_headers_with_auth, build_openai_passthrough_headers,
-        resolve_local_openai_bearer_auth, resolve_local_standard_auth,
+        resolve_local_openai_bearer_auth, resolve_local_openai_embedding_rerank_auth,
+        resolve_local_standard_auth, resolve_local_standard_auth_with_format_override,
     };
     use crate::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -730,6 +785,130 @@ mod tests {
         assert_eq!(
             resolve_local_openai_bearer_auth(&transport),
             Some(("authorization".to_string(), "Bearer sk-openai".to_string(),))
+        );
+    }
+
+    #[test]
+    fn openai_embedding_rerank_auth_honors_explicit_api_key_override() {
+        for api_format in ["openai:embedding", "openai:rerank"] {
+            let mut transport = sample_transport();
+            transport.endpoint.api_format = api_format.to_string();
+            transport.key.auth_type = "bearer".to_string();
+            transport.key.auth_type_by_format = Some(serde_json::json!({
+                "openai:embedding": "api_key",
+                "openai:rerank": "api_key"
+            }));
+            transport.key.decrypted_api_key = "sk-embed".to_string();
+
+            assert_eq!(
+                resolve_local_openai_embedding_rerank_auth(&transport, api_format),
+                Some(("x-api-key".to_string(), "sk-embed".to_string(),))
+            );
+        }
+    }
+
+    #[test]
+    fn openai_embedding_rerank_auth_honors_explicit_bearer_override() {
+        for api_format in ["openai:embedding", "openai:rerank"] {
+            let mut transport = sample_transport();
+            transport.endpoint.api_format = api_format.to_string();
+            transport.key.auth_type = "api_key".to_string();
+            transport.key.auth_type_by_format = Some(serde_json::json!({
+                "openai:embedding": "bearer",
+                "openai:rerank": "bearer"
+            }));
+            transport.key.decrypted_api_key = "sk-embed".to_string();
+
+            assert_eq!(
+                resolve_local_openai_embedding_rerank_auth(&transport, api_format),
+                Some(("authorization".to_string(), "Bearer sk-embed".to_string(),))
+            );
+        }
+    }
+
+    #[test]
+    fn openai_embedding_rerank_auth_without_override_keeps_bearer_default() {
+        for api_format in ["openai:embedding", "openai:rerank"] {
+            let mut transport = sample_transport();
+            transport.endpoint.api_format = api_format.to_string();
+            transport.key.auth_type = "api_key".to_string();
+            transport.key.decrypted_api_key = "sk-embed".to_string();
+
+            assert_eq!(
+                resolve_local_openai_embedding_rerank_auth(&transport, api_format),
+                Some(("authorization".to_string(), "Bearer sk-embed".to_string(),))
+            );
+        }
+    }
+
+    #[test]
+    fn openai_embedding_rerank_auth_ignores_invalid_format_override() {
+        for api_format in ["openai:embedding", "openai:rerank"] {
+            let mut transport = sample_transport();
+            transport.endpoint.api_format = api_format.to_string();
+            transport.key.auth_type = "api_key".to_string();
+            transport.key.auth_type_by_format = Some(serde_json::json!({
+                "openai:embedding": "oauth",
+                "openai:rerank": "basic"
+            }));
+            transport.key.decrypted_api_key = "sk-embed".to_string();
+
+            assert_eq!(
+                resolve_local_openai_embedding_rerank_auth(&transport, api_format),
+                Some(("authorization".to_string(), "Bearer sk-embed".to_string(),))
+            );
+        }
+    }
+
+    #[test]
+    fn standard_auth_with_format_override_honors_explicit_override() {
+        let mut transport = sample_transport();
+        transport.key.decrypted_api_key = "sk-rerank".to_string();
+
+        transport.key.auth_type = "bearer".to_string();
+        transport.key.auth_type_by_format = Some(serde_json::json!({
+            "openai:rerank": "api_key"
+        }));
+        assert_eq!(
+            resolve_local_standard_auth_with_format_override(&transport, "openai:rerank"),
+            Some(("x-api-key".to_string(), "sk-rerank".to_string()))
+        );
+
+        transport.key.auth_type = "api_key".to_string();
+        transport.key.auth_type_by_format = Some(serde_json::json!({
+            "openai:rerank": "bearer"
+        }));
+        assert_eq!(
+            resolve_local_standard_auth_with_format_override(&transport, "openai:rerank"),
+            Some(("authorization".to_string(), "Bearer sk-rerank".to_string()))
+        );
+    }
+
+    #[test]
+    fn standard_auth_with_format_override_preserves_standard_defaults() {
+        let mut transport = sample_transport();
+        transport.endpoint.api_format = "openai:rerank".to_string();
+        transport.key.decrypted_api_key = "sk-rerank".to_string();
+
+        transport.key.auth_type = "api_key".to_string();
+        assert_eq!(
+            resolve_local_standard_auth_with_format_override(&transport, "openai:rerank"),
+            Some(("x-api-key".to_string(), "sk-rerank".to_string()))
+        );
+
+        transport.key.auth_type = "bearer".to_string();
+        assert_eq!(
+            resolve_local_standard_auth_with_format_override(&transport, "openai:rerank"),
+            Some(("authorization".to_string(), "Bearer sk-rerank".to_string()))
+        );
+
+        transport.key.auth_type = "api_key".to_string();
+        transport.key.auth_type_by_format = Some(serde_json::json!({
+            "openai:rerank": "oauth"
+        }));
+        assert_eq!(
+            resolve_local_standard_auth_with_format_override(&transport, "openai:rerank"),
+            Some(("x-api-key".to_string(), "sk-rerank".to_string()))
         );
     }
 

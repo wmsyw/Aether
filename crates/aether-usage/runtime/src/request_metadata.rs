@@ -7,13 +7,13 @@ use aether_data_contracts::repository::usage::{
     sanitize_usage_request_metadata as project_usage_request_metadata,
     sanitize_usage_request_metadata_object as project_usage_request_metadata_object,
     sanitize_usage_request_metadata_ref as project_usage_request_metadata_ref,
-    usage_body_capture_is_authoritative, UsageBodyCaptureState,
-    BILLING_MULTIPLIER_SNAPSHOT_METADATA_KEY, CHAT_PII_REDACTION_METADATA_KEY,
-    PROVIDER_ACTUAL_SERVICE_TIER_METADATA_KEY, PROVIDER_CACHE_TTL_MINUTES_METADATA_KEY,
-    PROVIDER_REASONING_EFFORT_METADATA_KEY, PROVIDER_RESPONSE_MODEL_METADATA_KEY,
-    PROVIDER_SERVICE_TIER_METADATA_KEY, REQUESTED_REASONING_EFFORT_METADATA_KEY,
-    ROUTING_GROUP_BILLING_MULTIPLIER_METADATA_KEY, ROUTING_GROUP_ID_METADATA_KEY,
-    ROUTING_GROUP_NAME_METADATA_KEY,
+    strip_provider_cancelled_usage_authorization, usage_body_capture_is_authoritative,
+    UsageBodyCaptureState, BILLING_MULTIPLIER_SNAPSHOT_METADATA_KEY,
+    CHAT_PII_REDACTION_METADATA_KEY, PROVIDER_ACTUAL_SERVICE_TIER_METADATA_KEY,
+    PROVIDER_CACHE_TTL_MINUTES_METADATA_KEY, PROVIDER_REASONING_EFFORT_METADATA_KEY,
+    PROVIDER_RESPONSE_MODEL_METADATA_KEY, PROVIDER_SERVICE_TIER_METADATA_KEY,
+    REQUESTED_REASONING_EFFORT_METADATA_KEY, ROUTING_GROUP_BILLING_MULTIPLIER_METADATA_KEY,
+    ROUTING_GROUP_ID_METADATA_KEY, ROUTING_GROUP_NAME_METADATA_KEY,
 };
 use serde_json::{Map, Value};
 
@@ -68,7 +68,9 @@ pub(crate) fn build_usage_request_metadata_seed(
     _plan: &ExecutionPlan,
     context: Option<&Map<String, Value>>,
 ) -> Option<Value> {
-    context.and_then(project_usage_request_metadata_object)
+    let mut metadata = context.and_then(project_usage_request_metadata_object);
+    strip_provider_cancelled_usage_authorization(&mut metadata);
+    metadata
 }
 
 pub(crate) fn merge_usage_request_metadata(
@@ -441,6 +443,17 @@ mod tests {
             transport_profile: None,
             timeouts: None,
         }
+    }
+
+    #[test]
+    fn usage_request_seed_strips_provider_cancelled_usage_authorization() {
+        let context = json!({"trace_id": "trace-cancelled", "provider_cancelled_usage": true});
+
+        let metadata = build_usage_request_metadata_seed(&sample_plan(), context.as_object())
+            .expect("trace metadata should remain");
+
+        assert_eq!(metadata["trace_id"], "trace-cancelled");
+        assert!(metadata.get("provider_cancelled_usage").is_none());
     }
 
     #[test]
