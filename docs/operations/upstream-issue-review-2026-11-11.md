@@ -151,4 +151,6 @@
 - 首轮远端 Rust CI 暴露 fail-fast 后此前未执行的断言：补齐本地 finalize 的四项跨格式端到端 `created` 校验；metadata 优化测试先验证历史优化迁移不改事实/存量行，再将当前 bootstrap 与完整迁移后的 schema 比较，避免把新增 `provider_cost_amount` 列误判为历史事实变化。
 - 对整个本地 finalize 与迁移测试模块禁用 fail-fast 后，补齐第五项 Gemini 流聚合响应的 `created` 合同；待执行迁移测试移除手写完整版本清单，改为验证嵌入迁移集合扣除已应用版本后的完整有序结果，新增迁移不再要求重抄列表。
 - 本轮 74 项模块回归中 72 项通过（其中一项 nextest 报 leaky、退出成功）；其余两项修复后单独回归均通过。最终是否可发布仍以完整远端 Rust CI 门禁为准。
+- 第二轮远端 CI 中 Data、Workspace Rest、集成场景、三组 Clippy 和数据库 smoke 均通过；Gateway 暴露并发等待预算断言仍期待 100 ms 超时后绕过并发限制执行。改为用 Notify 持有首个请求，验证第二个请求在预算到期后返回 503、持久化并发跳过原因且不额外调用上游，再释放首个请求；已有 slot 释放后成功的测试继续保留。
+- 本地 Gateway lib 使用 `--no-fail-fast` 完整运行 5,347 项，全部通过、无跳过；其中一项 nextest 标记 leaky，但退出成功。
 
