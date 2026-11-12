@@ -154,3 +154,13 @@
 - 第二轮远端 CI 中 Data、Workspace Rest、集成场景、三组 Clippy 和数据库 smoke 均通过；Gateway 暴露并发等待预算断言仍期待 100 ms 超时后绕过并发限制执行。改为用 Notify 持有首个请求，验证第二个请求在预算到期后返回 503、持久化并发跳过原因且不额外调用上游，再释放首个请求；已有 slot 释放后成功的测试继续保留。
 - 本地 Gateway lib 使用 `--no-fail-fast` 完整运行 5,347 项，全部通过、无跳过；其中一项 nextest 标记 leaky，但退出成功。
 
+### 修订重发结果
+
+- 修复源提交：`4bd772228e598a12d4f930190f70b9a07e9d90a9`；[Rust CI 43174416288](https://github.com/wmsyw/Aether/actions/runs/43174416288) 全部门禁通过。
+- 按用户确认，以旧标签对象为 lease 将 `v0.100.0` 更新到该提交；[Release Aether 43176435620](https://github.com/wmsyw/Aether/actions/runs/43176435620) 全部 8 个 job 成功。[GitHub Release](https://github.com/wmsyw/Aether/releases/tag/v0.100.0) 的 6 个附件已更新，发布说明已回读核对。
+- 下载后的 amd64、arm64 tarball 均通过 `SHA256SUMS` 校验；SHA-256 分别为 `1ae415264627c48e9a66be246afc32c3a56a968ab7b3a2c0fd56a12bc890e076`、`fce1c2cef082e1268ccc6ad556a2acd1f909df99decf9f913e8411a798168a3b`。
+- 两份 tarball 均通过 `gh attestation verify`：限定本仓库 Release workflow、`refs/tags/v0.100.0`、源提交 `4bd772228e598a12d4f930190f70b9a07e9d90a9`，并拒绝 self-hosted runner 证明。
+- GHCR 的 `0.100.0`、`0.100`、`latest` 均指向 `sha256:e87c54188a55b323be4fa7eafc9a55ac12144e82e6919a1455ca676c37046565`；逐一读取 manifest 和 config，确认包含 `linux/amd64`、`linux/arm64`，两种架构的 revision 标签均为本次修复源提交。
+- 远端 annotated tag 对象为 `791c47b1bca8794161415383f680a4e0ad06e663`，指向上述修复源提交。同版本覆盖不会使固定旧 digest 或仅比较版本号的部署自动升级，需显式重新拉取或安装。
+
+
