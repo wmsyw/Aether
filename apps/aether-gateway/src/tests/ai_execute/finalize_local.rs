@@ -890,6 +890,10 @@ async fn gateway_executes_openai_chat_cross_format_upstream_stream_via_local_fin
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let started_at = std::time::Instant::now();
     let response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/chat/completions"))
@@ -908,8 +912,18 @@ async fn gateway_executes_openai_chat_cross_format_upstream_stream_via_local_fin
     let response_body = response.text().await.expect("body should read");
 
     assert_eq!(response_status, StatusCode::OK);
-    let response_json: serde_json::Value =
+    let mut response_json: serde_json::Value =
         serde_json::from_str(&response_body).expect("body should parse");
+    let created = response_json
+        .as_object_mut()
+        .unwrap()
+        .remove("created")
+        .unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
     assert_eq!(
         response_json,
         json!({
@@ -1353,6 +1367,10 @@ async fn gateway_executes_openai_chat_cross_format_tool_use_upstream_stream_via_
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let started_at = std::time::Instant::now();
     let response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/chat/completions"))
@@ -1371,8 +1389,18 @@ async fn gateway_executes_openai_chat_cross_format_tool_use_upstream_stream_via_
     let response_body = response.text().await.expect("body should read");
 
     assert_eq!(response_status, StatusCode::OK);
-    let response_json: serde_json::Value =
+    let mut response_json: serde_json::Value =
         serde_json::from_str(&response_body).expect("body should parse");
+    let created = response_json
+        .as_object_mut()
+        .unwrap()
+        .remove("created")
+        .unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
     assert_eq!(
         response_json,
         json!({
@@ -1883,6 +1911,10 @@ async fn gateway_executes_openai_chat_antigravity_cross_format_sync_via_local_fi
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let started_at = std::time::Instant::now();
     let response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/chat/completions"))
@@ -1901,8 +1933,18 @@ async fn gateway_executes_openai_chat_antigravity_cross_format_sync_via_local_fi
     let response_body = response.text().await.expect("body should read");
 
     assert_eq!(response_status, StatusCode::OK);
-    let response_json: serde_json::Value =
+    let mut response_json: serde_json::Value =
         serde_json::from_str(&response_body).expect("body should parse");
+    let created = response_json
+        .as_object_mut()
+        .unwrap()
+        .remove("created")
+        .unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
     assert_eq!(
         response_json,
         json!({
@@ -2291,6 +2333,10 @@ async fn gateway_executes_openai_chat_cross_format_claude_upstream_sync_via_loca
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let started_at = std::time::Instant::now();
     let response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/chat/completions"))
@@ -2309,8 +2355,18 @@ async fn gateway_executes_openai_chat_cross_format_claude_upstream_sync_via_loca
     let response_body = response.text().await.expect("body should read");
 
     assert_eq!(response_status, StatusCode::OK);
-    let response_json: serde_json::Value =
+    let mut response_json: serde_json::Value =
         serde_json::from_str(&response_body).expect("body should parse");
+    let created = response_json
+        .as_object_mut()
+        .unwrap()
+        .remove("created")
+        .unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
     assert_eq!(
         response_json,
         json!({
@@ -2656,6 +2712,10 @@ async fn gateway_executes_openai_chat_cross_format_gemini_upstream_sync_via_loca
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let started_at = std::time::Instant::now();
     let response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/chat/completions"))
@@ -2672,7 +2732,17 @@ async fn gateway_executes_openai_chat_cross_format_gemini_upstream_sync_via_loca
     let elapsed = started_at.elapsed();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    let mut response_json: serde_json::Value = response.json().await.expect("body should parse");
+    let created = response_json
+        .as_object_mut()
+        .unwrap()
+        .remove("created")
+        .unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
     assert_eq!(
         response_json,
         json!({

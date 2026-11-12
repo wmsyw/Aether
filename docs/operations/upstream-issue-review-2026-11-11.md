@@ -148,4 +148,7 @@
 - 真实 PostgreSQL 的 `legacy_overview_upgrade_preserves_applied_history_and_existing_statistics` 回归通过；测试开启 `AETHER_REQUIRE_LOCAL_POSTGRES_TESTS=true`，未跳过数据库验证。
 - 用户明确确认覆盖已发布的 `v0.100.0`：修复及 Rust CI 通过后更新同名标签、Release 附件，以及 GHCR 的 `0.100.0`、`0.100`、`latest`；不删除整个 Release。
 - Base64 正文捕获、模型选择和同步响应转换的针对性 nextest 共 83 项全部通过；百万个 `data:` 前缀（约 5 MB）回归进程耗时 0.105 秒。该耗时仅为本机测试观测，不作为定时断言。
+- 首轮远端 Rust CI 暴露 fail-fast 后此前未执行的断言：补齐本地 finalize 的四项跨格式端到端 `created` 校验；metadata 优化测试先验证历史优化迁移不改事实/存量行，再将当前 bootstrap 与完整迁移后的 schema 比较，避免把新增 `provider_cost_amount` 列误判为历史事实变化。
+- 对整个本地 finalize 与迁移测试模块禁用 fail-fast 后，补齐第五项 Gemini 流聚合响应的 `created` 合同；待执行迁移测试移除手写完整版本清单，改为验证嵌入迁移集合扣除已应用版本后的完整有序结果，新增迁移不再要求重抄列表。
+- 本轮 74 项模块回归中 72 项通过（其中一项 nextest 报 leaky、退出成功）；其余两项修复后单独回归均通过。最终是否可发布仍以完整远端 Rust CI 门禁为准。
 

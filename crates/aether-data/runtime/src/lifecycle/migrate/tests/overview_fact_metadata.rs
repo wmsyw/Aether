@@ -164,7 +164,16 @@ VALUES('employee-key','owner',repeat('e',64),false),
     assert_eq!(read_facts(&pool).await, before_facts);
     assert_eq!(stored_rows(&pool).await, before_rows);
 
-    // The maintained bootstrap fragment must install the same read model.
+    // Bootstrap tracks the current schema, not the historical optimization view.
+    // Compare it with the fully migrated schema, including later added columns.
+    for migration in POSTGRES_MIGRATOR
+        .iter()
+        .filter(|migration| migration.version > OPTIMIZATION_VERSION)
+    {
+        connection.apply(migration).await.unwrap();
+    }
+    let current_facts = read_facts(&pool).await;
+    let current_rows = stored_rows(&pool).await;
     let bootstrap =
         include_str!("../../../../schema/bootstrap/postgres/190_overview_analytics.sql");
     let view_start = bootstrap
@@ -174,7 +183,7 @@ VALUES('employee-key','owner',repeat('e',64),false),
         .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(read_facts(&pool).await, before_facts);
-    assert_eq!(stored_rows(&pool).await, before_rows);
+    assert_eq!(read_facts(&pool).await, current_facts);
+    assert_eq!(stored_rows(&pool).await, current_rows);
     pool.close().await;
 }
