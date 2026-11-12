@@ -107,18 +107,13 @@ WHERE version=20260919000000;
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>(),
-        vec![
-            DIRTY_EVENTS,
-            20260921010000,
-            20260921020000,
-            20260921020100,
-            20260923000000,
-            20261001000000,
-            20261004000000,
-            20261007000000,
-            20261008000000,
-            20261009000000,
-        ]
+        POSTGRES_MIGRATOR
+            .iter()
+            .filter(|migration| {
+                migration.version == DIRTY_EVENTS || migration.version > 20260920120000
+            })
+            .map(|migration| migration.version)
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         rows_snapshot(&pool, "_sqlx_migrations").await,

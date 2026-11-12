@@ -285,6 +285,18 @@ pub fn resolve_provider_model_name_with_model_directives_and_request_operation(
         }
     }
 
+    // Authorization narrows the candidate set, not its ordering. Keep the same
+    // priority/operation/name rules used for unrestricted provider mappings.
+    if let Some(allowed_model) =
+        resolve_selected_provider_model_name_matching(row, api_format, request_operation, |name| {
+            key_allowed_models
+                .iter()
+                .any(|allowed| allowed.trim() == name)
+        })
+    {
+        return Some((allowed_model.clone(), Some(allowed_model)));
+    }
+
     let mut sorted_allowed_models = key_allowed_models
         .iter()
         .map(String::as_str)
@@ -292,13 +304,6 @@ pub fn resolve_provider_model_name_with_model_directives_and_request_operation(
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
     sorted_allowed_models.sort_unstable();
-
-    for &allowed_model in &sorted_allowed_models {
-        if row_has_candidate_model_name(row, api_format, request_operation, allowed_model) {
-            let allowed_model = allowed_model.to_owned();
-            return Some((allowed_model.clone(), Some(allowed_model)));
-        }
-    }
 
     let global_model_mappings = row.global_model_mappings.as_ref()?;
     for &allowed_model in &sorted_allowed_models {
@@ -326,13 +331,26 @@ fn resolve_selected_provider_model_name(
     api_format: &str,
     request_operation: Option<&str>,
 ) -> Option<String> {
+    resolve_selected_provider_model_name_matching(row, api_format, request_operation, |_| true)
+}
+
+fn resolve_selected_provider_model_name_matching(
+    row: &StoredMinimalCandidateSelectionRow,
+    api_format: &str,
+    request_operation: Option<&str>,
+    name_is_allowed: impl Fn(&str) -> bool,
+) -> Option<String> {
     let Some(mappings) = row.model_provider_model_mappings.as_ref() else {
-        return Some(row.model_provider_model_name.clone());
+        return name_is_allowed(&row.model_provider_model_name)
+            .then(|| row.model_provider_model_name.clone());
     };
 
     if let Some(mapping) = mappings
         .iter()
-        .filter(|mapping| mapping_scope_matches(mapping, row, api_format, request_operation))
+        .filter(|mapping| {
+            mapping_scope_matches(mapping, row, api_format, request_operation)
+                && name_is_allowed(&mapping.name)
+        })
         .min_by(|left, right| {
             left.priority
                 .cmp(&right.priority)
@@ -345,8 +363,9 @@ fn resolve_selected_provider_model_name(
         return Some(mapping.name.clone());
     }
 
-    row_default_provider_model_name_available(row, api_format, request_operation)
-        .then(|| row.model_provider_model_name.clone())
+    (name_is_allowed(&row.model_provider_model_name)
+        && row_default_provider_model_name_available(row, api_format, request_operation))
+    .then(|| row.model_provider_model_name.clone())
 }
 
 pub fn candidate_model_names(
@@ -550,25 +569,6 @@ pub fn normalize_api_format(value: &str) -> String {
     aether_ai_formats::normalize_api_format_alias(value)
 }
 
-fn row_has_candidate_model_name(
-    row: &StoredMinimalCandidateSelectionRow,
-    api_format: &str,
-    request_operation: Option<&str>,
-    model_name: &str,
-) -> bool {
-    (row_default_provider_model_name_available(row, api_format, request_operation)
-        && row.model_provider_model_name == model_name)
-        || row
-            .model_provider_model_mappings
-            .as_ref()
-            .is_some_and(|mappings| {
-                mappings.iter().any(|mapping| {
-                    mapping_scope_matches(mapping, row, api_format, request_operation)
-                        && mapping.name == model_name
-                })
-            })
-}
-
 fn api_format_matches(left: &str, right: &str) -> bool {
     normalize_api_format(left) == normalize_api_format(right)
 }
@@ -679,6 +679,79 @@ mod tests {
 
         assert_eq!(resolved.0, "gpt-5.4");
         assert_eq!(resolved.1.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn allowed_provider_mappings_keep_priority_and_exclude_unauthorized_names() {
+        let mut row = sample_row("global-alias", "default-upstream");
+        row.model_provider_model_mappings = Some(
+            [("blocked", 0), ("z-prod", 1), ("a-canary", 100)]
+                .into_iter()
+                .map(|(name, priority)| StoredProviderModelMapping {
+                    name: name.to_string(),
+                    priority,
+                    api_formats: None,
+                    endpoint_ids: None,
+                    operations: None,
+                })
+                .collect(),
+        );
+        for (allowed, expected) in [
+            (vec!["a-canary", "z-prod"], "z-prod"),
+            (vec!["a-canary"], "a-canary"),
+            (vec!["default-upstream"], "default-upstream"),
+        ] {
+            row.key_allowed_models = Some(allowed.into_iter().map(str::to_string).collect());
+            assert_eq!(
+                resolve_provider_model_name(&row, "global-alias", "openai:chat"),
+                Some((expected.to_string(), Some(expected.to_string())))
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_provider_mappings_keep_operation_specific_precedence() {
+        let mut row = sample_row("global-alias", "default-upstream");
+        row.key_allowed_models = Some(vec!["a-generic".to_string(), "z-compact".to_string()]);
+        row.model_provider_model_mappings = Some(vec![
+            StoredProviderModelMapping {
+                name: "a-generic".to_string(),
+                priority: 1,
+                api_formats: None,
+                endpoint_ids: None,
+                operations: None,
+            },
+            StoredProviderModelMapping {
+                name: "z-compact".to_string(),
+                priority: 1,
+                api_formats: None,
+                endpoint_ids: Some(vec!["endpoint-1".to_string()]),
+                operations: Some(vec!["compact".to_string()]),
+            },
+        ]);
+        for (operation, expected) in [(None, "a-generic"), (Some("compact"), "z-compact")] {
+            assert_eq!(
+                resolve_provider_model_name_with_model_directives_and_request_operation(
+                    &row,
+                    "global-alias",
+                    "openai:responses",
+                    false,
+                    operation,
+                ),
+                Some((expected.to_string(), Some(expected.to_string())))
+            );
+        }
+        row.endpoint_id = "other-endpoint".to_string();
+        assert_eq!(
+            resolve_provider_model_name_with_model_directives_and_request_operation(
+                &row,
+                "global-alias",
+                "openai:responses",
+                false,
+                Some("compact"),
+            ),
+            Some(("a-generic".to_string(), Some("a-generic".to_string())))
+        );
     }
 
     #[test]

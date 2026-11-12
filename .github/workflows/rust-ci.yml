@@ -137,7 +137,7 @@ jobs:
           shell=false
           while IFS= read -r path; do
             case "$path" in
-              Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*|*.rs|*/Cargo.toml|*/build.rs|*.sql|.github/workflows/*.yml|.github/workflows/*.yaml)
+              Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*|*.rs|*/Cargo.toml|*.sql|.github/workflows/*.yml|.github/workflows/*.yaml)
                 rust=true
                 ;;
               *.sh|*.py|README.md|*/README.md|.env.example|Dockerfile*|docker-compose*.yml|docker-compose*.yaml)
@@ -659,7 +659,7 @@ jobs:
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Add PostgreSQL server binaries to PATH
-        run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+        run: pg_config --bindir >> "$GITHUB_PATH"
 
       - name: Run Postgres migration smoke test
         env:

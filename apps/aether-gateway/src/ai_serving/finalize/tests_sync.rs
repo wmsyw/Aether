@@ -331,7 +331,11 @@ fn aggregates_gemini_stream_events_to_final_response() {
 
 #[test]
 fn converts_claude_chat_response_to_openai_chat_response() {
-    let result = convert_claude_chat_response_to_openai_chat(
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut result = convert_claude_chat_response_to_openai_chat(
         &json!({
             "id": "msg_123",
             "type": "message",
@@ -354,6 +358,12 @@ fn converts_claude_chat_response_to_openai_chat_response() {
         }),
     )
     .expect("result should exist");
+    let created = result.as_object_mut().unwrap().remove("created").unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
 
     assert_eq!(
         result,
@@ -380,7 +390,11 @@ fn converts_claude_chat_response_to_openai_chat_response() {
 
 #[test]
 fn converts_claude_chat_tool_use_to_openai_chat_tool_calls() {
-    let result = convert_claude_chat_response_to_openai_chat(
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut result = convert_claude_chat_response_to_openai_chat(
         &json!({
             "id": "msg_tool_123",
             "type": "message",
@@ -408,6 +422,12 @@ fn converts_claude_chat_tool_use_to_openai_chat_tool_calls() {
         }),
     )
     .expect("result should exist");
+    let created = result.as_object_mut().unwrap().remove("created").unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
 
     assert_eq!(
         result,
@@ -475,7 +495,11 @@ fn converts_claude_chat_thinking_block_to_openai_reasoning_content() {
 
 #[test]
 fn converts_gemini_chat_response_to_openai_chat_response() {
-    let result = convert_gemini_chat_response_to_openai_chat(
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut result = convert_gemini_chat_response_to_openai_chat(
         &json!({
             "responseId": "resp_123",
             "candidates": [{
@@ -500,6 +524,12 @@ fn converts_gemini_chat_response_to_openai_chat_response() {
         }),
     )
     .expect("result should exist");
+    let created = result.as_object_mut().unwrap().remove("created").unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
 
     assert_eq!(
         result,
@@ -526,7 +556,11 @@ fn converts_gemini_chat_response_to_openai_chat_response() {
 
 #[test]
 fn converts_gemini_chat_function_call_to_openai_chat_tool_calls() {
-    let result = convert_gemini_chat_response_to_openai_chat(
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut result = convert_gemini_chat_response_to_openai_chat(
         &json!({
             "responseId": "resp_tool_123",
             "candidates": [{
@@ -554,6 +588,12 @@ fn converts_gemini_chat_function_call_to_openai_chat_tool_calls() {
         }),
     )
     .expect("result should exist");
+    let created = result.as_object_mut().unwrap().remove("created").unwrap();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&created.as_u64().unwrap()));
 
     assert_eq!(
         result,

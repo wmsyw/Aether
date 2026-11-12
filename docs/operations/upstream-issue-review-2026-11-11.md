@@ -136,3 +136,16 @@
 - [Release Aether #42998160253](https://github.com/wmsyw/Aether/actions/runs/42998160253)的8个job全部成功，包含两种musl二进制、前端、VSIX、多架构镜像、来源证明和GitHub Release。
 - 匿名读取GHCR manifest成功；`ghcr.io/wmsyw/aether:0.100.0`与`latest`同为`sha256:49a358774ed4ef67bb5d69785567cec7d89bd1554279db0ad10caee9ac0296ca`，含`linux/amd64`、`linux/arm64`及构建证明manifest。
 - [v0.100.0 Release](https://github.com/wmsyw/Aether/releases/tag/v0.100.0)为正式发布，含amd64/arm64 tarball、VSIX、`install.sh`、`SHA256SUMS`及sigstore来源证明；发布说明已回填。
+
+## v0.100.0 代码审查修订
+
+- Base64 审计压缩使用一次 data URL 匹配遍历，避免每个 `data:` 前缀重新扫描后续正文；回归覆盖大量无 marker 文本、无效前缀后的合法 URL，以及现有阈值、MIME 和正文保留行为。
+- 模型白名单回退先过滤已授权且 scope 匹配的映射，再沿用 priority、operation scope 和名称排序；不再按白名单字典序覆盖模型优先级。回归覆盖未授权首选、多模型优先级、operation 与 endpoint scope。
+- 删除 `.github/workflows/deploy-pages.yml`，保留 Release Aether、Tunnel、Nightly 和 Rust CI。
+- Rust CI 的 Claude/Gemini→OpenAI 合同测试验证动态 `created` 时间戳后继续精确校验转换内容；旧库升级测试按已嵌入迁移集合计算待执行版本，保留历史记录、统计数据和重复升级验证。
+- 清理 Rust CI workflow 中被 `*.rs` 覆盖的重复 shell pattern 及 PostgreSQL PATH 步骤的无效 echo 包装，不跳过测试或降低门禁。
+- `actionlint .github/workflows/*.yml` 与 `cargo fmt --all --check` 通过；对 `aether-usage-runtime`、`aether-scheduler-core` 执行 `cargo clippy --locked --all-targets -- -D warnings` 通过。
+- 真实 PostgreSQL 的 `legacy_overview_upgrade_preserves_applied_history_and_existing_statistics` 回归通过；测试开启 `AETHER_REQUIRE_LOCAL_POSTGRES_TESTS=true`，未跳过数据库验证。
+- 用户明确确认覆盖已发布的 `v0.100.0`：修复及 Rust CI 通过后更新同名标签、Release 附件，以及 GHCR 的 `0.100.0`、`0.100`、`latest`；不删除整个 Release。
+- Base64 正文捕获、模型选择和同步响应转换的针对性 nextest 共 83 项全部通过；百万个 `data:` 前缀（约 5 MB）回归进程耗时 0.105 秒。该耗时仅为本机测试观测，不作为定时断言。
+

@@ -1,4 +1,7 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    sync::LazyLock,
+};
 
 use aether_data_contracts::repository::usage::{
     UpsertUsageRecord, UsageBodyCaptureState, UsageBodyField,
@@ -10,8 +13,17 @@ use crate::event::UsageEvent;
 use crate::runtime::{UsageBodyCapturePolicy, UsageRequestRecordLevel};
 
 const TRUNCATED_BODY_STRING_SUFFIX: &str = "...[truncated]";
-const BASE64_DATA_URL_PREFIX: &str = "data:";
-const BASE64_DATA_URL_MARKER: &str = ";base64,";
+// Match the complete header and payload in one search. Repeated `data:` prefixes
+// must not restart a search of the remaining body for a distant/absent marker.
+static BASE64_DATA_URL: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(concat!(
+        r"(?i:data:)",
+        r"((?:[0-9A-Za-z!#$%&'*+.^_`|~-]+/[0-9A-Za-z!#$%&'*+.^_`|~-]+)?",
+        r"(?:;[0-9A-Za-z!#$%&'*+.^_`|~-]+=[\x21-\x2b\x2d-\x3a\x3c-\x7e]+)*)",
+        r"(?i:;base64,)([0-9A-Za-z+/_=-]+)"
+    ))
+    .expect("base64 data URL pattern is valid")
+});
 const MIN_AUDIT_PAYLOAD_BYTES: u64 = 4 * 1024;
 
 #[derive(Debug)]
@@ -462,56 +474,28 @@ fn is_base64_container_key(key: &str) -> bool {
 }
 
 fn compact_base64_data_urls_in_string(value: &str) -> Option<(String, usize)> {
-    let mut cursor = 0usize;
     let mut copied_until = 0usize;
     let mut compacted = String::new();
     let mut replacement_count = 0usize;
 
-    while let Some(start) = find_ascii_case_insensitive(value, BASE64_DATA_URL_PREFIX, cursor) {
-        let metadata_start = start + BASE64_DATA_URL_PREFIX.len();
-        let Some(marker) =
-            find_ascii_case_insensitive(value, BASE64_DATA_URL_MARKER, metadata_start)
-        else {
-            cursor = metadata_start;
-            continue;
-        };
-        let metadata = &value[metadata_start..marker];
-        if !valid_base64_data_url_metadata(metadata) {
-            cursor = metadata_start;
-            continue;
-        }
-
-        let payload_start = marker + BASE64_DATA_URL_MARKER.len();
-        let payload_len = value.as_bytes()[payload_start..]
-            .iter()
-            .take_while(|byte| {
-                let byte = **byte;
-                byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_' | b'=')
-            })
-            .count();
-        if payload_len == 0 {
-            cursor = payload_start;
-            continue;
-        }
-        let payload_end = payload_start + payload_len;
-        let payload = &value[payload_start..payload_end];
+    for captures in BASE64_DATA_URL.captures_iter(value) {
+        let matched = captures.get(0).expect("complete data URL match");
+        let metadata = &captures[1];
+        let payload = &captures[2];
         let Some(original_bytes) = valid_base64_payload_decoded_len(payload) else {
-            cursor = payload_end;
             continue;
         };
         if original_bytes < MIN_AUDIT_PAYLOAD_BYTES {
-            cursor = payload_end;
             continue;
         }
 
-        compacted.push_str(&value[copied_until..start]);
+        compacted.push_str(&value[copied_until..matched.start()]);
         compacted.push_str(&format_omitted_payload(
             "base64 payload",
             metadata.split(';').next(),
             original_bytes,
         ));
-        cursor = payload_end;
-        copied_until = payload_end;
+        copied_until = matched.end();
         replacement_count = replacement_count.saturating_add(1);
     }
 
@@ -534,59 +518,6 @@ fn format_omitted_payload(
         ),
         None => format!("<{payload_kind} omitted; original size: {original_size}>"),
     }
-}
-
-fn find_ascii_case_insensitive(value: &str, needle: &str, from: usize) -> Option<usize> {
-    let value = value.as_bytes();
-    let needle = needle.as_bytes();
-    if needle.is_empty() || from > value.len() || needle.len() > value.len().saturating_sub(from) {
-        return None;
-    }
-
-    (from..=value.len() - needle.len()).find(|start| {
-        value[*start..*start + needle.len()]
-            .iter()
-            .zip(needle)
-            .all(|(left, right)| left.eq_ignore_ascii_case(right))
-    })
-}
-
-fn valid_base64_data_url_metadata(value: &str) -> bool {
-    let mut parts = value.split(';');
-    let Some(media_type) = parts.next() else {
-        return false;
-    };
-    if !media_type.is_empty() {
-        let Some((media_type, media_subtype)) = media_type.split_once('/') else {
-            return false;
-        };
-        if !valid_mime_token(media_type) || !valid_mime_token(media_subtype) {
-            return false;
-        }
-    }
-
-    parts.all(|parameter| {
-        let Some((name, value)) = parameter.split_once('=') else {
-            return false;
-        };
-        valid_mime_token(name)
-            && !value.is_empty()
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_graphic() && byte != b',')
-    })
-}
-
-fn valid_mime_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'!' | b'#'
-                        ..=b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
-                )
-        })
 }
 
 fn valid_base64_payload_decoded_len(value: &str) -> Option<u64> {
@@ -1507,6 +1438,29 @@ mod tests {
             body["text"],
             format!("prefix {small} {invalid} before {replacement} between {small} then {replacement} after {small} end")
         );
+    }
+
+    #[test]
+    fn base64_compaction_preserves_large_plain_text_with_data_prefixes() {
+        let text = "data:".repeat(1_000_000);
+        let mut body = json!({"text": text});
+        assert_eq!(compact_base64_payloads(&mut body), 0);
+        assert_eq!(body["text"], text);
+    }
+
+    #[test]
+    fn base64_compaction_finds_valid_urls_after_invalid_headers() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(vec![7u8; 4096]);
+        let prefix = "data:invalid ".repeat(32_768);
+        let mut body = json!({
+            "text": format!("{prefix}DATA:application/pdf;charset=utf-8;BASE64,{encoded} end")
+        });
+        assert_eq!(compact_base64_payloads(&mut body), 1);
+        let text = body["text"].as_str().unwrap();
+        assert!(text.starts_with(&prefix));
+        assert!(text.ends_with(" end"));
+        assert!(text.contains("media type: application/pdf"));
+        assert!(!text.contains(&encoded));
     }
 
     #[test]
