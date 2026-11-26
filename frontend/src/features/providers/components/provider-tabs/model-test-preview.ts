@@ -113,6 +113,9 @@ function extractResponseText(responseBody: unknown, depth = 0): string | null {
   const candidateText = extractGeminiCandidateText(responseBody.candidates, depth + 1)
   if (candidateText) return candidateText
 
+  const interactionText = extractGeminiInteractionText(responseBody, depth + 1)
+  if (interactionText) return interactionText
+
   return null
 }
 
@@ -441,6 +444,36 @@ function extractGeminiCandidateText(value: unknown, depth: number): string | nul
   }
 
   return null
+}
+
+function extractGeminiInteractionText(responseBody: JsonRecord, depth: number): string | null {
+  if (depth > 4) return null
+
+  if (Array.isArray(responseBody.steps)) {
+    const parts = responseBody.steps.flatMap((step) => {
+      if (!isJsonRecord(step) || step.type !== 'model_output') return []
+
+      const text = extractGeminiInteractionContentText(step.content, depth + 1)
+      return text ? [text] : []
+    })
+    const text = joinPreviewParts(parts)
+    if (text) return text
+  }
+
+  return extractGeminiInteractionContentText(responseBody.outputs, depth + 1)
+}
+
+function extractGeminiInteractionContentText(value: unknown, depth: number): string | null {
+  if (depth > 4 || !Array.isArray(value)) return null
+
+  const parts = value.flatMap((part) => {
+    if (!isJsonRecord(part) || part.type !== 'text') return []
+
+    const text = compactPreviewText(part.text)
+    return text ? [text] : []
+  })
+
+  return joinPreviewParts(parts)
 }
 
 function extractReasoningFromContentParts(value: unknown, depth = 0): string | null {

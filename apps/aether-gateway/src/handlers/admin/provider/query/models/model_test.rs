@@ -82,6 +82,7 @@ use uuid::Uuid;
 
 mod adapter;
 mod capabilities;
+mod interactions;
 mod model_mapping;
 mod summary;
 
@@ -571,11 +572,19 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
             client_api_format.as_str(),
         );
         if let Some(object) = body.as_object_mut() {
+            let target_field = if client_api_format == "gemini:interactions"
+                && !object.contains_key("model")
+                && object.contains_key("agent")
+            {
+                "agent"
+            } else {
+                "model"
+            };
             if override_custom_model {
-                object.insert("model".to_string(), Value::String(model.to_string()));
+                object.insert(target_field.to_string(), Value::String(model.to_string()));
             } else {
                 object
-                    .entry("model".to_string())
+                    .entry(target_field.to_string())
                     .or_insert_with(|| Value::String(model.to_string()));
             }
             if !has_conversation {
@@ -618,7 +627,7 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
     let message = provider_query_extract_message(payload)
         .unwrap_or_else(|| DEFAULT_PROVIDER_QUERY_TEST_MESSAGE.to_string());
     match client_api_format.as_str() {
-        "openai:embedding" => json!({
+        "openai:embedding" | "gemini:interactions" => json!({
             "model": model,
             "input": message,
         }),
@@ -692,7 +701,7 @@ fn provider_query_insert_default_test_conversation(
     let message = provider_query_extract_message(payload)
         .unwrap_or_else(|| DEFAULT_PROVIDER_QUERY_TEST_MESSAGE.to_string());
     match client_api_format {
-        "openai:embedding" => {
+        "openai:embedding" | "gemini:interactions" => {
             object.insert("input".to_string(), Value::String(message));
         }
         "openai:rerank" => {
@@ -835,6 +844,12 @@ fn provider_query_request_body_has_conversation_for_api_format(
     client_api_format: &str,
 ) -> bool {
     match provider_query_normalize_api_format_alias(client_api_format).as_str() {
+        "gemini:interactions" => match body.get("input") {
+            Some(Value::String(input)) => !input.trim().is_empty(),
+            Some(Value::Array(input)) => !input.is_empty(),
+            Some(Value::Object(_)) => true,
+            _ => false,
+        },
         "openai:responses" | "openai:responses:compact" | "openai:search" => {
             value_has_non_empty_text(body.get("input"))
                 || value_has_non_empty_text(body.get("prompt"))
@@ -1742,6 +1757,14 @@ fn provider_query_standard_execution_response_body(
     result: &aether_contracts::ExecutionResult,
     report_context: Option<&Value>,
 ) -> Option<Value> {
+    if provider_query_normalize_api_format_alias(provider_api_format) == "gemini:interactions" {
+        return provider_query_execution_json_body(result)
+            .filter(interactions::is_interaction)
+            .or_else(|| {
+                provider_query_decode_execution_body(result)
+                    .and_then(|body| interactions::aggregate_stream_response(&body))
+            });
+    }
     let body = provider_query_execution_json_body(result).or_else(|| {
         provider_query_decode_execution_body(result).and_then(|body| {
             provider_query_aggregate_standard_stream_sync_response(provider_api_format, &body)
@@ -3086,8 +3109,11 @@ async fn provider_query_execute_standard_test_candidate(
     if let Some(object) = request_body.as_object_mut() {
         object.insert("stream".to_string(), Value::Bool(false));
     }
-    let request_model =
-        provider_query_request_body_model(&request_body, &candidate.effective_model);
+    let request_model = if normalized_provider_api_format == "gemini:interactions" {
+        interactions::request_target(&request_body, &candidate.effective_model)
+    } else {
+        provider_query_request_body_model(&request_body, &candidate.effective_model)
+    };
 
     let upstream_is_stream = provider_query_resolve_standard_test_upstream_is_stream(
         transport.endpoint.config.as_ref(),
@@ -3198,7 +3224,7 @@ async fn provider_query_execute_standard_test_candidate(
             );
             provider_request_body
         }
-        "openai:search" => {
+        "openai:search" | "gemini:interactions" => {
             let Some(mut provider_request_body) =
                 crate::provider_transport::build_same_format_provider_request_body(
                     crate::provider_transport::SameFormatProviderRequestBodyInput {
@@ -3207,14 +3233,20 @@ async fn provider_query_execute_standard_test_candidate(
                         client_api_format,
                         provider_api_format,
                         source_model: request_body.get("model").and_then(Value::as_str),
-                        family: crate::provider_transport::SameFormatProviderFamily::Standard,
+                        family: if normalized_provider_api_format == "gemini:interactions" {
+                            crate::provider_transport::SameFormatProviderFamily::Gemini
+                        } else {
+                            crate::provider_transport::SameFormatProviderFamily::Standard
+                        },
                         body_rules: transport.endpoint.body_rules.as_ref(),
                         request_headers: Some(&incoming_request_headers),
                         upstream_is_stream,
                         force_body_stream_field: require_body_stream_field,
                         kiro_auth_config: None,
                         is_claude_code: false,
-                        is_vertex: false,
+                        is_vertex: crate::provider_transport::is_vertex_transport_context(
+                            &transport,
+                        ),
                         enable_model_directives: false,
                     },
                 )
@@ -3521,6 +3553,9 @@ async fn provider_query_execute_standard_test_candidate(
             ),
         },
     };
+    if normalized_provider_api_format == "gemini:interactions" && upstream_is_stream {
+        request_headers.insert("accept".to_string(), "text/event-stream".to_string());
+    }
     crate::provider_transport::apply_local_auth_config_header_overrides(
         &mut request_headers,
         transport.key.decrypted_auth_config.as_deref(),
@@ -3644,16 +3679,32 @@ async fn provider_query_execute_standard_test_candidate(
         result.body.as_ref().and_then(|body| body.json_body.clone())
     };
     let missing_success_body = result.status_code < 400 && response_body.is_none();
-    let did_fail = result.status_code >= 400 || missing_success_body;
-    let error_message = if did_fail {
-        provider_query_extract_error_message(&result).or_else(|| {
-            missing_success_body.then(|| {
-                format!(
-                    "Provider returned HTTP {} without a model-test response body",
-                    result.status_code
-                )
-            })
+    let native_failure = (normalized_provider_api_format == "gemini:interactions")
+        .then(|| {
+            response_body
+                .as_ref()
+                .and_then(interactions::failure_message)
         })
+        .flatten();
+    let did_fail = result.status_code >= 400
+        || missing_success_body
+        || native_failure.is_some()
+        || (normalized_provider_api_format == "gemini:interactions" && result.error.is_some());
+    let error_message = if did_fail {
+        native_failure
+            .or_else(|| provider_query_extract_error_message(&result))
+            .or_else(|| {
+                missing_success_body.then(|| {
+                    if normalized_provider_api_format == "gemini:interactions" {
+                        "Provider did not return a valid Gemini Interaction or a complete Interactions stream".to_string()
+                    } else {
+                        format!(
+                            "Provider returned HTTP {} without a model-test response body",
+                            result.status_code
+                        )
+                    }
+                })
+            })
     } else {
         None
     };

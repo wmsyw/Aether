@@ -539,6 +539,111 @@ describe('extractModelTestResponsePreview', () => {
     })).toBe('Gemini test passed.')
   })
 
+  it('extracts only text from Gemini Interactions model output steps', () => {
+    expect(extractModelTestResponsePreview({
+      steps: [
+        { type: 'user_input', content: [{ type: 'text', text: 'User prompt.' }] },
+        { type: 'thought', content: [{ type: 'text', text: 'Private reasoning.' }] },
+        { type: 'function_call', content: [{ type: 'text', text: 'Tool call.' }] },
+        { type: 'function_result', content: [{ type: 'text', text: 'Tool result.' }] },
+        {
+          type: 'model_output',
+          content: [
+            { type: 'thought', text: 'Hidden thought.', summary: [{ type: 'text', text: 'Thought summary.' }] },
+            { type: 'function_call', text: 'Hidden tool call.' },
+            { type: 'image', text: 'Image metadata.', data: 'aGVsbG8=' },
+            { type: 'text', text: 'Gemini\nInteractions test passed.' },
+            { type: 'text', text: 'Second text block.' },
+          ],
+        },
+        { type: 'model_output', content: [{ type: 'text', text: 'Final output step.' }] },
+      ],
+      outputs: [{ type: 'text', text: 'Legacy output.' }],
+    })).toBe('Gemini Interactions test passed. Second text block. Final output step.')
+  })
+
+  it('extracts only text from legacy Gemini Interactions outputs', () => {
+    expect(extractModelTestResponsePreview({
+      outputs: [
+        { type: 'thought', text: 'Private reasoning.', summary: [{ type: 'text', text: 'Thought summary.' }] },
+        { type: 'function_call', text: 'Tool call.' },
+        { type: 'function_result', text: 'Tool result.' },
+        { type: 'image', text: 'Image metadata.', data: 'aGVsbG8=' },
+        { type: 'text', text: 'Legacy Interactions\nanswer.' },
+        { type: 'text', text: 'Second text block.' },
+      ],
+    })).toBe('Legacy Interactions answer. Second text block.')
+  })
+
+  it('falls back to legacy outputs when model output steps have no text', () => {
+    expect(extractModelTestResponsePreview({
+      steps: [
+        { type: 'model_output', content: [{ type: 'text', text: ' \n ' }] },
+        { type: 'model_output', content: [{ type: 'image', data: 'aGVsbG8=' }] },
+      ],
+      outputs: [{ type: 'text', text: 'Legacy answer.' }],
+    })).toBe('Legacy answer.')
+  })
+
+  it.each([
+    { output_text: 'Preferred answer.' },
+    { content: [{ type: 'text', text: 'Preferred answer.' }] },
+    { choices: [{ message: { content: 'Preferred answer.' } }] },
+    { output: [{ type: 'message', content: [{ type: 'output_text', text: 'Preferred answer.' }] }] },
+    { candidates: [{ content: { parts: [{ text: 'Preferred answer.' }] } }] },
+  ])('keeps existing text sources ahead of Interaction content: %j', (preferredSource) => {
+    expect(extractModelTestResponsePreview({
+      ...preferredSource,
+      steps: [{ type: 'model_output', content: [{ type: 'text', text: 'Step answer.' }] }],
+      outputs: [{ type: 'text', text: 'Legacy answer.' }],
+    })).toBe('Preferred answer.')
+  })
+
+  it.each([
+    {
+      steps: [
+        null,
+        { type: 'user_input', content: [{ type: 'text', text: 'User prompt.' }] },
+        { type: 'thought', content: [{ type: 'text', text: 'Private reasoning.' }] },
+        { type: 'function_call', content: [{ type: 'text', text: 'Tool call.' }] },
+        { type: 'function_result', content: [{ type: 'text', text: 'Tool result.' }] },
+        { type: 'model_output', content: ['Untyped text.', { text: 'Missing type.' }, { type: 'text', text: 123 }] },
+      ],
+    },
+    {
+      outputs: [
+        null,
+        'Untyped text.',
+        { text: 'Missing type.' },
+        { type: 'text', text: 123 },
+        { type: 'thought', text: 'Private reasoning.' },
+        { type: 'function_call', text: 'Tool call.' },
+        { type: 'function_result', text: 'Tool result.' },
+      ],
+    },
+    { steps: { type: 'model_output', content: [{ type: 'text', text: 'Not an array.' }] }, outputs: 'Not an array.' },
+  ])('does not treat non-answer Interaction content as a reply: %j', (interaction) => {
+    expect(extractModelTestResponsePreview(interaction)).toBeNull()
+    expect(extractModelTestResponsePreview({ ...interaction, model: 'gemini-3.1-pro-preview' }))
+      .toBe('返回模型：gemini-3.1-pro-preview')
+  })
+
+  it.each([
+    { steps: [{ type: 'model_output', content: [{ type: 'text', text: ` \n ${'a'.repeat(200)} \n ` }] }] },
+    { outputs: [{ type: 'text', text: ` \n ${'a'.repeat(200)} \n ` }] },
+  ])('keeps the Interaction preview length limit: %j', (interaction) => {
+    expect(extractModelTestResponsePreview(interaction)).toBe(`${'a'.repeat(157)}...`)
+  })
+
+  it.each([
+    { steps: [{ type: 'model_output', content: [{ type: 'text', text: 'Wrapped answer.' }] }] },
+    { outputs: [{ type: 'text', text: 'Wrapped answer.' }] },
+  ])('handles wrapped and stringified Interaction JSON: %j', (interaction) => {
+    expect(extractModelTestResponsePreview({ response: interaction })).toBe('Wrapped answer.')
+    expect(extractModelTestResponsePreview({ body: interaction })).toBe('Wrapped answer.')
+    expect(extractModelTestResponsePreview(JSON.stringify(interaction))).toBe('Wrapped answer.')
+  })
+
   it('uses OpenAI reasoning content when answer text is empty', () => {
     expect(extractModelTestResponsePreview({
       model: 'deepseek-v4-pro',

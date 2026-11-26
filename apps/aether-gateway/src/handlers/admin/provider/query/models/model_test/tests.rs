@@ -1286,3 +1286,421 @@ fn provider_query_dall_e_3_image_test_keeps_single_generation_boundary() {
         "Provider request body could not be normalized for openai:image: selected provider supports n=1..1 for generation"
     );
 }
+
+fn gemini_interactions_execution_result(
+    body: aether_contracts::ResponseBody,
+) -> aether_contracts::ExecutionResult {
+    aether_contracts::ExecutionResult {
+        request_id: "gemini-interactions-model-test".to_string(),
+        candidate_id: None,
+        status_code: 200,
+        headers: BTreeMap::new(),
+        response_observation: None,
+        body: Some(body),
+        telemetry: None,
+        error: None,
+    }
+}
+
+#[test]
+fn provider_query_gemini_interactions_default_request_uses_native_input() {
+    let format = provider_query_standard_test_client_api_format("gemini:interactions");
+    assert_eq!(format, "gemini:interactions");
+    let body = provider_query_build_test_request_body_for_api_format(
+        &json!({"message": "Say hello"}),
+        "gemini-3.1-pro-preview",
+        "/api/admin/provider-query/test-model",
+        format,
+    );
+    assert_eq!(
+        body,
+        json!({"model": "gemini-3.1-pro-preview", "input": "Say hello"})
+    );
+    let default = provider_query_build_test_request_body_for_api_format(
+        &json!({}),
+        "gemini-3.1-pro-preview",
+        "/api/admin/provider-query/test-model",
+        format,
+    );
+    assert_eq!(default["input"], DEFAULT_PROVIDER_QUERY_TEST_MESSAGE);
+}
+
+#[test]
+fn provider_query_gemini_interactions_preserves_custom_input_and_configuration() {
+    for input in [
+        json!("Continue this conversation"),
+        json!([{"type": "text", "text": "Describe this"}, {"type": "image", "uri": "https://example.test/image.png"}]),
+        json!([{"type": "function_result", "name": "calculate", "result": {"answer": 42}}]),
+    ] {
+        let custom = json!({
+            "model": "custom-target",
+            "input": input,
+            "generation_config": {"temperature": 0.23, "max_output_tokens": 90, "thinking_level": "high"},
+            "previous_interaction_id": "interaction-previous",
+            "store": false,
+            "tools": [{"type": "function", "name": "calculate"}],
+        });
+        let body = provider_query_build_test_request_body_for_api_format(
+            &json!({"request_body": custom}),
+            "fallback-model",
+            "/api/admin/provider-query/test-model",
+            "gemini:interactions",
+        );
+        assert_eq!(body, custom);
+    }
+}
+
+#[test]
+fn provider_query_gemini_interactions_preserves_single_content_input() {
+    let custom = json!({
+        "model": "custom-target",
+        "input": {"type": "text", "text": "Keep this native Content object"},
+        "store": false,
+    });
+    let body = provider_query_build_test_request_body_for_api_format(
+        &json!({"message": "Do not replace the input", "request_body": custom}),
+        "fallback-model",
+        "/api/admin/provider-query/test-model",
+        "gemini:interactions",
+    );
+    assert_eq!(body, custom);
+}
+
+#[test]
+fn provider_query_gemini_interactions_fills_missing_input_without_chat_fields() {
+    for request_body in [
+        json!({}),
+        json!({"input": null}),
+        json!({"input": ""}),
+        json!({"input": []}),
+    ] {
+        let body = provider_query_build_test_request_body_for_api_format(
+            &json!({"message": "Default input", "request_body": request_body}),
+            "fallback-model",
+            "/api/admin/provider-query/test-model",
+            "gemini:interactions",
+        );
+        assert_eq!(
+            body,
+            json!({"model": "fallback-model", "input": "Default input"})
+        );
+    }
+}
+
+#[test]
+fn provider_query_gemini_interactions_custom_agent_target_is_not_replaced_by_model() {
+    let custom = json!({
+        "agent": "deep-research-pro-preview",
+        "input": "Research this topic",
+        "background": true,
+        "previous_interaction_id": "previous-agent-turn"
+    });
+    let body = provider_query_build_test_request_body_for_api_format(
+        &json!({"request_body": custom}),
+        "fallback-model",
+        "/api/admin/provider-query/test-model",
+        "gemini:interactions",
+    );
+    assert_eq!(body, custom);
+    assert_eq!(
+        interactions::request_target(&body, "fallback"),
+        "deep-research-pro-preview"
+    );
+}
+
+#[test]
+fn provider_query_gemini_interactions_explicit_mapping_and_failover_override_routing_field() {
+    for route in [
+        "/api/admin/provider-query/test-model",
+        "/api/admin/provider-query/test-model-failover",
+    ] {
+        for field in ["model", "agent"] {
+            let mut custom =
+                json!({"input": "Keep input", "generation_config": {"temperature": 0.1}});
+            custom[field] = json!("custom-target");
+            let payload = if route.ends_with("-failover") {
+                json!({"request_body": custom})
+            } else {
+                json!({"request_body": custom, "mapped_model_name": "mapped-target"})
+            };
+            let body = provider_query_build_test_request_body_for_api_format(
+                &payload,
+                "mapped-target",
+                route,
+                "gemini:interactions",
+            );
+            custom[field] = json!("mapped-target");
+            assert_eq!(body, custom);
+            assert_eq!(
+                interactions::request_target(&body, "fallback"),
+                "mapped-target"
+            );
+            if field == "agent" {
+                assert!(body.get("model").is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn provider_query_gemini_interactions_native_builder_preserves_agent_and_applies_rules_and_stream_policy(
+) {
+    let body = json!({
+        "agent": "custom-agent",
+        "input": [{"type": "text", "text": "Research this"}],
+        "generation_config": {"temperature": 0.2},
+        "previous_interaction_id": "previous",
+        "stream": false
+    });
+    let rules = json!([
+        {"action": "set", "path": "generation_config.max_output_tokens", "value": 88},
+        {"action": "set", "path": "stream", "value": false}
+    ]);
+    let config = json!({"upstream_stream_policy": "force_stream"});
+    let upstream_is_stream = provider_query_resolve_standard_test_upstream_is_stream(
+        Some(&config),
+        "custom",
+        "gemini:interactions",
+    );
+    assert!(upstream_is_stream);
+    let request = crate::provider_transport::build_same_format_provider_request_body(
+        crate::provider_transport::SameFormatProviderRequestBodyInput {
+            body_json: &body,
+            mapped_model: interactions::request_target(&body, "fallback"),
+            client_api_format: "gemini:interactions",
+            provider_api_format: "gemini:interactions",
+            source_model: None,
+            family: crate::provider_transport::SameFormatProviderFamily::Gemini,
+            body_rules: Some(&rules),
+            request_headers: None,
+            upstream_is_stream,
+            force_body_stream_field: true,
+            kiro_auth_config: None,
+            is_claude_code: false,
+            is_vertex: false,
+            enable_model_directives: false,
+        },
+    )
+    .expect("native request should build");
+    assert_eq!(request["agent"], "custom-agent");
+    assert!(request.get("model").is_none());
+    assert_eq!(request["input"], body["input"]);
+    assert_eq!(
+        request["previous_interaction_id"],
+        body["previous_interaction_id"]
+    );
+    assert_eq!(
+        request["generation_config"],
+        json!({"temperature": 0.2, "max_output_tokens": 88})
+    );
+    assert_eq!(request["stream"], true);
+}
+
+#[test]
+fn provider_query_gemini_interactions_json_response_returns_native_object_verbatim() {
+    let native = json!({
+        "id": "interaction-native",
+        "model": "gemini-3.1-pro-preview",
+        "status": "completed",
+        "object": "interaction",
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Native answer"}]}],
+        "usage": {"total_input_tokens": 4, "total_output_tokens": 2, "total_thought_tokens": 7}
+    });
+    let result = gemini_interactions_execution_result(aether_contracts::ResponseBody {
+        json_body: Some(native.clone()),
+        body_bytes_b64: None,
+    });
+    assert_eq!(
+        provider_query_standard_execution_response_body("gemini:interactions", &result, None),
+        Some(native.clone())
+    );
+    assert!(interactions::failure_message(&native).is_none());
+}
+
+#[test]
+fn provider_query_gemini_interactions_sse_reconstructs_official_steps_and_usage() {
+    let stream = concat!(
+        "event: interaction.created\n",
+        "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"native-stream\",\"status\":\"in_progress\",\"model\":\"gemini-3.1-pro-preview\",\"created\":\"2026-05-20T00:00:00Z\"}}\n\n",
+        "data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"thought\",\"content\":[{\"type\":\"thought_summary\",\"text\":\"Thinking\"}]}}\n\n",
+        "data: {\"event_type\":\"step.start\",\"index\":1,\"step\":{\"type\":\"model_output\"}}\n\n",
+        "data: {\"event_type\":\"step.delta\",\"index\":1,\"delta\":{\"type\":\"text\",\"text\":\"Hello \"}}\n\n",
+        "data: {\"event_type\":\"step.delta\",\"index\":1,\"delta\":{\"type\":\"text\",\"text\":\"world\"}}\n\n",
+        "data: {\"event_type\":\"step.stop\",\"index\":1,\"usage\":{\"total_input_tokens\":8,\"total_cached_tokens\":3}}\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native-stream\",\"status\":\"completed\",\"usage\":{\"total_input_tokens\":9,\"total_output_tokens\":2,\"total_thought_tokens\":4}}}\n\n",
+    );
+    let result = gemini_interactions_execution_result(aether_contracts::ResponseBody {
+        json_body: None,
+        body_bytes_b64: Some(base64::engine::general_purpose::STANDARD.encode(stream)),
+    });
+    let body =
+        provider_query_standard_execution_response_body("gemini:interactions", &result, None)
+            .expect("completed native stream should aggregate");
+    assert_eq!(body["id"], "native-stream");
+    assert_eq!(body["status"], "completed");
+    assert_eq!(body["created"], "2026-05-20T00:00:00Z");
+    assert_eq!(body["steps"][0]["type"], "thought");
+    assert_eq!(body["steps"][1]["content"][0]["text"], "Hello world");
+    assert_eq!(
+        body["usage"],
+        json!({
+            "total_input_tokens": 9,
+            "total_cached_tokens": 3,
+            "total_output_tokens": 2,
+            "total_thought_tokens": 4
+        })
+    );
+    assert!(body.get("choices").is_none());
+    assert!(body.get("candidates").is_none());
+}
+
+#[test]
+fn provider_query_gemini_interactions_sse_preserves_native_completed_steps_without_duplicate_text()
+{
+    let stream = concat!(
+        "data: {\"event_type\":\"step.delta\",\"index\":0,\"delta\":{\"type\":\"text\",\"text\":\"delta fallback\"}}\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native\",\"status\":\"completed\",\"steps\":[{\"type\":\"model_output\",\"content\":[{\"type\":\"text\",\"text\":\"authoritative text\"},{\"type\":\"image\",\"uri\":\"https://example.test/image.png\"}]}]}}\n\n",
+    );
+    let body = interactions::aggregate_stream_response(stream.as_bytes()).unwrap();
+    assert_eq!(body["steps"][0]["content"][0]["text"], "authoritative text");
+    assert_eq!(body["steps"][0]["content"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        body["steps"][0]["content"][1]["uri"],
+        "https://example.test/image.png"
+    );
+}
+
+#[test]
+fn provider_query_gemini_interactions_sse_fills_empty_native_text_leaf() {
+    let stream = concat!(
+        "data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"model_output\",\"content\":[{\"type\":\"text\",\"text\":\"\"}]}}\n\n",
+        "data: {\"event_type\":\"step.delta\",\"index\":0,\"delta\":{\"type\":\"text\",\"text\":\"restored text\"}}\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native\",\"status\":\"completed\",\"steps\":[{\"type\":\"model_output\",\"content\":[{\"type\":\"text\",\"text\":\"\"}]}]}}\n\n",
+    );
+    let body = interactions::aggregate_stream_response(stream.as_bytes()).unwrap();
+    assert_eq!(body["steps"][0]["content"][0]["text"], "restored text");
+}
+
+#[test]
+fn provider_query_gemini_interactions_sse_supports_legacy_outputs_and_multiline_crlf() {
+    let stream = concat!(
+        ": keep-alive\r\n\r\n",
+        "event: content.delta\r\n",
+        "data: {\"index\":0,\r\n",
+        "data: \"delta\":{\"type\":\"text\",\"text\":\"Legacy answer\"}}\r\n\r\n",
+        "event: interaction.completed\r\n",
+        "data: {\"interaction\":{\"id\":\"legacy\",\"status\":\"completed\",\"outputs\":[],\"usage\":{\"total_output_tokens\":3}}}\r\n\r\n",
+        "data: [DONE]\r\n\r\n",
+    );
+    let body = interactions::aggregate_stream_response(stream.as_bytes()).unwrap();
+    assert_eq!(
+        body["outputs"],
+        json!([{"type": "text", "text": "Legacy answer"}])
+    );
+    assert_eq!(body["usage"], json!({"total_output_tokens": 3}));
+    assert!(body.get("steps").is_none());
+}
+
+#[test]
+fn provider_query_gemini_interactions_sse_rejects_truncated_and_missing_completed_interaction() {
+    for stream in [
+        "data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"partial\"}}\n\n",
+        "data: [DONE]\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native\",\"status\":\"completed\"}}\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"status\":\"completed\"}}\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native\"}}\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native\",\"status\":\"unknown\"}}\n\n",
+        "data: {\"event_type\":\"interaction.completed\"}\n\n",
+        "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"native\",\"status\":\"completed\"}}\n\ndata: {\"event_type\":",
+    ] {
+        assert!(interactions::aggregate_stream_response(stream.as_bytes()).is_none(), "{stream}");
+    }
+}
+
+#[test]
+fn provider_query_gemini_interactions_sse_errors_never_become_success() {
+    for event in [
+        json!({"event_type": "error", "error": {"message": "Upstream generation failed"}}),
+        json!({"event_type": "interaction.failed", "interaction": {"id": "native", "status": "failed"}}),
+        json!({"event_type": "interaction.status_update", "status": "failed"}),
+    ] {
+        let stream = format!(
+            "data: {event}\n\ndata: {{\"event_type\":\"interaction.completed\",\"interaction\":{{\"id\":\"native\",\"status\":\"completed\"}}}}\n\n"
+        );
+        assert!(interactions::aggregate_stream_response(stream.as_bytes()).is_none());
+    }
+    for status in ["failed", "cancelled", "in_progress"] {
+        let stream = format!(
+            "data: {{\"event_type\":\"interaction.completed\",\"interaction\":{{\"id\":\"native\",\"status\":\"{status}\"}}}}\n\n"
+        );
+        let body = interactions::aggregate_stream_response(stream.as_bytes()).unwrap();
+        assert!(interactions::failure_message(&body).is_some());
+    }
+}
+
+#[test]
+fn provider_query_gemini_interactions_native_failure_status_and_valid_partial_results() {
+    for status in ["failed", "cancelled", "in_progress"] {
+        let body = json!({"id": "native", "status": status, "outputs": [{"type": "text", "text": "Partial text"}]});
+        assert!(interactions::is_interaction(&body));
+        assert!(interactions::failure_message(&body).is_some());
+    }
+    let failure =
+        json!({"id": "native", "status": "failed", "error": {"message": "Generation rejected"}});
+    assert_eq!(
+        interactions::failure_message(&failure),
+        Some("Generation rejected".to_string())
+    );
+    assert!(
+        interactions::failure_message(&json!({"id": "native", "status": "incomplete"})).is_none()
+    );
+    assert!(
+        interactions::failure_message(&json!({"id": "native", "status": "requires_action"}))
+            .is_some()
+    );
+    assert!(interactions::failure_message(&json!({
+        "id": "native",
+        "status": "requires_action",
+        "outputs": [{"type": "function_call", "name": "lookup", "arguments": {"query": "weather"}}]
+    }))
+    .is_none());
+}
+
+#[test]
+fn provider_query_gemini_interactions_keeps_user_api_revision_header_overridable() {
+    let incoming = provider_query_extract_request_headers(&json!({
+        "request_headers": {"Api-Revision": "2026-05-20"}
+    }));
+    let mut headers = crate::provider_transport::auth::build_passthrough_headers_with_auth(
+        &incoming,
+        "x-goog-api-key",
+        "upstream-secret",
+        &BTreeMap::new(),
+    );
+    assert_eq!(
+        headers.get("api-revision").map(String::as_str),
+        Some("2026-05-20")
+    );
+    let rules = json!([{"action": "set", "key": "Api-Revision", "value": "2025-12-12"}]);
+    assert!(
+        crate::provider_transport::apply_local_header_rules_with_request_headers(
+            &mut headers,
+            Some(&rules),
+            &["x-goog-api-key", "content-type"],
+            &json!({"model": "gemini-model", "input": "test"}),
+            None,
+            Some(&incoming),
+        )
+    );
+    assert_eq!(
+        headers.get("api-revision").map(String::as_str),
+        Some("2025-12-12")
+    );
+    let defaults = crate::provider_transport::auth::build_passthrough_headers_with_auth(
+        &HeaderMap::new(),
+        "x-goog-api-key",
+        "upstream-secret",
+        &BTreeMap::new(),
+    );
+    assert!(!defaults.contains_key("api-revision"));
+}

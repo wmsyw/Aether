@@ -35,6 +35,8 @@ pub(super) fn provider_query_standard_test_client_api_format(
         "openai:responses:compact"
     } else if normalized_api_format == "openai:search" {
         "openai:search"
+    } else if normalized_api_format == "gemini:interactions" {
+        "gemini:interactions"
     } else if crate::ai_serving::is_embedding_api_format(&normalized_api_format) {
         "openai:embedding"
     } else if crate::ai_serving::is_rerank_api_format(&normalized_api_format) {

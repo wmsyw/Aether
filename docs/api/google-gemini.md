@@ -4,6 +4,7 @@
 
 - `gemini:generate_content` 保持现有 Gemini 原生生成契约。
 - `gemini:interactions` 是独立的原生契约，不转换成 OpenAI/Claude 消息。
+- 管理后台的模型测试和故障转移测试使用原生 Interactions 请求，默认发送 `model` 和 `input`，不封装成 Chat 或 GenerateContent 请求。
 - Vertex 的 Interactions 仅允许 Service Account（`service_account` / `vertex_ai`）密钥。固定模板、管理员校验、PostgreSQL/内存候选筛选和运行时认证均采用此约束；API Key 不支持此路径。
 - Vertex Interactions 地址为 `/v1beta1/projects/{project_id}/locations/{region}/interactions`。服务账号请求不转发客户端 query 中的 API key。
 - Gemini 4 生成请求使用 Vertex `v1beta1`，默认地区 `global`；显式 `model_regions` 优先。旧模型与 Embedding 保持原版本和地区规则。

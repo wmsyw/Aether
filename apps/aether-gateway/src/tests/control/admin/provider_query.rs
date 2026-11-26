@@ -4648,6 +4648,255 @@ async fn gateway_handles_openai_responses_test_model_locally_impl() {
 }
 
 #[test]
+fn gateway_handles_gemini_interactions_test_model_locally() {
+    run_provider_query_test(
+        "gateway_handles_gemini_interactions_test_model_locally",
+        || assert_gemini_interactions_local_model_test(false, false),
+    );
+}
+
+#[test]
+fn gateway_restores_gemini_interactions_force_stream_test_model_locally() {
+    run_provider_query_test(
+        "gateway_restores_gemini_interactions_force_stream_test_model_locally",
+        || assert_gemini_interactions_local_model_test(true, false),
+    );
+}
+
+#[test]
+fn gateway_handles_gemini_interactions_test_model_failover_locally() {
+    run_provider_query_test(
+        "gateway_handles_gemini_interactions_test_model_failover_locally",
+        || async {
+            for force_stream in [false, true] {
+                assert_gemini_interactions_local_model_test(force_stream, true).await;
+            }
+        },
+    );
+}
+
+async fn assert_gemini_interactions_local_model_test(force_stream: bool, failover: bool) {
+    let expected_model = if failover {
+        "gemini-3.5-flash-failover"
+    } else {
+        "gemini-3.5-flash-native"
+    };
+    let interaction = json!({
+        "id": "interaction-native-model-test",
+        "model": expected_model,
+        "status": "completed",
+        "steps": [{
+            "type": "model_output",
+            "content": [{
+                "type": "text",
+                "text": "Hello from native Interactions"
+            }]
+        }],
+        "usage": {
+            "total_input_tokens": 11,
+            "total_output_tokens": 5,
+            "total_tokens": 16
+        }
+    });
+    let upstream_response = if force_stream {
+        let mut completed_interaction = interaction.clone();
+        completed_interaction
+            .as_object_mut()
+            .expect("interaction should be an object")
+            .remove("steps");
+        format!(
+            "event: step.start\ndata: {}\n\nevent: step.delta\ndata: {}\n\nevent: interaction.completed\ndata: {}\n\n",
+            json!({
+                "event_type": "step.start",
+                "index": 0,
+                "step": {"type": "model_output"}
+            }),
+            json!({
+                "event_type": "step.delta",
+                "index": 0,
+                "delta": {
+                    "type": "text",
+                    "text": "Hello from native Interactions"
+                }
+            }),
+            json!({
+                "event_type": "interaction.completed",
+                "interaction": completed_interaction
+            })
+        )
+    } else {
+        interaction.to_string()
+    };
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/v1/interactions",
+        any(move |request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            let upstream_response = upstream_response.clone();
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                let (parts, body) = request.into_parts();
+                assert_eq!(parts.method, http::Method::POST);
+                assert_eq!(parts.uri.to_string(), "/v1/interactions");
+                assert_eq!(
+                    parts
+                        .headers
+                        .get("x-goog-api-key")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("sk-test-gemini-interactions")
+                );
+                assert!(parts.headers.get(http::header::AUTHORIZATION).is_none());
+                assert_eq!(
+                    parts
+                        .headers
+                        .get(http::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("application/json")
+                );
+                let raw_body = axum::body::to_bytes(body, 64 * 1024)
+                    .await
+                    .expect("upstream body should read");
+                let body: serde_json::Value =
+                    serde_json::from_slice(&raw_body).expect("upstream body should parse");
+                assert_eq!(body["model"], json!(expected_model));
+                assert_eq!(
+                    body["input"],
+                    json!("Preserve this native interaction input.")
+                );
+                assert_eq!(body["stream"], json!(force_stream));
+                assert_eq!(
+                    body["previous_interaction_id"],
+                    json!("interaction-previous")
+                );
+                assert_eq!(
+                    body["system_instruction"],
+                    json!("Reply with a short greeting.")
+                );
+                assert_eq!(body["generation_config"]["max_output_tokens"], json!(32));
+                assert_eq!(body["store"], json!(false));
+                assert!(body.get("messages").is_none());
+                assert!(body.get("contents").is_none());
+                (
+                    StatusCode::OK,
+                    [(
+                        http::header::CONTENT_TYPE,
+                        if force_stream {
+                            "text/event-stream"
+                        } else {
+                            "application/json"
+                        },
+                    )],
+                    Body::from(upstream_response),
+                )
+            }
+        }),
+    );
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let mut provider = sample_provider("provider-gemini-interactions", "Gemini Interactions", 10);
+    provider.provider_type = "gemini".to_string();
+    let mut endpoint = sample_endpoint(
+        "endpoint-gemini-interactions",
+        "provider-gemini-interactions",
+        "gemini:interactions",
+        &upstream_url,
+    );
+    if force_stream {
+        endpoint.config = Some(json!({"upstream_stream_policy": "force_stream"}));
+    }
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![sample_bound_key(
+            "key-gemini-interactions",
+            "provider-gemini-interactions",
+            "gemini:interactions",
+            "sk-test-gemini-interactions",
+        )],
+    ));
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let mut request_payload = json!({
+        "provider_id": "provider-gemini-interactions",
+        "model": "gemini-3.5-flash-requested",
+        "api_format": "gemini:interactions",
+        "endpoint_id": "endpoint-gemini-interactions",
+        "key_id": "key-gemini-interactions",
+        "request_body": {
+            "model": "gemini-3.5-flash-native",
+            "input": "Preserve this native interaction input.",
+            "stream": true,
+            "previous_interaction_id": "interaction-previous",
+            "system_instruction": "Reply with a short greeting.",
+            "generation_config": {"max_output_tokens": 32},
+            "store": false
+        }
+    });
+    let request_path = if failover {
+        request_payload["failover_models"] = json!([expected_model]);
+        "test-model-failover"
+    } else {
+        "test-model"
+    };
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/provider-query/{request_path}"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&request_payload)
+        .send()
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true), "{payload}");
+    assert_eq!(payload["error"], serde_json::Value::Null);
+    if failover {
+        assert_eq!(payload["model"], json!("gemini-3.5-flash-requested"));
+        assert_eq!(payload["total_attempts"], json!(1));
+    }
+    assert_eq!(payload["attempts"][0]["status"], json!("success"));
+    assert_eq!(
+        payload["attempts"][0]["request_url"],
+        json!(format!("{upstream_url}/v1/interactions"))
+    );
+    assert_eq!(
+        payload["attempts"][0]["request_body"]["model"],
+        json!(expected_model)
+    );
+    assert_eq!(
+        payload["attempts"][0]["request_body"]["stream"],
+        json!(force_stream)
+    );
+    let response_body = &payload["data"]["response"];
+    assert_eq!(response_body["id"], interaction["id"]);
+    assert_eq!(response_body["model"], interaction["model"]);
+    assert_eq!(response_body["status"], json!("completed"));
+    assert_eq!(
+        response_body["steps"][0]["content"][0]["text"],
+        json!("Hello from native Interactions")
+    );
+    assert_eq!(response_body["usage"], interaction["usage"]);
+    assert!(response_body.get("chunks").is_none());
+    assert!(response_body.get("event_type").is_none());
+    assert_eq!(payload["attempts"][0]["response_body"], *response_body);
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 1);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[test]
 fn gateway_handles_openai_image_test_model_locally() {
     run_provider_query_test(
         "gateway_handles_openai_image_test_model_locally",
